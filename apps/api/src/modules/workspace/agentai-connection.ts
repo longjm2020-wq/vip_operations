@@ -541,12 +541,7 @@ export function agentaiChatBody(body: Row) {
     strategy: "balanced",
   };
 }
-const allowedFeatures: AiFeatureId[] = [
-  "assistant_chat",
-  "assistant_team",
-  "assistant_employee",
-  "mastra_team",
-];
+const allowedFeatures: AiFeatureId[] = ["assistant_chat", "assistant_employee"];
 async function sendAgentAiChat(
   s: Row,
   body: Row,

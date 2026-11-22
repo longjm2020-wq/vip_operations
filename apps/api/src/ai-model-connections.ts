@@ -3,12 +3,14 @@ import { encryptionReady } from "./modules/analytics/secrets.js";
 
 // Only these features use the shared OpenRouter credential. Audio and AIGC
 // receipts can use independent keys and must not verify this connection.
+// Historical receipts still attest to the same credential and model version.
 const sharedFeatures = [
   "assistant_chat",
   "assistant_search",
   "assistant_website",
   "assistant_desktop",
   "assistant_browser",
+  "assistant_employee",
   "assistant_team",
   "deerflow_team",
   "compass_analysis",

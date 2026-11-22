@@ -15,7 +15,6 @@ export type AssistantSection =
   | "artifact"
   | "desktop"
   | "browser"
-  | "team"
   | "employees"
   | "settings";
 export type AssistantToolSection = Exclude<AssistantSection, "chat">;
@@ -24,7 +23,6 @@ export type AssistantHubState = {
   allowed: boolean;
   conversation?: AssistantConversation;
   busy: boolean;
-  selectedTeamRunId?: string;
   voiceState?: Exclude<VoiceState, "idle">;
   gptVoice: Omit<ReturnType<typeof useGptVoice>, "play"> & {
     play: () => void;
@@ -39,7 +37,7 @@ export type AssistantHubState = {
   openVoiceSettings: () => void;
   announce?: (text: string) => void;
   compose: () => ReactNode;
-  openPanel: (tab?: "chat" | "activity" | "voice" | "team") => void;
+  openPanel: (tab?: "chat" | "activity" | "voice") => void;
   previewArtifact?: (file: AgentFile) => void;
   feed?: AssistantActivityFeed;
   feedLoading: boolean;

@@ -35,11 +35,18 @@ export async function reserveEmployeeCall(
 
 // Claiming and capacity inspection share a transaction lock across worker processes.
 // A collaborative run reserves every selected employee until its next safe pause/end.
-export const employeeClaimSql = `UPDATE public.personal_assistant_team_runs SET status='PLANNING',stage='准备执行任务',lease_id=$1::uuid,heartbeat_at=now(),updated_at=now()
+// Retire pending legacy requests in the same trip as the claim. The two updates
+// target disjoint rows in the status-indexed queue and never retake a live lease.
+export const employeeClaimSql = `WITH retired AS (
+  UPDATE public.personal_assistant_team_runs SET status='CANCELED',stage='原团队已停止接单',
+    error_note='此任务已停止排队，已有记录和产物可在历史任务中查看。',updated_at=now()
+  WHERE status='QUEUED' AND (NOT (input ? 'employeeContext') OR COALESCE(input->>'engine','native')<>'native')
+)
+UPDATE public.personal_assistant_team_runs SET status='PLANNING',stage='准备执行任务',lease_id=$1::uuid,heartbeat_at=now(),updated_at=now()
   WHERE id=(SELECT r.id FROM public.personal_assistant_team_runs r
-    LEFT JOIN public.personal_assistant_employee_tasks t ON t.run_id=r.id AND t.user_id=r.user_id
-    WHERE r.status='QUEUED' AND (t.run_id IS NULL OR (
-      NOT t.paused AND NOT EXISTS(
+    JOIN public.personal_assistant_employee_tasks t ON t.run_id=r.id AND t.user_id=r.user_id
+    WHERE r.status='QUEUED' AND r.input ? 'employeeContext' AND COALESCE(r.input->>'engine','native')='native'
+      AND NOT t.paused AND NOT EXISTS(
         SELECT 1 FROM unnest(t.employee_ids) AS member(id)
         LEFT JOIN public.personal_assistant_employees e ON e.id=member.id AND e.user_id=t.user_id
         WHERE e.id IS NULL OR e.archived OR NOT (e.profile->>'accepting')::boolean
@@ -47,8 +54,8 @@ export const employeeClaimSql = `UPDATE public.personal_assistant_team_runs SET 
               JOIN public.personal_assistant_team_runs running ON running.id=busy.run_id
               WHERE busy.user_id=t.user_id AND e.id=ANY(busy.employee_ids)
                 AND running.status IN ('PLANNING','RUNNING','REVIEWING')) >= (e.profile->>'concurrency')::int
-      )))
-    ORDER BY COALESCE(t.priority,5) DESC,r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED) RETURNING *`;
+      )
+    ORDER BY t.priority DESC,r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED) RETURNING *`;
 
 export async function claimAssistantRun(lease: string) {
   return db.$transaction(async (tx) => {

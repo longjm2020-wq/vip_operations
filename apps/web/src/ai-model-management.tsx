@@ -107,7 +107,8 @@ export function AiModelManagementPage({
   const [busy, setBusy] = useState<string>(),
     [connectionsOpen, setConnectionsOpen] = useState(false),
     [drawer, setDrawer] = useState<string>(),
-    [detail, setDetail] = useState<AiManagementRow>();
+    [detail, setDetail] =
+      useState<Pick<AiManagementRow, "name" | "usage" | "usageNote">>();
   useEffect(() => {
     if (audioEntry) setDrawer("agentai");
   }, [audioEntry]);
@@ -436,6 +437,53 @@ export function AiModelManagementPage({
           ]}
         />
       </Card>
+      {!!data?.historicalUsage?.length && (
+        <details className="ai-management-history">
+          <summary>历史团队用量</summary>
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={false}
+            scroll={{ x: 580 }}
+            dataSource={data.historicalUsage}
+            columns={[
+              { title: "历史功能", dataIndex: "name" },
+              {
+                title: "请求次数",
+                render: (_, row) => count(row.usage.requests),
+              },
+              {
+                title: "总 Token",
+                render: (_, row) => count(row.usage.totalTokens),
+              },
+              {
+                title: "积分 / 金额",
+                render: (_, row) =>
+                  row.usage.amounts
+                    .map((a) => `${money(a.amount)} ${a.unit}`)
+                    .join("、") || "未知",
+              },
+              {
+                title: "明细",
+                render: (_, row) => (
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() =>
+                      setDetail({
+                        ...row,
+                        usageNote: "按所选统计周期展示此历史功能的供应商回执。",
+                      })
+                    }
+                  >
+                    查看明细说明
+                  </Button>
+                ),
+              },
+            ]}
+          />
+        </details>
+      )}
       <p className="ai-management-note">
         {data?.catalogNotice || "读取真实模型配置与已记录用量…"}
       </p>
@@ -485,7 +533,6 @@ export function AiModelManagementPage({
               void client.invalidateQueries({
                 queryKey: ["assistant-capabilities"],
               });
-              void client.invalidateQueries({ queryKey: ["assistant-team"] });
               void client.invalidateQueries({
                 queryKey: ["assistant-employees"],
               });

@@ -51,5 +51,5 @@
 
 - [小序的实际模型请求](../apps/api/src/modules/workspace/assistant-model.ts) · [AgentAI 请求适配](../apps/api/src/modules/workspace/agentai-connection.ts) · [回复正文约束](../packages/contracts/src/personal-assistant.ts)
 - [工作台文件工具与生图执行](../apps/api/src/modules/workspace/agent-jobs.ts) · [网页预览](../apps/web/src/assistant-artifact-preview.tsx) · [办公文档生成器](../apps/api/src/modules/workspace/agent-documents.ts)
-- [AIGC 创作空间与媒体模式](manual/36-aigc.md) · [团队工具与独立验收](manual/40-assistant-team.md) · [现有语音制作](manual/43-agentai-audio.md)
+- [AIGC 创作空间与媒体模式](manual/36-aigc.md) · [员工工具、派单与验收](manual/41-assistant-employees.md) · [现有语音制作](manual/43-agentai-audio.md)
 - [模型管理与用量记录](manual/31-ai-settings.md) · [工作台文件和预览说明](manual/32-personal-workspace.md) · [现有质检员核对标准](employee-skills/xuti-quality-review/SKILL.md)

@@ -25,7 +25,6 @@ import { AuthGuard, Envelope, ErrorFilter } from "./http.js";
 import { validateIntegrationMode } from "./integrations/vip/index.js";
 import { enrichOpenApi } from "./openapi.js";
 import { ManualController } from "./manual.js";
-import { DeerFlowModelGatewayController } from "./deerflow-model-gateway.js";
 import { CompassAnalyticsModule } from "./modules/analytics/controller.js";
 import { PersonalWorkspaceModule } from "./modules/workspace/controller.js";
 import { CompetitorAnalysisModule } from "./modules/competitors/controller.js";
@@ -36,7 +35,7 @@ import { attachRealtimeRelay } from "./modules/workspace/realtime-relay.js";
 import { AiModelManagementController } from "./ai-model-management-controller.js";
 import { AgentAiAudioController } from "./modules/workspace/agentai-audio-controller.js";
 @Module({
-  controllers: [ManualController, DeerFlowModelGatewayController, AiModelManagementController, AgentAiAudioController],
+  controllers: [ManualController, AiModelManagementController, AgentAiAudioController],
   imports: [
     CompassSharesModule,
     CompetitorAnalysisModule,

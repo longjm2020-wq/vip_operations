@@ -3,7 +3,6 @@ import {
   defaultTeamSettings,
   teamPlanSchema,
   teamRunCreateSchema,
-  teamSaveSchema,
   teamSettingsSchema,
 } from "../../packages/contracts/src/assistant-team.js";
 
@@ -16,9 +15,9 @@ describe("team contracts", () => {
       modelMode: "fixed",
       modelId: "engine/writing",
     };
-    expect(
-      teamSaveSchema.parse({ version: 0, ...settings }).members[4].modelId,
-    ).toBe("engine/writing");
+    expect(teamSettingsSchema.parse(settings).members[4].modelId).toBe(
+      "engine/writing",
+    );
     expect(defaultTeamSettings().members[4].modelMode).toBe("auto");
   });
   it("protects required coordinators and rejects missing/duplicate member identities", () => {
@@ -32,9 +31,7 @@ describe("team contracts", () => {
     expect(teamSettingsSchema.safeParse(settings).success).toBe(false);
     settings.members[5].id = "design";
     settings.members[5].modelMode = "fixed";
-    expect(teamSaveSchema.safeParse({ version: 0, ...settings }).success).toBe(
-      false,
-    );
+    expect(teamSettingsSchema.safeParse(settings).success).toBe(false);
   });
   it("accepts independent branches but rejects cycles, missing dependencies and duplicate steps", () => {
     const a = {

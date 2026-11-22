@@ -246,11 +246,6 @@ export function employeeTeamSettings(
       .filter((e) => e.id !== review?.id)
       .map((e) => asMember(e)),
   );
-  // Preserve the established team contract without adding unselected executors.
-  for (const m of defaults.members.filter(
-    (m) => !["orchestrator", "coordinator", "librarian"].includes(m.role),
-  ))
-    if (members.length < 7) members.push({ ...m, enabled: false });
   return {
     ...defaults,
     engine: "native",
@@ -284,7 +279,7 @@ export async function readEmployeeTask(
 ): Promise<EmployeeTask> {
   requireAssistant(c);
   const meta = await taskMetadata(c, id);
-  const run = await readTeamRun(c, id);
+  const run = await readTeamRun(c, id, "employee");
   const mediaJobs = await rows(
     db,
     "SELECT id,title,kind,model,status,stage FROM public.personal_assistant_jobs WHERE request_id=$1::uuid AND user_id=$2::bigint ORDER BY created_at LIMIT 72",
@@ -549,7 +544,7 @@ export async function controlEmployeeTask(
   );
   await taskMetadata(c, id);
   if (body.action === "stop") {
-    await cancelTeamRun(c, id);
+    await cancelTeamRun(c, id, "employee");
     return readEmployeeTask(c, id);
   }
   const changed = await one(

@@ -4,9 +4,6 @@ import { useUser, type Row } from "./shared";
 import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 import "./workspace-ai.css";
-import { useWorkspaceTeam } from "./use-workspace-team";
-import { WorkspaceTeamOrbit } from "./workspace-team-orbit";
-import { teamIsRunning } from "./workspace-team-state";
 import { useWorkspaceHubStage } from "./use-workspace-hub-stage";
 
 // Fixed geometry keeps this decorative core independent of timers and model calls.
@@ -158,7 +155,6 @@ export function WorkspaceAI({
 }) {
   const user = useUser();
   const hub = useAssistantHub();
-  const team = useWorkspaceTeam();
   const stage = useWorkspaceHubStage();
   if (!canUsePersonalAssistant({ permissions: user.permissions })) return null;
   const backgroundTaskRunning = hub.feed?.items?.some(
@@ -166,9 +162,7 @@ export function WorkspaceAI({
   );
   const state =
     hub.voiceState ||
-    (hub.busy ||
-    backgroundTaskRunning ||
-    (team.visible && team.run && teamIsRunning(team.run.status))
+    (hub.busy || backgroundTaskRunning
       ? "working"
       : hub.conversation?.ready
         ? "idle"
@@ -184,21 +178,10 @@ export function WorkspaceAI({
           className="workspace-ai-core-stage"
           ref={stage}
           inert={sceneCovered}
-          data-team-active={team.visible}
         >
           <div className="workspace-world-camera">
             <div className="workspace-world-plane">
               <AssistantCore />
-              {team.visible && (
-                <WorkspaceTeamOrbit
-                  key={team.id}
-                  run={team.run}
-                  error={team.error}
-                  covered={sceneCovered}
-                  dismiss={team.dismiss}
-                  retry={team.retry}
-                />
-              )}
               <div className="workspace-ai-orbit-slot" />
             </div>
           </div>

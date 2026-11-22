@@ -1,20 +1,15 @@
-import { useEffect, useState } from "react";
-import { Alert, App, Button, Spin, Tag } from "antd";
+import { useEffect } from "react";
+import { Alert, Button, Spin, Tag } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import { useUser } from "./shared";
 import { AgentFileLink } from "./assistant-agent-panel";
 import { ArtifactCard, teamActive, teamRunsKey } from "./assistant-team-panel";
 import type { TeamRun } from "../../../packages/contracts/src/assistant-team";
-import { useNavigate } from "react-router-dom";
-import { showWorkspaceTeam } from "./workspace-team-navigation";
 
 export function AssistantTeamMessage({ id }: { id: string }) {
-  const navigate = useNavigate();
-  const user = useUser(),
-    client = useQueryClient(),
-    { message } = App.useApp();
-  const [canceling, setCanceling] = useState(false);
+  const user = useUser();
+  const client = useQueryClient();
   const run = useQuery({
     queryKey: ["assistant-team-run", user.id, id],
     queryFn: async () =>
@@ -32,22 +27,6 @@ export function AssistantTeamMessage({ id }: { id: string }) {
       void client.invalidateQueries({ queryKey: teamRunsKey(user.id) });
     }
   }, [status, client, user.id]);
-  const cancel = async () => {
-    setCanceling(true);
-    try {
-      const response = await api(
-        `/my-workspace/assistant/team/runs/${encodeURIComponent(id)}/cancel`,
-        "POST",
-        {},
-      );
-      if (response.data?.note) message.info(response.data.note);
-      await run.refetch();
-    } catch (cause) {
-      message.error((cause as Error).message);
-    } finally {
-      setCanceling(false);
-    }
-  };
   const value = run.data;
   const files = [
     ...new Map(
@@ -59,7 +38,7 @@ export function AssistantTeamMessage({ id }: { id: string }) {
   return (
     <article className="assistant-team-message" aria-label="对话中的团队任务">
       <div className="team-card-heading">
-        <strong>小序 · 智能体团队</strong>
+        <strong>小序 · 历史协作任务</strong>
         {value && (
           <Tag>
             {
@@ -92,25 +71,6 @@ export function AssistantTeamMessage({ id }: { id: string }) {
       {value && (
         <>
           <p role="status">{value.stage}</p>
-          <Button
-            size="small"
-            type="text"
-            onClick={() => {
-              showWorkspaceTeam(id);
-              navigate("/my-workspace");
-            }}
-          >
-            在星轨中查看
-          </Button>
-          {teamActive(value.status) && (
-            <Button
-              size="small"
-              loading={canceling}
-              onClick={() => void cancel()}
-            >
-              停止团队任务
-            </Button>
-          )}
           {value.error && <Alert type="error" title={value.error} />}
           {value.summary && (
             <section>

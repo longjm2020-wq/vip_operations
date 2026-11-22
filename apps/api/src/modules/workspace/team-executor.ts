@@ -25,11 +25,7 @@ import type { AgentFile } from "../../../../../packages/contracts/src/assistant-
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import type { Context } from "../../core.js";
 import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
-import {
-  agentaiConnection,
-  agentaiEndpoint,
-  postAgentAiChat,
-} from "./agentai-connection.js";
+import { agentaiConnection, postAgentAiChat } from "./agentai-connection.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 import { requireAssistant } from "./assistant-memory.js";
 import {
@@ -828,13 +824,15 @@ export async function runTeamExecution(
     employeeContext: storedEmployeeContext,
     ...body
   } = run.input;
+  if (!storedEmployeeContext || (engine !== undefined && engine !== "native"))
+    throw new TeamNeedsUser(
+      "仅 AI 员工任务可继续执行，请在历史任务中核对已有产物",
+    );
   const input: TeamExecutionInput = {
     ...teamRunCreateSchema.parse(body),
     settings: teamSettingsSchema.parse(storedSettings),
     settingsVersion,
-    employeeContext: storedEmployeeContext
-      ? employeeTaskContextSchema.parse(storedEmployeeContext)
-      : undefined,
+    employeeContext: employeeTaskContextSchema.parse(storedEmployeeContext),
   };
   // Parse the public body separately: stored snapshots contain extra internal fields.
   const check = async () => {
@@ -980,12 +978,6 @@ export async function runTeamExecution(
     };
     const files = await ownedAgentFiles(c, request.fileIds);
     const modelOptions = {
-      feature: (input.employeeContext
-        ? "assistant_employee"
-        : engine === "mastra"
-          ? "mastra_team"
-          : "assistant_team") as
-        "mastra_team" | "assistant_team" | "assistant_employee",
       policy: employee?.workModel,
       taskModel: input.model,
       profileModel:
@@ -1155,52 +1147,23 @@ export async function runTeamExecution(
       const apiKey = decryptSecret(current.api_key_encrypted);
       await reserveCall();
       await check();
-      const response =
-        engine === "mastra"
-          ? await (
-              await import("./mastra-team.js")
-            ).generateMastraTeamResponse({
-              endpoint: agentai ? agentaiEndpoint : COMPASS_AI_ENDPOINT,
-              provider: agentai ? "agentai" : undefined,
-              ...(agentai
-                ? {
-                    send: (body: Row) =>
-                      postAgentAiChat(
-                        current,
-                        body,
-                        requestSignal,
-                        "mastra_team",
-                      ),
-                  }
-                : {}),
-              apiKey,
-              memberId: request.member.id,
-              memberName: request.member.name,
-              body: modelBody,
-              schema: request.schema,
-              signal: requestSignal,
-            })
-          : agentai
-            ? await postAgentAiChat(
-                current,
-                modelBody,
-                requestSignal,
-                input.employeeContext ? "assistant_employee" : "assistant_team",
-              )
-            : await aiFetch(
-                input.employeeContext ? "assistant_employee" : "assistant_team",
-                COMPASS_AI_ENDPOINT,
-                {
-                  method: "POST",
-                  redirect: "error",
-                  signal: requestSignal,
-                  headers: {
-                    Authorization: "Bearer " + apiKey,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify(modelBody),
-                },
-              );
+      const response = agentai
+        ? await postAgentAiChat(
+            current,
+            modelBody,
+            requestSignal,
+            "assistant_employee",
+          )
+        : await aiFetch("assistant_employee", COMPASS_AI_ENDPOINT, {
+            method: "POST",
+            redirect: "error",
+            signal: requestSignal,
+            headers: {
+              Authorization: "Bearer " + apiKey,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(modelBody),
+          });
       if (!response.ok) {
         let payload: unknown;
         try {
@@ -1473,7 +1436,7 @@ export async function runTeamExecution(
         input.employeeContext && run.state?.employeePaused
           ? {
               state: run.state,
-              artifacts: (await readTeamRun(c, run.id)).artifacts,
+              artifacts: (await readTeamRun(c, run.id, "employee")).artifacts,
             }
           : undefined,
       pause: input.employeeContext

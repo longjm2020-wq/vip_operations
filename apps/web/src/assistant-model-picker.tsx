@@ -17,8 +17,6 @@ export function AssistantModelPicker({
   loading,
   failed,
   refresh,
-  teamSelected,
-  selectTeam,
 }: {
   catalog?: AgentCatalog;
   value?: string;
@@ -27,13 +25,10 @@ export function AssistantModelPicker({
   loading: boolean;
   failed: boolean;
   refresh: () => void;
-  teamSelected?: boolean;
-  selectTeam?: () => void;
 }) {
   const { models, selectedId, title } = resolveAssistantModelPickerState({
     catalog,
     value,
-    teamSelected,
   });
   return (
     <Dropdown
@@ -45,20 +40,6 @@ export function AssistantModelPicker({
         selectable: true,
         selectedKeys: selectedId ? [selectedId] : [],
         items: [
-          ...(selectTeam
-            ? [
-                {
-                  key: "team",
-                  label: (
-                    <div className="assistant-model-option">
-                      <span>智能体团队</span>
-                      <small>协作处理任务，进度与结果留在当前对话</small>
-                    </div>
-                  ),
-                },
-                { type: "divider" as const },
-              ]
-            : []),
           ...models.map((model) => ({
             key: model.id,
             label: (
@@ -92,12 +73,7 @@ export function AssistantModelPicker({
             disabled: loading,
           },
         ],
-        onClick: ({ key }) =>
-          key === "team"
-            ? selectTeam?.()
-            : key === "refresh"
-              ? refresh()
-              : onChange(key),
+        onClick: ({ key }) => (key === "refresh" ? refresh() : onChange(key)),
       }}
     >
       <Button

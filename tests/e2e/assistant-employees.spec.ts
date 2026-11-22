@@ -272,6 +272,57 @@ async function openEmployee(page: Page, name: string) {
   ).toBeVisible();
 }
 
+test("旧团队书签进入员工派单，档案仍可只读查看", async ({ page }) => {
+  await setup(page, 2);
+  const calls: string[] = [];
+  const root = "/my-workspace/assistant/team";
+  const run = {
+    id: randomUUID(),
+    goal: "旧版商品素材研究",
+    engine: "deerflow",
+    status: "DONE",
+    stage: "已交付",
+    summary: "旧研究的完整结论",
+    members: [],
+    steps: [],
+    artifacts: [],
+  };
+  await page.route(
+    "**/api/v1/my-workspace/assistant/team/**",
+    async (route) => {
+      const path = new URL(route.request().url()).pathname.replace(
+        "/api/v1",
+        "",
+      );
+      calls.push(route.request().method() + " " + path);
+      const data =
+        path === root + "/runs" ? [run] : path.endsWith(run.id) ? run : [];
+      await route.fulfill({ json: { data } });
+    },
+  );
+  await page.goto("/my-workspace?assistant=team");
+  const panel = page.getByRole("region", { name: "AI 员工工作台" });
+  await expect(
+    panel.getByRole("button", { name: "员工管理", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("combobox", { name: "团队执行引擎" }),
+  ).toHaveCount(0);
+  expect(calls).toEqual([]);
+  await page.goto("/my-workspace?assistant=tasks");
+  await page.getByText("历史协作档案", { exact: true }).click();
+  await page.getByRole("button", { name: /旧版商品素材研究/ }).click();
+  await expect(page.getByText("旧研究的完整结论")).toBeVisible();
+  await page.getByRole("tab", { name: "知识档案" }).click();
+  await expect(page.getByText("尚无匹配的知识档案")).toBeVisible();
+  expect(calls).toContain("GET " + root + "/library");
+  expect(
+    calls.every(
+      (call) => call.startsWith("GET ") && !call.endsWith("/settings"),
+    ),
+  ).toBe(true);
+});
+
 test("紧凑员工栏保留切换、配置返回与新增，长称呼在手机不撑开布局", async ({
   page,
 }) => {

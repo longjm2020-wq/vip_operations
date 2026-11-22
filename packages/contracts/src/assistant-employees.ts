@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { TeamConfiguration, TeamRun } from "./assistant-team.js";
+import type { TeamModel, TeamVideoModel, TeamRun } from "./assistant-team.js";
 
 export const employeeKinds = [
   "image",
@@ -170,10 +170,18 @@ export type EmployeeSkillsApplied = {
   kept: string[];
   unmatched: string[];
 };
-export type EmployeeCatalog = Pick<
-  TeamConfiguration,
-  "models" | "imageModels" | "videoModels" | "ready" | "notice"
->;
+export type EmployeeCatalog = {
+  ready: boolean;
+  notice: string;
+  models: TeamModel[];
+  imageModels: {
+    id: string;
+    name: string;
+    model: string;
+    reference: boolean;
+  }[];
+  videoModels?: TeamVideoModel[];
+};
 export const employeeMemberId = (id: string) => `employee_${id}`;
 export function employeeTemplate(
   kind: EmployeeProfile["kind"],

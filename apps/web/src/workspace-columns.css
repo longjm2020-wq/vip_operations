@@ -229,18 +229,6 @@ body:has(.workspace-columns[data-chat-open="true"])
     min-width: 0;
     flex: 0 0 auto;
   }
-  .workspace-columns
-    .workspace-center
-    .personal-workspace[data-world-mode]:has([data-team-active="true"])
-    .workspace-world-controls {
-    width: fit-content;
-    max-width: 100%;
-  }
-  .workspace-center
-    .personal-workspace:has([data-team-active="true"])
-    .workspace-voice-slot:has(> .companion-voice-prompt) {
-    display: none;
-  }
 }
 @media (max-width: 1050px) {
   .workspace-columns {

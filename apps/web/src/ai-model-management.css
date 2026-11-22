@@ -32,6 +32,13 @@
 .ai-management-card .ant-card-body {
   padding: 0;
 }
+.ai-management-history {
+  margin-top: 16px;
+}
+.ai-management-history > summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
 .ai-management-toolbar {
   display: flex;
   flex-wrap: wrap;

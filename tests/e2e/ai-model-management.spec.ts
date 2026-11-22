@@ -4,7 +4,7 @@ import {
   type AiManagementRow,
 } from "../../packages/contracts/src/ai-management.js";
 
-async function fixture(page: Page, superAdmin = true) {
+async function fixture(page: Page, superAdmin = true, withHistory = false) {
   const changes: Record<string, unknown>[] = [],
     connectionChanges: Record<string, unknown>[] = [],
     verifications: string[] = [],
@@ -180,6 +180,20 @@ async function fixture(page: Page, superAdmin = true) {
       } else
         data = {
           features,
+          historicalUsage: withHistory
+            ? [
+                {
+                  id: "mastra_team",
+                  name: "Mastra 智能体团队",
+                  usage: {
+                    ...usage,
+                    requests: 1,
+                    totalTokens: 25,
+                    amounts: [{ unit: "USD", amount: 0.2 }],
+                  },
+                },
+              ]
+            : [],
           days: Number(url.searchParams.get("days")),
           generatedAt: new Date().toISOString(),
           recordingSince: "2026-11-08T00:00:00Z",
@@ -431,11 +445,14 @@ test("management lists actual sources, persists a per-feature model and filters 
   ).toBeVisible();
   await expect(
     page
-      .locator('tr[data-row-key="assistant_team"]')
-      .getByText("网站智能体团队", { exact: true }),
+      .locator('tr[data-row-key="assistant_employee"]')
+      .getByRole("link", { name: "打开工作台 AI 员工" }),
   ).toBeVisible();
-  await expect(page.locator('tr[data-row-key="deerflow_team"]')).toBeVisible();
-  await expect(page.locator('tr[data-row-key="mastra_team"]')).toBeVisible();
+  await expect(
+    page.locator(
+      'tr[data-row-key="assistant_team"], tr[data-row-key="deerflow_team"], tr[data-row-key="mastra_team"]',
+    ),
+  ).toHaveCount(0);
   await page.getByRole("textbox", { name: "搜索 AI 功能" }).fill("商品");
   await expect(page.locator("tr[data-row-key]")).toHaveCount(2);
   await expect(page.getByText("积分 / 金额：未知").first()).toBeVisible();
@@ -444,6 +461,21 @@ test("management lists actual sources, persists a per-feature model and filters 
     path: test.info().outputPath("ai-management-desktop.png"),
     fullPage: true,
   });
+});
+
+test("retired team billing is read-only and separate from active model settings", async ({
+  page,
+}) => {
+  await fixture(page, true, true);
+  await page.goto("/settings/ai");
+  const history = page.locator("details").filter({ hasText: "历史团队用量" });
+  await history.locator("summary").click();
+  const row = history.locator('tr[data-row-key="mastra_team"]');
+  await expect(row).toContainText("0.2 USD");
+  await expect(row.getByRole("combobox")).toHaveCount(0);
+  await expect(row.getByRole("link")).toHaveCount(0);
+  await row.getByRole("button", { name: "查看明细说明" }).click();
+  await expect(page.getByRole("dialog")).toContainText("Mastra 智能体团队");
 });
 
 test("voice configuration and direct links do not start a call", async ({

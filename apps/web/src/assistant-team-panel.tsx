@@ -1,74 +1,19 @@
-import { useEffect, useState } from "react";
-import {
-  Alert,
-  App,
-  Button,
-  Checkbox,
-  Collapse,
-  Empty,
-  Input,
-  InputNumber,
-  Segmented,
-  Select,
-  Spin,
-  Switch,
-  Tabs,
-  Tag,
-} from "antd";
-import { PlusOutlined, ReloadOutlined, TeamOutlined } from "@ant-design/icons";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { Alert, Empty, Input, Spin, Tabs, Tag } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { useUser } from "./shared";
 import { AgentFileLink } from "./assistant-agent-panel";
 import {
-  teamRoleLabels,
-  teamEngines,
-  teamEngineLabels,
-  teamSaveSchema,
-  defaultTeamMemberSkills,
-  teamMemberSkillMaxLength,
   type TeamArtifact,
-  type TeamConfiguration,
-  type TeamMember,
   type TeamRun,
-  type TeamSettings,
 } from "../../../packages/contracts/src/assistant-team";
-import { SkillMarkdownView } from "./skill-markdown-view";
 import "./assistant-team.css";
 
-const skillPlaceholder = `## 何时使用
-说明在什么任务或情况下使用本成员。
-
-## 步骤
-1. …
-2. …
-
-## 交付格式
-- …
-
-## 验收标准
-- …
-
-## 禁止事项
-- …`;
-
 const root = "/my-workspace/assistant/team";
-export const teamConfigurationKey = (userId: string) => [
-  "assistant-team",
-  userId,
-];
 export const teamRunsKey = (userId: string) => ["assistant-team-runs", userId];
 export const teamActive = (status: TeamRun["status"]) =>
   ["QUEUED", "PLANNING", "RUNNING", "REVIEWING"].includes(status);
-export function useTeamConfiguration(enabled = true) {
-  const user = useUser();
-  return useQuery({
-    queryKey: teamConfigurationKey(user.id),
-    enabled,
-    queryFn: async () => (await api(root)).data as TeamConfiguration,
-    staleTime: 30000,
-  });
-}
 const statusLabels: Record<string, string> = {
   QUEUED: "排队中",
   PLANNING: "制定计划",
@@ -97,17 +42,6 @@ const runStatusLabel = (run: TeamRun) =>
   run.engine === "deerflow" && run.status === "DONE"
     ? "已交付"
     : statusLabels[run.status];
-const requiredRole = (member: TeamMember) =>
-  ["orchestrator", "coordinator", "librarian"].includes(member.role);
-const configurationDraft = (config: TeamConfiguration): TeamSettings => ({
-  engine: config.engine || "native",
-  members: config.members.map((member) => ({ ...member })),
-  maxSteps: config.maxSteps,
-  maxRevisions: config.maxRevisions,
-  concurrency: config.concurrency,
-  allowWeb: config.allowWeb,
-});
-
 export function ArtifactCard({ artifact }: { artifact: TeamArtifact }) {
   return (
     <article className="team-artifact" aria-label={`交付：${artifact.title}`}>
@@ -157,15 +91,7 @@ export function ArtifactCard({ artifact }: { artifact: TeamArtifact }) {
   );
 }
 
-function TeamRunDetail({
-  run,
-  cancel,
-  canceling,
-}: {
-  run: TeamRun;
-  cancel: () => void;
-  canceling: boolean;
-}) {
+function TeamRunDetail({ run }: { run: TeamRun }) {
   return (
     <div className="team-run-detail" aria-label="团队任务详情">
       <div className="team-card-heading">
@@ -173,14 +99,6 @@ function TeamRunDetail({
         <Tag color={colorFor(run.status)}>{runStatusLabel(run)}</Tag>
       </div>
       <p role="status">{run.stage}</p>
-      <p className="team-meta">
-        执行引擎：{teamEngineLabels[run.engine || "native"]}
-      </p>
-      {teamActive(run.status) && (
-        <Button loading={canceling} onClick={cancel}>
-          停止团队任务
-        </Button>
-      )}
       {run.error && <Alert type="error" showIcon title={run.error} />}
       {run.plan && <div className="team-prose team-plan">{run.plan}</div>}
       <ol className="team-steps">
@@ -258,47 +176,32 @@ function TeamRunDetail({
   );
 }
 
-export function AssistantTeamPanel({
-  selectedRunId,
-  selectRun,
-}: {
-  selectedRunId?: string;
-  selectRun: (id: string) => void;
-}) {
-  const user = useUser(),
-    { message } = App.useApp(),
-    client = useQueryClient();
-  const config = useTeamConfiguration();
-  const [tab, setTab] = useState(selectedRunId ? "runs" : "members");
-  const [draft, setDraft] = useState<TeamSettings>();
-  const deerflow = (draft?.engine || config.data?.engine) === "deerflow";
-  const [version, setVersion] = useState(0);
-  const [dirty, setDirty] = useState(false);
-  const [editing, setEditing] = useState<string>();
-  const [skillPreview, setSkillPreview] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  const [canceling, setCanceling] = useState(false);
+export function AssistantCollaborationHistory() {
+  const [open, setOpen] = useState(false);
+  return (
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>历史协作档案</summary>
+      {open && <HistoryArchive />}
+    </details>
+  );
+}
+
+function HistoryArchive() {
+  const user = useUser();
+  const [selectedRunId, selectRun] = useState<string>();
+  const [tab, setTab] = useState("runs");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
-  useEffect(() => {
-    if (selectedRunId) setTab("runs");
-  }, [selectedRunId]);
-  useEffect(() => {
-    if (config.data && !dirty) {
-      setDraft(configurationDraft(config.data));
-      setVersion(config.data.version);
-    }
-  }, [config.data, dirty]);
   const runs = useQuery({
     queryKey: teamRunsKey(user.id),
+    enabled: tab === "runs",
     queryFn: async () => (await api(`${root}/runs`)).data as TeamRun[],
     refetchInterval: (q) =>
-      q.state.data?.some((run) => teamActive(run.status)) ? 2500 : 15000,
+      q.state.data?.some((run) => teamActive(run.status)) ? 2500 : false,
   });
   const run = useQuery({
     queryKey: ["assistant-team-run", user.id, selectedRunId],
-    enabled: !!selectedRunId,
+    enabled: tab === "runs" && !!selectedRunId,
     queryFn: async () =>
       (await api(`${root}/runs/${encodeURIComponent(selectedRunId!)}`))
         .data as TeamRun,
@@ -312,528 +215,24 @@ export function AssistantTeamPanel({
       (await api(`${root}/library?q=${encodeURIComponent(query)}`))
         .data as TeamArtifact[],
   });
-  const runStatus = run.data?.status;
-  useEffect(() => {
-    if (runStatus && !teamActive(runStatus)) {
-      void client.invalidateQueries({ queryKey: teamRunsKey(user.id) });
-      void client.invalidateQueries({
-        queryKey: ["assistant-team-library", user.id],
-      });
-    }
-  }, [runStatus, client, user.id]);
-  const update = (patch: Partial<TeamSettings>) => {
-    setDraft((current) => (current ? { ...current, ...patch } : current));
-    setDirty(true);
-    setSaveError("");
-  };
-  const updateMember = (id: string, patch: Partial<TeamMember>) => {
-    if (draft)
-      update({
-        members: draft.members.map((member) =>
-          member.id === id ? { ...member, ...patch } : member,
-        ),
-      });
-  };
-  const save = async () => {
-    if (!draft) return;
-    const parsed = teamSaveSchema.safeParse({ ...draft, version });
-    if (!parsed.success) {
-      setSaveError(parsed.error.issues[0]?.message || "请检查团队配置");
-      return;
-    }
-    setSaving(true);
-    setSaveError("");
-    try {
-      const saved = (await api(root, "POST", parsed.data))
-        .data as TeamConfiguration;
-      client.setQueryData(teamConfigurationKey(user.id), saved);
-      setVersion(saved.version);
-      setDraft(configurationDraft(saved));
-      setDirty(false);
-      message.success("智能体团队已保存");
-    } catch (error) {
-      setSaveError((error as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
-  const cancel = async () => {
-    if (!selectedRunId) return;
-    setCanceling(true);
-    try {
-      const response = await api(
-        `${root}/runs/${encodeURIComponent(selectedRunId)}/cancel`,
-        "POST",
-        {},
-      );
-      if (typeof response.data?.note === "string")
-        message.info(response.data.note);
-      await run.refetch();
-      await runs.refetch();
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setCanceling(false);
-    }
-  };
-  const modelOptions =
-    config.data?.models.map((model) => ({
-      value: model.id,
-      label: `${model.name} · ${model.model}`,
-    })) || [];
   return (
-    <div className="assistant-team" aria-label="智能体团队">
-      <header className="team-heading">
-        <div>
-          <h2>
-            <TeamOutlined aria-hidden /> 智能体团队
-          </h2>
-          <p>
-            {deerflow
-              ? "输入目标，团队自动分工并交付成果。"
-              : "把目标交给主智能体，团队按职责执行、验收并整理成果。"}
-          </p>
-          {deerflow && (
-            <p className="team-meta">
-              支持研究、写作和文本文件交付；图片视频请使用原有创作功能。
-            </p>
-          )}
-        </div>
-        <Button
-          icon={<ReloadOutlined />}
-          aria-label="刷新智能体团队"
-          onClick={() => {
-            void config.refetch();
-            void runs.refetch();
-            if (selectedRunId) void run.refetch();
-            if (tab === "library") void library.refetch();
-          }}
-        />
-      </header>
-      {config.isLoading && <Spin />}
-      {config.error && (
-        <Alert
-          type="error"
-          title={config.error.message}
-          action={<Button onClick={() => void config.refetch()}>重试</Button>}
-        />
-      )}
-      {config.data && !config.data.ready && (
-        <Alert
-          type="warning"
-          title="团队智能服务尚未就绪"
-          description={
-            config.data.notice ||
-            (deerflow
-              ? "请管理员检查团队服务连接。"
-              : "请管理员检查智能服务连接。配置可以先保存。")
-          }
-        />
-      )}
-      {config.data?.ready && config.data.notice && (
-        <Alert type="info" title={config.data.notice} />
-      )}
-      {draft && (
-        <div className="team-toolbar">
-          <label>
-            执行引擎
-            <Select
-              aria-label="团队执行引擎"
-              value={draft.engine}
-              disabled={saving}
-              style={{ minWidth: 160, marginLeft: 8 }}
-              options={teamEngines.map((engine) => ({
-                value: engine,
-                label: teamEngineLabels[engine],
-              }))}
-              onChange={(engine) => update({ engine })}
-            />
-          </label>
-          <span className="team-meta">
-            {dirty ? "有未保存配置" : "配置已保存"}，仅用于新任务
-          </span>
-          <Button
-            type="primary"
-            aria-label="保存团队配置"
-            loading={saving}
-            disabled={!dirty}
-            onClick={() => void save()}
-          >
-            保存团队配置
-          </Button>
-        </div>
-      )}
-      {saveError && (
-        <Alert
-          type="error"
-          title={saveError}
-          action={
-            <Button
-              onClick={async () => {
-                const next = await config.refetch();
-                if (next.data) {
-                  setDraft(configurationDraft(next.data));
-                  setVersion(next.data.version);
-                  setDirty(false);
-                  setSaveError("");
-                }
-              }}
-            >
-              重新载入服务器配置
-            </Button>
-          }
-        />
-      )}
+    <div className="assistant-team" aria-label="历史协作档案">
       <Tabs
-        activeKey={deerflow && tab === "members" ? "runs" : tab}
+        activeKey={tab}
         onChange={setTab}
         items={[
           {
-            key: "members",
-            label: "团队成员",
-            children: draft && (
-              <>
-                <div className="team-toolbar">
-                  <span>
-                    {draft.members.filter((member) => member.enabled).length}{" "}
-                    位已启用 · 主脑负责调度，资料调度负责独立验收
-                  </span>
-                  <Button
-                    icon={<PlusOutlined />}
-                    aria-label="新增智能体"
-                    disabled={saving || draft.members.length >= 24}
-                    onClick={() => {
-                      const id = `member_${crypto.randomUUID().replace(/-/g, "")}`;
-                      update({
-                        members: [
-                          ...draft.members,
-                          {
-                            id,
-                            name: "新智能体",
-                            role: "custom",
-                            instructions:
-                              "根据分配的目标完成任务，并提交可核验的交付物。",
-                            enabled: true,
-                            modelMode: "auto",
-                          },
-                        ],
-                      });
-                      setEditing(id);
-                    }}
-                  >
-                    新增智能体
-                  </Button>
-                </div>
-                <div className="team-members">
-                  {draft.members.map((member) => (
-                    <article
-                      key={member.id}
-                      className={`team-member${member.role === "orchestrator" ? " team-chief" : ""}`}
-                      aria-label={`智能体：${member.name}`}
-                    >
-                      <div className="team-card-heading">
-                        <strong>{member.name}</strong>
-                        <Switch
-                          size="small"
-                          checked={member.enabled}
-                          disabled={saving || requiredRole(member)}
-                          aria-label={`启用${member.name}`}
-                          onChange={(enabled) =>
-                            updateMember(member.id, { enabled })
-                          }
-                        />
-                      </div>
-                      <div className="team-meta">
-                        {teamRoleLabels[member.role]}
-                        {requiredRole(member) ? " · 必需成员" : ""}
-                      </div>
-                      <p>{member.instructions}</p>
-                      <div className="team-model-used">
-                        {member.modelMode === "auto"
-                          ? "按任务难度自动选择模型"
-                          : `固定模型：${config.data?.models.find((model) => model.id === member.modelId)?.model || member.modelId || "待选择"}`}
-                      </div>
-                      {!!member.skill?.trim() && (
-                        <div className="team-skill-hint">已配置操作技能</div>
-                      )}
-                      <Button
-                        size="small"
-                        type="link"
-                        aria-expanded={editing === member.id}
-                        onClick={() =>
-                          setEditing(
-                            editing === member.id ? undefined : member.id,
-                          )
-                        }
-                      >
-                        {editing === member.id ? "收起编辑" : "编辑智能体"}
-                      </Button>
-                      {editing === member.id && (
-                        <div className="team-member-editor">
-                          <label>
-                            名称
-                            <Input
-                              aria-label="智能体名称"
-                              value={member.name}
-                              maxLength={40}
-                              disabled={saving}
-                              onChange={(event) =>
-                                updateMember(member.id, {
-                                  name: event.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                          <label>
-                            职责说明
-                            <Input.TextArea
-                              aria-label="智能体职责"
-                              value={member.instructions}
-                              maxLength={3000}
-                              autoSize={{ minRows: 3, maxRows: 8 }}
-                              disabled={saving}
-                              onChange={(event) =>
-                                updateMember(member.id, {
-                                  instructions: event.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                          <div className="team-skill-editor">
-                            <div className="team-skill-header">
-                              <span>操作技能（Markdown）</span>
-                              <Segmented
-                                size="small"
-                                aria-label="操作技能编辑或预览"
-                                value={skillPreview ? "preview" : "edit"}
-                                options={[
-                                  { value: "edit", label: "编辑" },
-                                  { value: "preview", label: "预览" },
-                                ]}
-                                onChange={(value) =>
-                                  setSkillPreview(value === "preview")
-                                }
-                              />
-                              {defaultTeamMemberSkills[member.id] && (
-                                <Button
-                                  size="small"
-                                  type="link"
-                                  disabled={
-                                    saving ||
-                                    member.skill ===
-                                      defaultTeamMemberSkills[member.id]
-                                  }
-                                  onClick={() =>
-                                    updateMember(member.id, {
-                                      skill: defaultTeamMemberSkills[member.id],
-                                    })
-                                  }
-                                >
-                                  恢复默认
-                                </Button>
-                              )}
-                            </div>
-                            {skillPreview ? (
-                              <div className="team-skill-preview">
-                                <SkillMarkdownView
-                                  source={member.skill || ""}
-                                />
-                              </div>
-                            ) : (
-                              <Input.TextArea
-                                aria-label="智能体操作技能"
-                                value={member.skill || ""}
-                                maxLength={teamMemberSkillMaxLength}
-                                showCount
-                                placeholder={skillPlaceholder}
-                                autoSize={{ minRows: 6, maxRows: 16 }}
-                                disabled={saving}
-                                onChange={(event) =>
-                                  updateMember(member.id, {
-                                    skill: event.target.value,
-                                  })
-                                }
-                              />
-                            )}
-                            <small className="team-meta">
-                              执行任务时会附在职责说明之后，作为该成员的工作流程（SOP）。建议包含：何时使用、步骤、交付格式、验收标准、禁止事项。
-                            </small>
-                          </div>
-                          <label>
-                            模型策略
-                            <Select
-                              aria-label="智能体模型策略"
-                              value={member.modelMode}
-                              disabled={saving}
-                              options={[
-                                { value: "auto", label: "按任务难度自动选择" },
-                                { value: "fixed", label: "指定模型" },
-                              ]}
-                              onChange={(modelMode) =>
-                                updateMember(member.id, {
-                                  modelMode,
-                                  ...(modelMode === "auto"
-                                    ? { modelId: undefined }
-                                    : {}),
-                                })
-                              }
-                            />
-                          </label>
-                          {member.modelMode === "fixed" && (
-                            <label>
-                              指定模型
-                              <Select
-                                aria-label="智能体指定模型"
-                                value={member.modelId}
-                                disabled={saving}
-                                showSearch
-                                optionFilterProp="label"
-                                options={modelOptions}
-                                placeholder="选择模型"
-                                onChange={(modelId) =>
-                                  updateMember(member.id, { modelId })
-                                }
-                              />
-                            </label>
-                          )}
-                          <label>
-                            图像模型
-                            <Select
-                              aria-label="智能体图像模型"
-                              value={member.imageModelId}
-                              disabled={saving}
-                              allowClear
-                              showSearch
-                              optionFilterProp="label"
-                              placeholder="使用可用的默认图像模型"
-                              options={config.data?.imageModels.map(
-                                (model) => ({
-                                  value: model.id,
-                                  label: `${model.name} · ${model.model}${model.reference ? " · 支持参考图" : ""}`,
-                                }),
-                              )}
-                              onChange={(imageModelId) =>
-                                updateMember(member.id, { imageModelId })
-                              }
-                            />
-                          </label>
-                          <label>
-                            视频生成模型
-                            <Select
-                              aria-label="智能体视频模型"
-                              value={member.videoModelId}
-                              disabled={
-                                saving || !config.data?.videoModels?.length
-                              }
-                              allowClear
-                              showSearch
-                              optionFilterProp="label"
-                              placeholder={
-                                config.data?.videoModels?.length
-                                  ? "使用可用的默认视频模型"
-                                  : "尚未配置视频生成服务"
-                              }
-                              options={config.data?.videoModels?.map(
-                                (model) => ({
-                                  value: model.id,
-                                  label: `${model.name} · ${model.model} · ${model.resolution}`,
-                                }),
-                              )}
-                              onChange={(videoModelId) =>
-                                updateMember(member.id, { videoModelId })
-                              }
-                            />
-                          </label>
-                          {!config.data?.videoModels?.length && (
-                            <small className="team-meta">
-                              可继续使用已上传视频完成服务支持的剪辑操作。
-                            </small>
-                          )}
-                        </div>
-                      )}
-                    </article>
-                  ))}
-                </div>
-                <Collapse
-                  size="small"
-                  items={[
-                    {
-                      key: "limits",
-                      label: "协作设置",
-                      children: (
-                        <div className="team-limits">
-                          <label>
-                            最多步骤
-                            <InputNumber
-                              aria-label="团队最多步骤"
-                              disabled={saving}
-                              min={1}
-                              max={12}
-                              value={draft.maxSteps}
-                              onChange={(value) =>
-                                value && update({ maxSteps: value })
-                              }
-                            />
-                          </label>
-                          <label>
-                            最多修改轮次
-                            <InputNumber
-                              aria-label="团队最多修改轮次"
-                              disabled={saving}
-                              min={0}
-                              max={2}
-                              value={draft.maxRevisions}
-                              onChange={(value) =>
-                                value !== null &&
-                                update({ maxRevisions: value })
-                              }
-                            />
-                          </label>
-                          <label>
-                            同时执行成员
-                            <InputNumber
-                              aria-label="团队并发成员"
-                              disabled={saving}
-                              min={1}
-                              max={3}
-                              value={draft.concurrency}
-                              onChange={(value) =>
-                                value && update({ concurrency: value })
-                              }
-                            />
-                          </label>
-                          <Checkbox
-                            checked={draft.allowWeb}
-                            disabled={saving}
-                            onChange={(event) =>
-                              update({ allowWeb: event.target.checked })
-                            }
-                          >
-                            允许团队检索公开网络资料
-                          </Checkbox>
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
-              </>
-            ),
-          },
-          {
             key: "runs",
-            label: "协作任务",
+            label: "历史任务",
             children: (
               <>
-                <p className="team-meta">
-                  在下方输入框提交完整目标。关闭面板后任务仍按后台实际状态运行。
-                </p>
                 {runs.isLoading && <Spin />}
                 {runs.error && (
                   <Alert type="error" title={runs.error.message} />
                 )}
                 {!runs.isLoading && !runs.error && !runs.data?.length && (
                   <Empty
-                    description="还没有团队任务"
+                    description="暂无历史协作任务"
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 )}
@@ -855,13 +254,7 @@ export function AssistantTeamPanel({
                 </div>
                 {run.isLoading && selectedRunId && <Spin />}
                 {run.error && <Alert type="error" title={run.error.message} />}
-                {run.data && (
-                  <TeamRunDetail
-                    run={run.data}
-                    cancel={() => void cancel()}
-                    canceling={canceling}
-                  />
-                )}
+                {run.data && <TeamRunDetail run={run.data} />}
               </>
             ),
           },
@@ -900,7 +293,7 @@ export function AssistantTeamPanel({
               </>
             ),
           },
-        ].filter((item) => !deerflow || item.key !== "members")}
+        ]}
       />
     </div>
   );

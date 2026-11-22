@@ -354,13 +354,10 @@ describe("AgentAI actual feature routing", () => {
     });
     for (const feature of [
       "assistant_employee",
-      "assistant_team",
-      "mastra_team",
       "assistant_browser",
       "assistant_desktop",
       "assistant_search",
       "assistant_website",
-      "deerflow_team",
       "aigc_compile",
     ]) {
       expect(
@@ -376,16 +373,11 @@ describe("AgentAI actual feature routing", () => {
       "UPDATE agentai_model_verifications SET tools_verified_at=now(),structured_verified_at=now()",
     );
     const enabled = await aiModelManagement(admin());
-    for (const feature of [
-      "assistant_employee",
-      "assistant_team",
-      "mastra_team",
-    ])
-      expect(
-        enabled.features
-          .find((f) => f.id === feature)!
-          .choices.find((c) => c.value === id)?.available,
-      ).toBe(true);
+    expect(
+      enabled.features
+        .find((f) => f.id === "assistant_employee")!
+        .choices.find((c) => c.value === id)?.available,
+    ).toBe(true);
   });
 
   it("runs ordinary text chat with OpenRouter disabled, omits unverified tools/schema, and meters AgentAI", async () => {
@@ -455,7 +447,6 @@ describe("AgentAI actual feature routing", () => {
       "UPDATE agentai_model_verifications SET tools_verified_at=now(),structured_verified_at=now()",
     );
     expect(await teamServiceReady()).toBe(true);
-    expect(await teamServiceReady("deerflow")).toBe(false);
   });
 
   it("keeps search and website lookup on OpenRouter instead of sending an AgentAI model ID to that endpoint", async () => {
@@ -579,24 +570,25 @@ it("tracks H3 by task id without inventing tokens or currency and does not doubl
     amounts: [],
   });
 });
-it("separates engine usage and defaults without merging historical receipts", async () => {
+it("keeps former engine receipts read-only and separate from employee model settings", async () => {
   await fixture.db!.exec(`
     INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,total_tokens,amount,amount_unit,completed_at) VALUES
     (gen_random_uuid(),'deerflow_team','openrouter.ai','legacy/model','legacy/model','success',10,0.2,'USD',now()),
     (gen_random_uuid(),'mastra_team','openrouter.ai','mastra/model','mastra/model','success',25,0.3,'OpenRouter credits',now());
     INSERT INTO ai_model_usage(id,feature_id,source,status) VALUES(gen_random_uuid(),'mastra_team','openrouter.ai','failed');
   `);
-  const features = (await aiModelManagement(admin())).features;
-  expect(features.find((f) => f.id === "assistant_team")!.usage.requests).toBe(
-    0,
-  );
-  expect(features.find((f) => f.id === "deerflow_team")!.usage).toMatchObject({
+  const { features, historicalUsage } = await aiModelManagement(admin());
+  expect(
+    features.find((f) => f.id === "assistant_employee")!.usage.requests,
+  ).toBe(0);
+  expect(
+    historicalUsage.find((f) => f.id === "deerflow_team")!.usage,
+  ).toMatchObject({
     requests: 1,
     totalTokens: 10,
     amounts: [{ unit: "USD", amount: 0.2 }],
   });
-  const mastra = features.find((f) => f.id === "mastra_team")!;
-  expect(mastra.source).toContain("Mastra");
+  const mastra = historicalUsage.find((f) => f.id === "mastra_team")!;
   expect(mastra.usage).toMatchObject({
     requests: 2,
     failed: 1,
@@ -604,21 +596,28 @@ it("separates engine usage and defaults without merging historical receipts", as
     totalTokens: 25,
     amounts: [{ unit: "OpenRouter credits", amount: 0.3 }],
   });
-  for (const feature of ["mastra_team", "deerflow_team"] as const) {
-    await saveAiFeatureModel(admin(), {
-      feature,
-      model: modelRef(vision),
-      revision: 0,
-    });
-    expect(
-      (await resolveTeamModel({ feature, orchestrator: true })).actual,
-    ).toBe(vision);
+  for (const feature of ["assistant_team", "mastra_team", "deerflow_team"]) {
+    expect(features.some((f) => f.id === feature)).toBe(false);
+    await expect(
+      saveAiFeatureModel(admin(), {
+        feature,
+        model: modelRef(vision),
+        revision: 0,
+      }),
+    ).rejects.toMatchObject(errorCode("VALIDATION_ERROR"));
   }
+  await fixture.db!.exec(
+    "UPDATE ai_model_usage SET started_at=now()-interval '40 days'",
+  );
+  const recent = await aiModelManagement(admin(), { days: 30 });
   expect(
-    (await aiModelManagement(admin())).features.find(
-      (f) => f.id === "assistant_team",
-    )!.selection,
-  ).toBe("");
+    recent.historicalUsage.every((team) => team.usage.requests === 0),
+  ).toBe(true);
+  const all = await aiModelManagement(admin(), { days: 0 });
+  expect(
+    all.historicalUsage.find((team) => team.id === "mastra_team")?.usage
+      .requests,
+  ).toBe(2);
 });
 
 describe("connected models in the public chat menu", () => {
@@ -720,12 +719,9 @@ describe("AI model administration and real routing", () => {
       modelRef(plain),
     );
     expect(browser.boundary).toContain("不占用你的鼠标键盘");
-    expect(view.features.filter((row) => row.group === "团队")).toMatchObject([
-      { id: "assistant_employee", name: "工作台 AI 员工" },
-      { id: "assistant_team", name: "网站智能体团队" },
-      { id: "deerflow_team", name: "DeerFlow 智能体团队" },
-      { id: "mastra_team", name: "Mastra 智能体团队" },
-    ]);
+    expect(
+      view.features.filter((row) => row.group === "AI 员工"),
+    ).toMatchObject([{ id: "assistant_employee", name: "工作台 AI 员工" }]);
     expect(view.features.find((f) => f.id === "compass_analysis")?.href).toBe(
       "/analytics/compass",
     );
@@ -836,18 +832,11 @@ describe("AI model administration and real routing", () => {
       amount: "0.00000123",
     });
     await saveAiFeatureModel(admin(), {
-      feature: "assistant_team",
+      feature: "assistant_employee",
       model: modelRef(vision),
       revision: 0,
     });
     expect((await resolveTeamModel({})).actual).toBe(vision);
-    await query(
-      "INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,started_at,completed_at) VALUES(gen_random_uuid(),'assistant_team','openrouter.ai','openai/gpt-6.1-sol','openai/gpt-6.1-sol','success',now(),now())",
-    );
-    expect(
-      (await resolveTeamModel({ feature: "deerflow_team", orchestrator: true }))
-        .actual,
-    ).toBe("openai/gpt-6.1-sol");
     const row = (await aiModelManagement(admin())).features.find(
       (f) => f.id === "assistant_search",
     )!;

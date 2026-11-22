@@ -4,9 +4,7 @@ import {
   defaultTeamSettings,
   teamMemberSkillMaxLength,
   teamMemberSkillPrompt,
-  teamSaveSchema,
   teamSettingsSchema,
-  withDefaultMemberSkills,
 } from "../../packages/contracts/src/assistant-team.js";
 
 describe("team member skill markdown", () => {
@@ -29,31 +27,12 @@ describe("team member skill markdown", () => {
     const settings = defaultTeamSettings();
     settings.members[0] = { ...settings.members[0], skill: "" };
     delete settings.members[1].skill;
-    expect(teamSaveSchema.safeParse({ version: 0, ...settings }).success).toBe(
-      true,
-    );
+    expect(teamSettingsSchema.safeParse(settings).success).toBe(true);
     settings.members[2] = {
       ...settings.members[2],
       skill: "x".repeat(teamMemberSkillMaxLength + 1),
     };
     expect(teamSettingsSchema.safeParse(settings).success).toBe(false);
-  });
-  it("fills defaults only for never-configured built-in members", () => {
-    const settings = defaultTeamSettings();
-    delete settings.members[0].skill;
-    settings.members[1].skill = "";
-    settings.members.push({
-      id: "member_custom",
-      name: "自定义",
-      role: "custom",
-      instructions: "完成任务",
-      enabled: true,
-      modelMode: "auto",
-    });
-    const filled = withDefaultMemberSkills(settings);
-    expect(filled.members[0].skill).toBe(defaultTeamMemberSkills.chief);
-    expect(filled.members[1].skill).toBe("");
-    expect(filled.members.at(-1)!.skill).toBeUndefined();
   });
   it("builds a delimited, size-capped prompt section", () => {
     expect(teamMemberSkillPrompt({ skill: "  " })).toBe("");

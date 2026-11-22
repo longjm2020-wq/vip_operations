@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import type { Context } from "../../apps/api/src/core.js";
 import type { Tx } from "../../packages/database/src/index.js";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
+import { pollAssistantTeamJobs } from "../../apps/worker/src/assistant-team-jobs.js";
 import {
   employeeTemplate,
   employeeMemberId,
@@ -38,12 +39,15 @@ import {
   readEmployeeSkillDocuments,
   employeeSkillDocumentId,
 } from "../../apps/api/src/modules/workspace/employee-skills.js";
-import {
-  hydrateTeamMessages,
-  readConversationReference,
-} from "../../apps/api/src/modules/workspace/assistant-shared-context.js";
-import type { AssistantMessage } from "../../packages/contracts/src/personal-assistant.js";
-const f = vi.hoisted(() => ({ db: null as PGlite | null, videos: vi.fn() }));
+const f = vi.hoisted(() => ({
+  db: null as PGlite | null,
+  videos: vi.fn(),
+  execute: vi.fn(),
+}));
+vi.mock("../../apps/api/src/modules/workspace/team-executor.js", () => ({
+  runTeamExecution: f.execute,
+  safeTeamError: () => "test execution ended",
+}));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const exports =
     await original<typeof import("../../packages/database/src/index.js")>();
@@ -106,9 +110,7 @@ vi.mock("../../apps/api/src/modules/workspace/agent-models.js", () => ({
   }),
 }));
 import {
-  readAssistantTeam,
-  saveAssistantTeam,
-  createTeamRun,
+  retiredTeamEntry,
   readTeamRun,
   listTeamRuns,
   cancelTeamRun,
@@ -129,6 +131,18 @@ const body = () => ({
   attachmentIds: [],
   useKnowledge: true,
 });
+async function seedHistoricalRun(
+  user: Context,
+  request: ReturnType<typeof body>,
+  engine = "native",
+) {
+  const input = { ...request, engine, settings: defaultTeamSettings() };
+  await f.db!.query(
+    "INSERT INTO personal_assistant_team_runs(id,user_id,request_hash,input) VALUES($1,$2,'historical',$3::jsonb)",
+    [request.id, user.actor.id, JSON.stringify(input)],
+  );
+  return request;
+}
 const errorCode = (code: string) => ({ response: { error: { code } } });
 beforeAll(async () => {
   f.db = new PGlite();
@@ -136,6 +150,10 @@ beforeAll(async () => {
     "CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8); CREATE TABLE compass_ai_settings(id int PRIMARY KEY,enabled boolean,verified_at timestamptz,api_key_encrypted text); INSERT INTO compass_ai_settings VALUES(1,true,now(),'private-provider-key');",
   );
   await installAiManagementSchema(f.db);
+  await f.db
+    .exec(`ALTER TABLE users ADD COLUMN username text, ADD COLUMN display_name text, ADD COLUMN status text DEFAULT 'ACTIVE';
+    CREATE TABLE roles(id bigint PRIMARY KEY, code text);
+    CREATE TABLE user_roles(user_id bigint,role_id bigint);`);
   for (const file of [
     "069_personal_assistant.sql",
     "083_assistant_agent.sql",
@@ -152,6 +170,7 @@ beforeEach(async () => {
     "TRUNCATE personal_assistant_team_runs CASCADE; TRUNCATE personal_assistant_conversations; TRUNCATE personal_assistant_teams; TRUNCATE personal_assistant_jobs; TRUNCATE personal_assistant_files; UPDATE compass_ai_settings SET enabled=true;",
   );
   f.videos.mockReset().mockResolvedValue([]);
+  f.execute.mockReset();
 });
 afterAll(async () => {
   await f.db?.close();
@@ -438,6 +457,12 @@ describe("assistant team storage and owner boundaries", () => {
       employeeId: id,
       goal: "第二份文案",
     });
+    await expect(readTeamRun(actor(), first.id)).rejects.toMatchObject(
+      errorCode("NOT_FOUND"),
+    );
+    await expect(cancelTeamRun(actor(), first.id)).rejects.toMatchObject(
+      errorCode("NOT_FOUND"),
+    );
     await controlEmployeeTask(actor(), first.id, { action: "pause" });
     const lease = randomUUID(),
       claimed = await claimAssistantRun(lease);
@@ -463,229 +488,36 @@ describe("assistant team storage and owner boundaries", () => {
     });
     expect((await claimAssistantRun(randomUUID()))?.id).toBe(first.id);
   });
-  it("shares text and voice context with a team once, resolves its latest result, and respects clear and owner boundaries", async () => {
-    const prior = [
-      {
-        id: randomUUID(),
-        role: "user",
-        text: "本次发布主题为秋季轻旅",
-        createdAt: new Date().toISOString(),
-        source: "voice",
-      },
-    ];
-    await f.db!.query(
-      "INSERT INTO personal_assistant_conversations(user_id,messages) VALUES(7,$1::jsonb),(8,$2::jsonb)",
-      [
-        JSON.stringify(prior),
-        JSON.stringify([{ ...prior[0], text: "其他账号的私密主题" }]),
-      ],
-    );
-    const input = { ...body(), goal: "按刚才的主题写文案" };
-    const run = await createTeamRun(actor(), input);
-    await createTeamRun(actor(), input);
-    const stored = (
-      await f.db!.query<{ input: { conversationContext: string } }>(
-        "SELECT input FROM personal_assistant_team_runs WHERE id=$1",
-        [run.id],
-      )
-    ).rows[0];
-    expect(stored.input.conversationContext).toContain("秋季轻旅");
-    expect(stored.input.conversationContext).not.toContain("私密主题");
-    const history = (
-      await f.db!.query<{ messages: AssistantMessage[] }>(
-        "SELECT messages FROM personal_assistant_conversations WHERE user_id=7",
-      )
-    ).rows[0].messages;
-    expect(history).toHaveLength(3);
-    expect(history.at(-1)).toMatchObject({ teamRunId: run.id, source: "team" });
-    await f.db!.query(
-      "UPDATE personal_assistant_team_runs SET status='DONE',stage='已交付',summary='轻旅出发，文案已整理。' WHERE id=$1",
-      [run.id],
-    );
-    expect((await hydrateTeamMessages("7", history)).at(-1)?.text).toContain(
-      "轻旅出发",
-    );
-    expect(await readConversationReference("7")).toContain("轻旅出发");
-    expect((await hydrateTeamMessages("8", history)).at(-1)?.text).toBe(
-      "团队任务已不可用。",
-    );
-    await f.db!.query(
-      "UPDATE personal_assistant_conversations SET messages='[]' WHERE user_id=7",
-    );
-    expect(await readConversationReference("7")).toBe("");
-  });
-  it("does not overwrite an in-flight chat when a team is submitted from another window", async () => {
-    await f.db!.exec(
-      "INSERT INTO personal_assistant_conversations(user_id,state,pending_since) VALUES(7,'PENDING',now())",
-    );
-    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
-      errorCode("AI_BUSY"),
-    );
-    expect(await listTeamRuns(actor())).toEqual([]);
-  });
-  it("uses the website team for new work even when legacy remote service variables remain", async () => {
-    vi.stubEnv("DEER_FLOW_URL", "http://deerflow.railway.internal:8001");
-    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "");
-    vi.stubEnv("DEER_FLOW_MODEL_PROXY_TOKEN", "");
-    const config = await readAssistantTeam(actor());
-    expect(config).toMatchObject({ engine: "native", ready: true });
-    expect(config.models).not.toHaveLength(0);
-    expect(
-      await saveAssistantTeam(actor(), {
-        ...defaultTeamSettings(),
-        version: 0,
-      }),
-    ).toMatchObject({ engine: "native", version: 1 });
-    const run = await createTeamRun(actor(), body());
-    expect(run).toMatchObject({ engine: "native", status: "QUEUED" });
-    const saved = (
-      await f.db!.query<{ input: { engine: string } }>(
-        "SELECT input FROM personal_assistant_team_runs WHERE id=$1",
-        [run.id],
-      )
-    ).rows[0];
-    expect(saved.input.engine).toBe("native");
-    expect(JSON.stringify(run)).not.toMatch(/internal-token|railway.internal/);
-    await expect(readTeamRun(actor("8"), run.id)).rejects.toMatchObject(
-      errorCode("NOT_FOUND"),
-    );
-    await expect(
-      createTeamRun(actor(), { ...body(), model: "missing" }),
-    ).rejects.toMatchObject(errorCode("TEAM_MODEL_UNAVAILABLE"));
-    await f.db!.exec("UPDATE compass_ai_settings SET enabled=false");
-    expect(await readAssistantTeam(actor())).toMatchObject({
-      engine: "native",
-      ready: false,
-    });
-    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
-      errorCode("TEAM_UNAVAILABLE"),
-    );
-  });
-  it("retains legacy engine snapshots on read, retry and cancellation without creating new remote work", async () => {
+  it("blocks the retired team entry and preserves owner-scoped, read-only historical runs", async () => {
+    expect(() => retiredTeamEntry(actor())).toThrow();
+    try {
+      retiredTeamEntry(actor());
+    } catch (error) {
+      expect(error).toMatchObject({
+        status: 410,
+        ...errorCode("TEAM_RETIRED"),
+      });
+    }
+    const denied = actor();
+    denied.actor.permissions = [];
+    expect(() => retiredTeamEntry(denied)).toThrow();
     const input = body();
-    const run = await createTeamRun(actor(), input);
-    await f.db!.query(
-      `UPDATE personal_assistant_team_runs SET input=jsonb_set(input,'{engine}','"deerflow"') WHERE id=$1`,
-      [run.id],
-    );
-    expect(await readTeamRun(actor(), run.id)).toMatchObject({
-      engine: "deerflow",
-    });
-    expect(await createTeamRun(actor(), input)).toMatchObject({
-      id: run.id,
-      engine: "deerflow",
-    });
+    await seedHistoricalRun(actor(), input, "mastra");
+    const remote = await seedHistoricalRun(actor("8"), body(), "deerflow");
     expect(await listTeamRuns(actor())).toHaveLength(1);
-    await expect(readTeamRun(actor("8"), run.id)).rejects.toMatchObject(
-      errorCode("NOT_FOUND"),
-    );
-    expect(await cancelTeamRun(actor(), run.id)).toMatchObject({
-      canceled: true,
-    });
-    expect(await readTeamRun(actor(), run.id)).toMatchObject({
+    expect(await claimAssistantRun(randomUUID())).toBeUndefined();
+    expect(await readTeamRun(actor("8"), remote.id)).toMatchObject({
       engine: "deerflow",
       status: "CANCELED",
     });
-  });
-  it("selects Mastra and DeerFlow per owner while retaining the original task engine on retries", async () => {
-    const settings = defaultTeamSettings();
-    const mastra = await saveAssistantTeam(actor(), {
-      ...settings,
-      engine: "mastra",
-      version: 0,
-    });
-    expect(mastra).toMatchObject({ engine: "mastra", ready: true });
-    expect(await readAssistantTeam(actor("8"))).toMatchObject({
-      engine: "native",
-    });
-    const input = body();
-    const run = await createTeamRun(actor(), input);
-    expect(run.engine).toBe("mastra");
-    vi.stubEnv("DEER_FLOW_URL", "http://deerflow.railway.internal:8001");
-    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "test-internal-token");
-    vi.stubEnv("DEER_FLOW_MODEL_PROXY_TOKEN", "a".repeat(64));
-    expect(
-      await saveAssistantTeam(actor(), {
-        ...settings,
-        engine: "deerflow",
-        version: 1,
-      }),
-    ).toMatchObject({ engine: "deerflow", ready: true });
-    expect((await createTeamRun(actor(), input)).engine).toBe("mastra");
-    expect((await createTeamRun(actor(), body())).engine).toBe("deerflow");
-    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "");
-    expect((await readAssistantTeam(actor())).ready).toBe(false);
-    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
-      errorCode("TEAM_UNAVAILABLE"),
+    const repeat = await readTeamRun(actor(), input.id);
+    expect(repeat).toMatchObject({ engine: "mastra", status: "CANCELED" });
+    await expect(readTeamRun(actor("8"), input.id)).rejects.toMatchObject(
+      errorCode("NOT_FOUND"),
     );
-    expect(
-      await saveAssistantTeam(actor(), {
-        ...settings,
-        engine: "mastra",
-        version: 2,
-      }),
-    ).toMatchObject({ engine: "mastra", ready: true });
-    await expect(
-      createTeamRun(actor(), { ...body(), engine: "deerflow" }),
-    ).rejects.toBeDefined();
-    await expect(
-      saveAssistantTeam(actor(), {
-        ...settings,
-        engine: "unknown",
-        version: 3,
-      }),
-    ).rejects.toBeDefined();
-  });
-  it("returns seven defaults and catalog metadata without persisting or exposing service secrets", async () => {
-    const config = await readAssistantTeam(actor());
-    expect(config).toMatchObject({ version: 0, ready: true, videoModels: [] });
-    expect(config.members).toHaveLength(7);
-    expect(config.models[0]).toMatchObject({
-      id: "engine/strong",
-      model: "openai/gpt-6.1-sol",
-    });
-    expect(JSON.stringify(config)).not.toContain("private-provider-key");
-    expect(
-      (await f.db!.query("SELECT * FROM personal_assistant_teams")).rows,
-    ).toEqual([]);
-  });
-  it("saves independently per owner and rejects stale configuration versions and unavailable fixed selections", async () => {
-    const settings = defaultTeamSettings();
-    settings.members[0].name = "我的主脑";
-    expect(
-      await saveAssistantTeam(actor(), { ...settings, version: 0 }),
-    ).toMatchObject({ version: 1 });
-    expect((await readAssistantTeam(actor("8"))).members[0].name).not.toBe(
-      "我的主脑",
+    await expect(cancelTeamRun(actor("8"), input.id)).rejects.toMatchObject(
+      errorCode("NOT_FOUND"),
     );
-    await expect(
-      saveAssistantTeam(actor(), { ...settings, version: 0 }),
-    ).rejects.toMatchObject(errorCode("VERSION_CONFLICT"));
-    settings.members[0].modelMode = "fixed";
-    settings.members[0].modelId = "engine/unavailable";
-    await expect(
-      saveAssistantTeam(actor(), { ...settings, version: 1 }),
-    ).rejects.toMatchObject(errorCode("TEAM_MODEL_UNAVAILABLE"));
-    settings.members[0].modelId = "engine/strong";
-    settings.members[6].videoModelId = "video/not-authorized";
-    await expect(
-      saveAssistantTeam(actor(), { ...settings, version: 1 }),
-    ).rejects.toMatchObject(errorCode("TEAM_VIDEO_MODEL_UNAVAILABLE"));
-    expect((await readAssistantTeam(actor())).version).toBe(1);
-  });
-  it("keeps the original run snapshot on retry and rejects reuse with a changed goal", async () => {
-    const input = body();
-    const first = await createTeamRun(actor(), input);
-    expect(first.status).toBe("QUEUED");
-    const settings = defaultTeamSettings();
-    settings.members[0].name = "后来修改的主脑";
-    await saveAssistantTeam(actor(), { ...settings, version: 0 });
-    const repeat = await createTeamRun(actor(), input);
-    expect(repeat.members).toEqual(first.members);
-    expect(await listTeamRuns(actor())).toHaveLength(1);
-    await expect(
-      createTeamRun(actor(), { ...input, goal: "另一个任务目标" }),
-    ).rejects.toMatchObject(errorCode("IDEMPOTENCY_CONFLICT"));
     const serialized = JSON.stringify(repeat);
     expect(serialized).not.toMatch(
       /request_hash|lease_id|private-provider-key|settingsVersion/,
@@ -723,51 +555,82 @@ describe("assistant team storage and owner boundaries", () => {
       /private-runtime-context|private-provider-payload|providerPayload/,
     );
   });
-  it("rejects a fixed asynchronous task model before persisting or scheduling a run", async () => {
-    await expect(
-      createTeamRun(actor(), { ...body(), model: "engine/batch" }),
-    ).rejects.toMatchObject(errorCode("TEAM_MODEL_CAPABILITY"));
-    expect(await listTeamRuns(actor())).toEqual([]);
-    expect(
-      (await readAssistantTeam(actor())).models.map((model) => model.id),
-    ).toEqual(["engine/strong"]);
-    const settings = defaultTeamSettings();
-    settings.members[0].modelMode = "fixed";
-    settings.members[0].modelId = "engine/batch";
-    await expect(
-      saveAssistantTeam(actor(), { ...settings, version: 0 }),
-    ).rejects.toMatchObject(errorCode("TEAM_MODEL_UNAVAILABLE"));
-    expect((await readAssistantTeam(actor())).version).toBe(0);
-  });
-  it("enforces ownership for runs, files, cancellation and matching UUID collisions", async () => {
-    const input = body();
-    await createTeamRun(actor(), input);
-    expect(await listTeamRuns(actor("8"))).toEqual([]);
-    await expect(readTeamRun(actor("8"), input.id)).rejects.toMatchObject(
-      errorCode("NOT_FOUND"),
-    );
-    await expect(cancelTeamRun(actor("8"), input.id)).rejects.toMatchObject(
-      errorCode("NOT_FOUND"),
-    );
-    await expect(createTeamRun(actor("8"), input)).rejects.toMatchObject(
-      errorCode("IDEMPOTENCY_CONFLICT"),
-    );
-    const file = randomUUID();
+  it("drains a live historical lease, preserves interrupted remote receipts, and never claims either run", async () => {
+    const live = await seedHistoricalRun(actor(), body(), "mastra");
+    const lost = await seedHistoricalRun(actor(), body(), "deerflow");
+    const receipt = { deerflow: { runId: "original-request" } };
     await f.db!.query(
-      "INSERT INTO personal_assistant_files(id,user_id,name,mime,size,source,content) VALUES($1,8,'private.png','image/png',1,'upload',$2)",
-      [file, new Uint8Array([1])],
+      "UPDATE personal_assistant_team_runs SET status='RUNNING',lease_id=$1,heartbeat_at=now() WHERE id=$2",
+      [randomUUID(), live.id],
     );
-    await expect(
-      createTeamRun(actor(), { ...body(), attachmentIds: [file] }),
-    ).rejects.toMatchObject(errorCode("FILE_NOT_FOUND"));
-    expect((await readTeamRun(actor(), input.id)).status).toBe("QUEUED");
+    await f.db!.query(
+      "UPDATE personal_assistant_team_runs SET status='RUNNING',lease_id=$1,heartbeat_at=NULL,updated_at=now()-interval '4 minutes',state=$3::jsonb WHERE id=$2",
+      [randomUUID(), lost.id, JSON.stringify(receipt)],
+    );
+    await pollAssistantTeamJobs(new AbortController().signal);
+    expect(await readTeamRun(actor(), live.id)).toMatchObject({
+      status: "RUNNING",
+    });
+    const interrupted = (
+      await f.db!.query(
+        "SELECT status,state,lease_id FROM personal_assistant_team_runs WHERE id=$1",
+        [lost.id],
+      )
+    ).rows[0];
+    expect(interrupted).toMatchObject({
+      status: "NEEDS_USER",
+      state: receipt,
+      lease_id: null,
+    });
+    expect(f.execute).not.toHaveBeenCalled();
   });
-  it("limits active runs, cancels active children only for that owner/run and allows idempotent cancellation", async () => {
-    const inputs = [body(), body(), body()];
-    for (const input of inputs) await createTeamRun(actor(), input);
-    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
-      errorCode("TEAM_BUSY"),
-    );
+  it("keeps child jobs owned by a newer employee lease if the old execution fails late", async () => {
+    const employeeId = randomUUID(),
+      nextLease = randomUUID(),
+      child = randomUUID();
+    await saveEmployee(actor(), {
+      id: employeeId,
+      version: 0,
+      profile: employeeTemplate("writing"),
+    });
+    const run = await createEmployeeTask(actor(), {
+      id: randomUUID(),
+      employeeId,
+      goal: "准备文案",
+    });
+    f.execute.mockImplementationOnce(async () => {
+      await f.db!.query(
+        "UPDATE personal_assistant_team_runs SET lease_id=$2 WHERE id=$1",
+        [run.id, nextLease],
+      );
+      await f.db!.query(
+        "INSERT INTO personal_assistant_jobs(id,user_id,request_id,call_id,kind,title,input,status) VALUES($1,7,$2,$3,'document','file','{}','QUEUED')",
+        [child, run.id, randomUUID()],
+      );
+      throw Error("previous lease ended");
+    });
+    await pollAssistantTeamJobs(new AbortController().signal);
+    expect(f.execute).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await f.db!.query(
+          "SELECT lease_id,status FROM personal_assistant_team_runs WHERE id=$1",
+          [run.id],
+        )
+      ).rows[0],
+    ).toMatchObject({ lease_id: nextLease, status: "PLANNING" });
+    expect(
+      (
+        await f.db!.query(
+          "SELECT status FROM personal_assistant_jobs WHERE id=$1",
+          [child],
+        )
+      ).rows[0],
+    ).toMatchObject({ status: "QUEUED" });
+  });
+  it("cancels a historical run and its active children only for that owner, idempotently", async () => {
+    const inputs = [body(), body()];
+    for (const input of inputs) await seedHistoricalRun(actor(), input);
     const childIds: string[] = [];
     for (const [id, status, owner] of [
       [inputs[0].id, "QUEUED", 7],
@@ -804,30 +667,12 @@ describe("assistant team storage and owner boundaries", () => {
         [childIds[3]]: "QUEUED",
       },
     );
-    await expect(createTeamRun(actor(), body())).resolves.toMatchObject({
-      status: "QUEUED",
-    });
-  });
-  it("requires assistant permission and a ready service, while read-only settings remain available", async () => {
-    const denied = actor();
-    denied.actor.permissions = [];
-    await expect(readAssistantTeam(denied)).rejects.toMatchObject(
-      errorCode("FORBIDDEN"),
-    );
-    await expect(createTeamRun(denied, body())).rejects.toMatchObject(
-      errorCode("FORBIDDEN"),
-    );
-    await f.db!.exec("UPDATE compass_ai_settings SET enabled=false");
-    expect((await readAssistantTeam(actor())).ready).toBe(false);
-    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
-      errorCode("TEAM_UNAVAILABLE"),
-    );
   });
   it("archives only accepted owner artifacts, searches literal text and enforces cross-owner foreign keys", async () => {
     const input = body();
-    await createTeamRun(actor(), input);
+    await seedHistoricalRun(actor(), input);
     const other = body();
-    await createTeamRun(actor("8"), other);
+    await seedHistoricalRun(actor("8"), other);
     for (const [run, owner, status] of [
       [input.id, 7, "DRAFT"],
       [input.id, 7, "REJECTED"],
@@ -855,6 +700,19 @@ describe("assistant team storage and owner boundaries", () => {
     expect(library[0].citations).toEqual([
       { title: "来源", url: "https://example.com/a" },
     ]);
+    const mine = randomUUID(),
+      foreign = randomUUID();
+    await f.db!.query(
+      "INSERT INTO personal_assistant_files(id,user_id,name,mime,size,source,content) VALUES($1,7,'mine.txt','text/plain',1,'generated',$3),($2,8,'private.txt','text/plain',1,'generated',$3)",
+      [mine, foreign, new Uint8Array([65])],
+    );
+    await f.db!.query(
+      "UPDATE personal_assistant_team_artifacts SET file_ids=$2::jsonb WHERE id=$1",
+      [library[0].id, JSON.stringify([foreign, mine])],
+    );
+    const files = (await readTeamLibrary(actor(), "needle"))[0];
+    expect(files.fileIds).toEqual([mine]);
+    expect(files.files.map((file) => file.id)).toEqual([mine]);
     expect(await readTeamLibrary(actor(), "%")).toEqual([]);
     expect(JSON.stringify(await readTeamLibrary(actor()))).not.toContain(
       "other-private",

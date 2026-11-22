@@ -9,6 +9,7 @@ import {
   Req,
   Res,
 } from "@nestjs/common";
+import { ApiExcludeEndpoint } from "@nestjs/swagger";
 import { Response } from "express";
 import { db, one, rows } from "../../../../../packages/database/src/index.js";
 import { z } from "zod";
@@ -32,10 +33,8 @@ import {
 } from "./agent-files.js";
 import { listAgentJobs, cancelAgentJob } from "./agent-jobs.js";
 import {
-  readAssistantTeam,
-  saveAssistantTeam,
+  retiredTeamEntry,
   listTeamRuns,
-  createTeamRun,
   readTeamRun,
   cancelTeamRun,
   readTeamLibrary,
@@ -74,17 +73,19 @@ import {
 // The owner always comes from the authenticated session; there is no user-id route.
 @Controller("api/v1/my-workspace")
 export class PersonalWorkspaceController {
+  @ApiExcludeEndpoint()
   @Get("assistant/team")
   async teamConfiguration(
     @Req() request: AuthRequest,
     @Res({ passthrough: true }) response: Response,
   ) {
     response.setHeader("Cache-Control", "private, no-store");
-    return readAssistantTeam(context(request));
+    return retiredTeamEntry(context(request));
   }
+  @ApiExcludeEndpoint()
   @Post("assistant/team")
-  async teamSave(@Req() request: AuthRequest, @Body() input: unknown) {
-    return saveAssistantTeam(context(request), input);
+  async teamSave(@Req() request: AuthRequest) {
+    return retiredTeamEntry(context(request));
   }
   @Get("assistant/team/runs")
   async teamRuns(
@@ -94,14 +95,14 @@ export class PersonalWorkspaceController {
     response.setHeader("Cache-Control", "private, no-store");
     return listTeamRuns(context(request));
   }
+  @ApiExcludeEndpoint()
   @Post("assistant/team/runs")
   async teamStart(
     @Req() request: AuthRequest,
-    @Body() input: unknown,
     @Res({ passthrough: true }) response: Response,
   ) {
     response.setHeader("Cache-Control", "private, no-store");
-    return createTeamRun(context(request), input);
+    return retiredTeamEntry(context(request));
   }
   @Get("assistant/team/runs/:id")
   async teamRun(

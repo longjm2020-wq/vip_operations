@@ -67,13 +67,11 @@ export async function readTeamModelCatalog() {
     })),
     defaultModel: catalog.defaultModel,
     notice:
-      "自动选型只在当前已接通目录内按任务难度和能力匹配；主智能体默认优先较强能力，不代表全球模型排名。AgentAI 仅使用已验证工具与结构化输出的型号，所选连接失败不会暗中切换其他供应商。原共享连接保留已配置的访问错误回退策略并在执行详情说明。百炼聊天型号仅用于网站内对话，不会用于团队。内容类错误不会换型号。",
+      "员工按任务难度、输入类型与岗位配置选择工作模型。小序派单优先选择较强的规划模型。AgentAI 员工型号须通过工具和结构化输出验证。执行详情记录实际型号和共享连接的访问错误回退情况。",
   };
 }
 
 export async function resolveTeamModel(options: {
-  feature?:
-    "assistant_team" | "deerflow_team" | "mastra_team" | "assistant_employee";
   policy?: EmployeeModelPolicy;
   taskModel?: string;
   profileModel?: string;
@@ -84,7 +82,7 @@ export async function resolveTeamModel(options: {
   structured?: boolean;
 }) {
   const catalog = await agentModelCandidates();
-  const managed = await featureModelRef(options.feature || "assistant_team");
+  const managed = await featureModelRef("assistant_employee");
   const policy = options.policy;
   const restricted = policy && policy.mode !== "auto";
   const fixed = restricted
@@ -94,7 +92,6 @@ export async function resolveTeamModel(options: {
     : options.taskModel || options.profileModel || managed;
   const matches = (model: AgentInternalModel) =>
     supportsSynchronousTeamChat(model) &&
-    !(options.feature === "deerflow_team" && model.provider === "agentai") &&
     (!restricted || policy.modelIds.includes(model.id)) &&
     model.parameters.includes("tools") &&
     (!options.vision || model.vision) &&
@@ -113,13 +110,13 @@ export async function resolveTeamModel(options: {
     if (!model)
       fail(
         "TEAM_MODEL_UNAVAILABLE",
-        "指定的团队模型当前不可用，请更新模型选择后重新发起；未切换到其他模型",
+        "指定的员工模型当前不可用，请更新模型选择后重新发起任务",
         409,
       );
     if (!supportsSynchronousTeamChat(model))
       fail(
         "TEAM_MODEL_CAPABILITY",
-        "指定型号仅用于批处理或异步调用，不支持团队当前的同步对话执行；未调用该型号，也未切换到其他模型",
+        "员工需要支持同步对话和工具调用的工作模型，请检查所选型号",
         409,
       );
     if (!matches(model))
@@ -160,7 +157,7 @@ export async function resolveTeamModel(options: {
       };
     fail(
       "TEAM_MODEL_UNAVAILABLE",
-      "指定的团队模型当前未接通，且没有其他已接通、满足本步骤能力的团队模型可改用。请检查 OpenRouter 连接后重新发起；百炼聊天型号不能用于团队",
+      "此步骤缺少已接通且兼容的员工模型，请在 AI 模型管理中核对工作模型及连接",
       409,
     );
   }
@@ -215,8 +212,8 @@ export async function resolveTeamModel(options: {
     fail(
       "TEAM_MODEL_UNAVAILABLE",
       connected.size
-        ? "当前已接通模型没有满足本步骤能力要求的型号，请检查团队模型配置"
-        : "当前没有已接通且满足本步骤能力要求的团队模型。请在 AI 模型管理中检查 OpenRouter 连接；百炼聊天型号不能用于团队",
+        ? "请在员工配置中选择满足本步骤能力要求的工作模型"
+        : "当前缺少可用于此步骤的员工模型，请在 AI 模型管理中核对连接",
       409,
     );
   const tier = teamModelTier(model);
@@ -259,7 +256,7 @@ export async function resolveTeamImageModel(options: {
   if (!model)
     fail(
       "TEAM_IMAGE_MODEL_UNAVAILABLE",
-      "图像模型当前不可用，请检查团队图像配置后重试",
+      "图像模型当前不可用，请检查员工图像模型配置后重试",
       409,
     );
   if (

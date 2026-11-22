@@ -227,17 +227,12 @@ export const teamMemberSchema = z
     "指定模型时请选择模型",
   );
 export type TeamMember = z.infer<typeof teamMemberSchema>;
-export const teamEngines = ["native", "mastra", "deerflow"] as const;
-export type TeamEngine = (typeof teamEngines)[number];
-export const teamEngineLabels: Record<TeamEngine, string> = {
-  native: "网站团队",
-  mastra: "Mastra",
-  deerflow: "DeerFlow",
-};
+// Historical run snapshots retain the engine which produced their archived results.
+export type TeamEngine = "native" | "mastra" | "deerflow";
 export const teamSettingsSchema = z
   .object({
-    engine: z.enum(teamEngines).optional(),
-    members: z.array(teamMemberSchema).min(7).max(24),
+    engine: z.literal("native").optional(),
+    members: z.array(teamMemberSchema).min(3).max(24),
     maxSteps: z.number().int().min(1).max(12).default(8),
     maxRevisions: z.number().int().min(0).max(2).default(1),
     concurrency: z.number().int().min(1).max(3).default(2),
@@ -257,19 +252,6 @@ export const teamSettingsSchema = z
     }
   });
 export type TeamSettings = z.infer<typeof teamSettingsSchema>;
-export const teamSaveSchema = z
-  .object({
-    version: z.number().int().nonnegative(),
-    ...teamSettingsSchema.shape,
-  })
-  .strict()
-  .superRefine((v, ctx) => {
-    const { version: _version, ...settings } = v;
-    const parsed = teamSettingsSchema.safeParse(settings);
-    if (!parsed.success)
-      for (const issue of parsed.error.issues)
-        ctx.addIssue({ ...issue, code: "custom", message: issue.message });
-  });
 export const defaultTeamSettings = (): TeamSettings => ({
   maxSteps: 8,
   maxRevisions: 1,
@@ -333,17 +315,6 @@ export const defaultTeamSettings = (): TeamSettings => ({
     modelMode: "auto" as const,
   })),
 });
-/** 旧配置未保存过操作技能时，为内置成员补上默认内容；已清空（""）则保持为空。 */
-export const withDefaultMemberSkills = <T extends TeamSettings>(
-  settings: T,
-): T => ({
-  ...settings,
-  members: settings.members.map((member) =>
-    member.skill === undefined && defaultTeamMemberSkills[member.id]
-      ? { ...member, skill: defaultTeamMemberSkills[member.id] }
-      : member,
-  ),
-});
 /** 成员执行提示词中的操作技能片段（空则返回空串），超出上限时截断。 */
 export const teamMemberSkillPrompt = (
   member: Pick<TeamMember, "skill">,
@@ -365,20 +336,6 @@ export type TeamModel = {
   vision: boolean;
   pdf: boolean;
   structured: boolean;
-};
-export type TeamConfiguration = TeamSettings & {
-  engine?: TeamEngine;
-  version: number;
-  ready: boolean;
-  notice: string;
-  models: TeamModel[];
-  imageModels: {
-    id: string;
-    name: string;
-    model: string;
-    reference: boolean;
-  }[];
-  videoModels?: TeamVideoModel[];
 };
 export type TeamVideoModel = {
   id: string;

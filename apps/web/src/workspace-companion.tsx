@@ -710,7 +710,6 @@ export function WorkspaceCompanion() {
               "inert",
               "aria-hidden",
               "data-scene-presence",
-              "data-team-phase",
             ],
           });
       }

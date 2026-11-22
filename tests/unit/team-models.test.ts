@@ -75,7 +75,7 @@ beforeEach(() => {
   });
 });
 describe("team model routing", () => {
-  it("requires independently verified AgentAI tools and structured output, and rejects DeerFlow routing", async () => {
+  it("requires independently verified AgentAI tools and structured output", async () => {
     const agentai = {
       ...models[0],
       id: "agentai/test",
@@ -93,11 +93,6 @@ describe("team model routing", () => {
     expect(
       await resolveTeamModel({ taskModel: agentai.id, structured: true }),
     ).toMatchObject({ provider: "agentai" });
-    await expect(
-      resolveTeamModel({ taskModel: agentai.id, feature: "deerflow_team" }),
-    ).rejects.toMatchObject({
-      response: { error: { code: "TEAM_MODEL_CAPABILITY" } },
-    });
     await expect(
       resolveTeamModel({ taskModel: "agentai/plain" }),
     ).rejects.toMatchObject({
@@ -365,7 +360,7 @@ describe("team model routing", () => {
       tier: "strong",
     });
     expect(catalog.models[0]).not.toHaveProperty("actual");
-    expect(catalog.notice).toContain("不代表全球模型排名");
+    expect(catalog.notice).toContain("按任务难度、输入类型与岗位配置");
   });
   it("does not substitute an incompatible fixed image model for a reference edit", async () => {
     await expect(

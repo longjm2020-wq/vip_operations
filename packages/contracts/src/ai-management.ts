@@ -53,37 +53,10 @@ export const aiFeatures = [
   {
     id: "assistant_employee",
     name: "工作台 AI 员工",
-    group: "团队",
+    group: "AI 员工",
     href: "/my-workspace?assistant=employees",
     boundary:
       "独立交办与小序派单共用员工队列，岗位 SKILL.md 与配置按任务保存快照；保存技能不调用模型。执行读取技能前4000字符。工作模型支持固定、候选与受限备用策略；固定型号不自动替换。AgentAI 工作模型须验证工具与结构化能力，使用独立连接。图像和视频沿用各自创作服务，媒体用量分别记入图像或 AIGC 视频；对话用量在本项记录，未返回费用显示未知。技能不授予浏览器、电脑、发布或业务写入权限。",
-    kind: "team",
-  },
-  {
-    id: "assistant_team",
-    name: "网站智能体团队",
-    group: "团队",
-    href: "/my-workspace?assistant=team",
-    boundary:
-      "支持公开研究、办公文档及已配置的图片视频工具，按步骤独立验收与归档；任务或成员指定型号优先。AgentAI 文字模型须验证工具与结构化能力，实际通过独立连接调用；公开搜索仍使用 OpenRouter。",
-    kind: "team",
-  },
-  {
-    id: "deerflow_team",
-    name: "DeerFlow 智能体团队",
-    group: "团队",
-    href: "/my-workspace?assistant=chat",
-    boundary:
-      "通过网站网关使用多模态对话模型，进行公开研究与隔离的文本文件交付；未接入业务写入、电脑控制及图片视频生成工具。",
-    kind: "team",
-  },
-  {
-    id: "mastra_team",
-    name: "Mastra 智能体团队",
-    group: "团队",
-    href: "/my-workspace?assistant=team",
-    boundary:
-      "在团队设置选择 Mastra 后生效；成员通过 Mastra Agent 调用已适配且能力验证通过的模型，支持 OpenRouter 或独立 AgentAI 连接，复用网站已授权工具、独立验收与归档。任务或成员指定优先，无跨引擎自动重试。",
     kind: "team",
   },
   {
@@ -269,6 +242,7 @@ export type AiManagementRow = {
 };
 export type AiManagement = {
   features: AiManagementRow[];
+  historicalUsage: { id: string; name: string; usage: AiFeatureUsage }[];
   days: number;
   generatedAt: string;
   recordingSince: string | null;

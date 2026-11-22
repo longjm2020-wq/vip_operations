@@ -31,18 +31,17 @@ import {
   type AgentInternalModel,
 } from "./modules/workspace/agent-models.js";
 import { engineConfig } from "./modules/aigc/config.js";
-import { deerFlowConfigured } from "./modules/workspace/deerflow-client.js";
 import {
   agentaiReady,
   readAgentAiConnection,
 } from "./modules/workspace/agentai-connection.js";
 
-const agentaiFeatures = new Set([
-  "assistant_chat",
-  "assistant_team",
-  "assistant_employee",
-  "mastra_team",
-]);
+const agentaiFeatures = new Set(["assistant_chat", "assistant_employee"]);
+const historicalTeams = [
+  { id: "assistant_team", name: "网站智能体团队" },
+  { id: "mastra_team", name: "Mastra 智能体团队" },
+  { id: "deerflow_team", name: "DeerFlow 智能体团队" },
+];
 const agentaiSource = "AgentAI · https://agentai.token6688.com/v1";
 
 const iso = (value: unknown) =>
@@ -199,11 +198,10 @@ export async function aiModelManagement(
     : !shared.configured || !encryptionReady()
       ? "unconfigured"
       : "configured";
-  const features: AiManagementRow[] = aiFeatures.map((feature) => {
-    const binding = bindings.find((row) => row.feature_id === feature.id);
-    const u = usageRows.find((row) => row.feature_id === feature.id);
-    const last = latest.find((row) => row.feature_id === feature.id);
-    const usage: AiFeatureUsage = u
+  const usageFor = (id: string): AiFeatureUsage => {
+    const u = usageRows.find((row) => row.feature_id === id);
+    const last = latest.find((row) => row.feature_id === id);
+    return u
       ? {
           requests: u.requests,
           succeeded: u.succeeded,
@@ -217,7 +215,7 @@ export async function aiModelManagement(
           outputTokens: numeric(u.output),
           totalTokens: numeric(u.total),
           amounts: amounts
-            .filter((a) => a.feature_id === feature.id)
+            .filter((a) => a.feature_id === id)
             .map((a) => ({ unit: a.unit, amount: Number(a.amount) })),
           firstRecordedAt: iso(u.first),
           lastSuccessAt:
@@ -229,6 +227,11 @@ export async function aiModelManagement(
               : null,
         }
       : emptyAiUsage();
+  };
+  const features: AiManagementRow[] = aiFeatures.map((feature) => {
+    const binding = bindings.find((row) => row.feature_id === feature.id);
+    const last = latest.find((row) => row.feature_id === feature.id);
+    const usage = usageFor(feature.id);
     const row: AiManagementRow = {
       ...feature,
       model: "",
@@ -252,7 +255,7 @@ export async function aiModelManagement(
     };
     if (feature.kind === "team")
       row.usageNote +=
-        " 各团队引擎的文字调用分别统计；搜索、图片、视频等子调用在对应功能单独统计。";
+        " 员工独立交办与小序派单的文字调用计入此项。搜索、图片和视频在各自的功能项中统计。";
     if (
       feature.id === "agentai_speech" ||
       feature.id === "agentai_voice_clone"
@@ -438,7 +441,7 @@ export async function aiModelManagement(
           boundary:
             capability(model) +
             (model.provider === "agentai"
-              ? " · 仅网站聊天、员工与团队；能力按型号分别验证"
+              ? " · 小序聊天与 AI 员工，能力按型号分别验证"
               : "") +
             (model.provider === "bailian" ? " · 网站内聊天 · JSON Object" : ""),
           available:
@@ -505,7 +508,7 @@ export async function aiModelManagement(
       }
       if (agentaiFeatures.has(feature.id))
         row.boundary +=
-          " AgentAI 文字连接独立配置：普通聊天可使用已验证文字型号，工具与严格结构化输出分别验证后才开放；员工和团队要求两项均通过。本行只路由文字调用，媒体按对应功能独立配置；浏览器/电脑识屏与 DeerFlow 尚未接入。失败不会暗中改用另一供应商。公开搜索仍使用独立的 OpenRouter 连接。";
+          " AgentAI 文字连接独立配置。普通聊天可使用已验证的文字型号，员工要求工具与严格结构化输出两项验证均通过。媒体按对应功能配置。公开搜索、浏览器和电脑识屏使用各自的 OpenRouter 连接。";
       if (automatic && !row.selection && hasAgentaiChoice && readyKey)
         row.source = "按任务选择已验证连接（OpenRouter / AgentAI）";
       if (!row.selection && followsChat) {
@@ -536,17 +539,6 @@ export async function aiModelManagement(
       ) {
         row.status = "unavailable";
         row.statusText = "型号下架或不满足功能能力，需重新选择";
-      }
-    }
-    if (feature.id === "mastra_team") row.source = "Mastra → " + row.source;
-    if (feature.id === "deerflow_team") {
-      row.source = "DeerFlow 独立服务 → 网站模型网关 → OpenRouter";
-      if (
-        !deerFlowConfigured() ||
-        !/^[a-f0-9]{64}$/i.test(process.env.DEER_FLOW_MODEL_PROXY_TOKEN || "")
-      ) {
-        row.status = "unconfigured";
-        row.statusText = "DeerFlow 独立服务或模型代理未配置";
       }
     }
     const usingBailianChat =
@@ -622,6 +614,9 @@ export async function aiModelManagement(
   });
   return {
     features,
+    historicalUsage: historicalTeams
+      .filter((team) => latest.some((row) => row.feature_id === team.id))
+      .map((team) => ({ ...team, usage: usageFor(team.id) })),
     days,
     generatedAt: new Date().toISOString(),
     recordingSince: iso(meta?.recording_since),

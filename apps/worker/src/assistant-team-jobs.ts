@@ -5,23 +5,18 @@ import {
   runTeamExecution,
   safeTeamError,
 } from "../../api/src/modules/workspace/team-executor.js";
-import {
-  runDeerFlowExecution,
-  stopOrphanedDeerFlowRuns,
-} from "../../api/src/modules/workspace/deerflow-executor.js";
 import { claimAssistantRun } from "../../api/src/modules/workspace/employee-runtime.js";
 
 /** Separate from the media worker, so waiting for a file never consumes its slot. */
 export async function pollAssistantTeamJobs(signal: AbortSignal) {
   await db.$executeRawUnsafe(
-    "UPDATE public.personal_assistant_team_runs SET status='NEEDS_USER',stage='执行中断，等待核对',error_note='团队任务心跳中断，已保留现有结果；未自动重试模型或生成服务，请检查文件和步骤后重新发起',lease_id=NULL,updated_at=now() WHERE status IN ('PLANNING','RUNNING','REVIEWING') AND heartbeat_at<now()-interval '3 minutes'",
+    "UPDATE public.personal_assistant_team_runs SET status='NEEDS_USER',stage='执行中断，等待核对',error_note='任务心跳中断，已保留现有结果与请求记录。请核对已有文件和步骤，需要时可在 AI 员工另行交办。',lease_id=NULL,updated_at=now() WHERE status IN ('PLANNING','RUNNING','REVIEWING') AND COALESCE(heartbeat_at,updated_at)<now()-interval '3 minutes'",
   );
   // Stop unstarted child work belonging to an interrupted/canceled parent.
   await db.$executeRawUnsafe(
     "UPDATE public.personal_assistant_jobs j SET status='CANCELED',stage='团队任务已停止',updated_at=now() WHERE j.status IN ('QUEUED','RUNNING') AND EXISTS(SELECT 1 FROM public.personal_assistant_team_runs r WHERE r.id=j.request_id AND r.user_id=j.user_id AND r.status IN ('CANCELED','NEEDS_USER','FAILED'))",
   );
   signal.throwIfAborted();
-  await stopOrphanedDeerFlowRuns();
   const lease = randomUUID();
   const run = await claimAssistantRun(lease);
   if (!run) return;
@@ -68,23 +63,22 @@ export async function pollAssistantTeamJobs(signal: AbortSignal) {
       requestId: run.id,
       key: run.id,
     };
-    if (run.input.engine === "deerflow")
-      await runDeerFlowExecution(c, run, lease, combined);
-    else await runTeamExecution(c, run, lease, combined);
+    await runTeamExecution(c, run, lease, combined);
   } catch (error) {
     const note = combined.aborted
       ? "团队执行已中断，已保留实际成果；未自动重试付费调用，请检查结果后重新发起"
       : safeTeamError(error);
+    // A late failure from an expired lease cannot cancel a resumed task's children.
     await db.$executeRawUnsafe(
-      "UPDATE public.personal_assistant_team_runs SET status='NEEDS_USER',stage='等待用户处理',error_note=$3,lease_id=NULL,updated_at=now() WHERE id=$1::uuid AND lease_id=$2::uuid AND status IN ('PLANNING','RUNNING','REVIEWING')",
+      `WITH stopped AS (
+         UPDATE public.personal_assistant_team_runs SET status='NEEDS_USER',stage='等待用户处理',error_note=$3,lease_id=NULL,updated_at=now()
+         WHERE id=$1::uuid AND lease_id=$2::uuid AND status IN ('PLANNING','RUNNING','REVIEWING') RETURNING id,user_id
+       )
+       UPDATE public.personal_assistant_jobs j SET status='CANCELED',stage='所属任务已停止',updated_at=now()
+       FROM stopped WHERE j.request_id=stopped.id AND j.user_id=stopped.user_id AND j.status IN ('QUEUED','RUNNING')`,
       run.id,
       lease,
       note,
-    );
-    await db.$executeRawUnsafe(
-      "UPDATE public.personal_assistant_jobs SET status='CANCELED',stage='团队任务已停止',updated_at=now() WHERE request_id=$1::uuid AND user_id=$2::bigint AND status IN ('QUEUED','RUNNING')",
-      run.id,
-      String(run.user_id),
     );
   } finally {
     clearInterval(heartbeat);

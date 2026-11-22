@@ -382,12 +382,7 @@ export async function resolveAgentModel(
     );
   if (
     model.provider === "agentai" &&
-    ![
-      "assistant_chat",
-      "assistant_team",
-      "assistant_employee",
-      "mastra_team",
-    ].includes(feature)
+    !["assistant_chat", "assistant_employee"].includes(feature)
   )
     fail(
       "AI_MODEL_CAPABILITY",

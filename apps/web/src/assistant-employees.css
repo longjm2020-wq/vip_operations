@@ -110,9 +110,6 @@
   padding: 1px;
   scrollbar-width: thin;
 }
-.personal-workspace:has(.workspace-team-layer) .workspace-employee-strip {
-  display: none;
-}
 .employee-entry {
   position: relative;
   display: flex;

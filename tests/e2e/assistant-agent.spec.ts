@@ -1466,7 +1466,7 @@ test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保�
   ).toBeInViewport({ ratio: 1 });
 });
 
-test("业务页取消本机授权保留团队模式和原文附件，重试成功才切换电脑", async ({
+test("业务页取消本机授权保留普通对话草稿和附件，重试成功才切换电脑", async ({
   page,
 }) => {
   const { state, requests } = await desktopScenario(page);
@@ -1475,11 +1475,7 @@ test("业务页取消本机授权保留团队模式和原文附件，重试成�
   await openPersonalAssistant(page);
   const composer = page.locator(".assistant-compose:visible");
   await composer
-    .getByRole("button", { name: "选择对话模型", exact: true })
-    .click();
-  await page.getByRole("menuitem", { name: /智能体团队/ }).click();
-  await composer
-    .getByPlaceholder(/描述团队目标/)
+    .getByPlaceholder(/告诉我你想完成什么/)
     .fill("保留这份尚未发送的草稿");
   await composer.getByLabel("上传助理附件").setInputFiles({
     name: "资料.txt",
@@ -1501,7 +1497,7 @@ test("业务页取消本机授权保留团队模式和原文附件，重试成�
     await page.evaluate(() => localStorage.getItem("xuti-assistant-desktop:7")),
   ).toBeNull();
   await selectAssistantPanel(page, "聊天");
-  await expect(composer.getByPlaceholder(/描述团队目标/)).toHaveValue(
+  await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toHaveValue(
     "保留这份尚未发送的草稿",
   );
   await expect(composer.locator(".agent-attachments")).toContainText(
