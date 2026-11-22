@@ -11,6 +11,7 @@ type Options = {
   includeMemory: boolean;
   autoExecution?: true;
   desktopDeviceId?: string;
+  nativeDesktopDeviceId?: string;
 };
 type Connection = {
   context: AudioContext;

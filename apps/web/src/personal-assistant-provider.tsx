@@ -43,7 +43,10 @@ import {
   type AssistantMemoryEntry,
 } from "../../../packages/contracts/src/personal-assistant";
 import { assistantNavigationTools } from "../../../packages/contracts/src/assistant-voice-commands";
-import { classifyAssistantExecution } from "../../../packages/contracts/src/assistant-execution";
+import {
+  classifyAssistantExecution,
+  isNativeDesktopAppCommand,
+} from "../../../packages/contracts/src/assistant-execution";
 import {
   AssistantHubContext,
   assistantToolGroup,
@@ -110,6 +113,7 @@ import {
 import {
   connectAndAuthorizeDesktop,
   desktopSetupMessage,
+  readNativeWorkbenchDevice,
 } from "./desktop-setup";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
 import { useWorkspaceSceneCover } from "./workspace-scene-presence";
@@ -392,6 +396,16 @@ export function PersonalAssistantProvider({
       ? desktopChoice.deviceId
       : undefined;
   const nativeDesktop = isDesktopClient();
+  const nativePreference = useRef(preferredDeviceId);
+  nativePreference.current =
+    docked && nativeDesktop ? preferredDeviceId : undefined;
+  const isNativeAppRequest = (value: string) =>
+    docked && nativeDesktop && isNativeDesktopAppCommand(value);
+  const verifiedNativeDevice = async (selected?: string) => {
+    if (!selected || selected !== nativePreference.current) return undefined;
+    const verified = await readNativeWorkbenchDevice(selected);
+    return selected === nativePreference.current ? verified : undefined;
+  };
   const [localDesktopId, setLocalDesktopId] = useState<string>();
   useEffect(() => {
     if (!nativeDesktop) return;
@@ -659,7 +673,9 @@ export function PersonalAssistantProvider({
         : "暂无已接通的聊天模型，请管理员检查连接。"
       : "";
   const draftIsSite =
-    !docked || classifyAssistantExecution(text).kind === "site";
+    !docked ||
+    (!isNativeAppRequest(text) &&
+      classifyAssistantExecution(text).kind === "site");
   const composerReady = docked
     ? !!data &&
       !browserPagePrefixes.includes(text.trim()) &&
@@ -958,9 +974,14 @@ export function PersonalAssistantProvider({
     const requestId = crypto.randomUUID();
     if (!data) return;
     const target = docked ? classifyAssistantExecution(value).kind : undefined;
-    const siteRequest = !externalMode && (!target || target === "site");
+    const nativeAppRequest = isNativeAppRequest(value);
+    const siteRequest =
+      !externalMode && !nativeAppRequest && (!target || target === "site");
     const externalRequest =
-      externalMode || target === "browser" || target === "desktop";
+      externalMode ||
+      nativeAppRequest ||
+      target === "browser" ||
+      target === "desktop";
     const websiteRequest =
       siteRequest && !agent.attachments.length
         ? parseAssistantWebsiteRequest(value)
@@ -1046,6 +1067,14 @@ export function PersonalAssistantProvider({
             ])?.tasks || []
           ).map((task) => task.id),
         );
+      const nativeDesktopDeviceId = nativeAppRequest
+        ? await verifiedNativeDevice(desktopTargetId)
+        : undefined;
+      if (!isCurrent()) return;
+      if (nativeAppRequest && !nativeDesktopDeviceId)
+        throw new Error(
+          "请在「我的电脑」中确认本机在线、已记住授权并设为常用电脑，然后重试。",
+        );
       const input = {
         message: value.trim(),
         version: data.version,
@@ -1055,6 +1084,7 @@ export function PersonalAssistantProvider({
         attachmentIds: agent.attachments.map((f) => f.id),
         ...(siteRequest && chatModel ? { model: chatModel } : {}),
         desktopDeviceId: docked ? desktopTargetId : desktopDeviceId,
+        ...(nativeDesktopDeviceId ? { nativeDesktopDeviceId } : {}),
         ...(docked ? { autoExecution: true } : {}),
         ...(browserMode ? { browserExecution: true } : {}),
         webOpenResult,
@@ -1217,6 +1247,12 @@ export function PersonalAssistantProvider({
       voiceStartAttempt.current === attempt;
     voiceStartPending.current = true;
     try {
+      const checkNativeTarget = docked && nativeDesktop && !!capturedDeviceId;
+      if (checkNativeTarget) setCheckingVoiceTarget(true);
+      const nativeDesktopDeviceId = checkNativeTarget
+        ? await verifiedNativeDevice(capturedDeviceId)
+        : undefined;
+      if (!isCurrent()) return;
       if (browserMode) {
         setCheckingVoiceTarget(true);
         const current = await browser.refetch();
@@ -1257,6 +1293,7 @@ export function PersonalAssistantProvider({
         includePersonalContext: externalMode ? false : includeContext,
         includeMemory: externalMode ? false : includeMemory,
         ...(docked ? { autoExecution: true as const } : {}),
+        ...(nativeDesktopDeviceId ? { nativeDesktopDeviceId } : {}),
         ...(useRealtime && browserMode ? { browserExecution: true } : {}),
         ...((docked || useRealtime) && capturedDeviceId
           ? { desktopDeviceId: capturedDeviceId }

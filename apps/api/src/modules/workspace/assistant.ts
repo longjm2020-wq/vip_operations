@@ -213,6 +213,7 @@ export async function sendAssistant(
           c,
           body.message,
           body.desktopDeviceId,
+          body.nativeDesktopDeviceId,
         )
       : undefined;
   const browserExecution = autoExecution

@@ -1,6 +1,35 @@
 import { api } from "./api.js";
-import { desktopClientRequest } from "./desktop-client.js";
+import { desktopClientRequest, isDesktopClient } from "./desktop-client.js";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop.js";
+
+/** Recheck the device already chosen by the user in both the shell and the account. */
+export async function readNativeWorkbenchDevice(preferredId?: string) {
+  if (!preferredId || !isDesktopClient()) return undefined;
+  try {
+    const signal = AbortSignal.timeout(5000);
+    const [native, { data }] = await Promise.all([
+      desktopClientRequest("status", undefined, signal),
+      api("/my-workspace/assistant/desktop", "GET", undefined, undefined, {
+        signal,
+        cache: "no-store",
+      }),
+    ]);
+    if (
+      !native.connected ||
+      native.authorized !== true ||
+      native.deviceId !== preferredId
+    )
+      return undefined;
+    const device = (data as DesktopState).devices.find(
+      (entry) => entry.id === preferredId,
+    );
+    return device?.online === true && device.crossWindowAuthorized === true
+      ? preferredId
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** One setup flow. Only the native dialog can remember authorization. */
 export async function connectAndAuthorizeDesktop(

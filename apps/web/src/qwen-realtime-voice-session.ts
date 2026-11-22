@@ -11,7 +11,10 @@ import {
 } from "../../../packages/contracts/src/assistant-presentation.js";
 import { runPresentationTool } from "./voice-presentation-store.js";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
-import { classifyAssistantExecution } from "../../../packages/contracts/src/assistant-execution.js";
+import {
+  classifyAssistantExecution,
+  isNativeDesktopAppCommand,
+} from "../../../packages/contracts/src/assistant-execution.js";
 import { RealtimeSpokenTurns } from "../../../packages/contracts/src/realtime-spoken-turn.js";
 import {
   isPageToolName,
@@ -129,6 +132,7 @@ export class QwenRealtimeVoiceSession {
   private eventIds = new Set<string>();
   private businessUsers = new Set<string>();
   private autoExecution = false;
+  private nativeAppShortcuts = false;
   private spokenTurns = new RealtimeSpokenTurns();
   private captions: Caption[] = [];
   private pendingTools = 0;
@@ -472,7 +476,8 @@ export class QwenRealtimeVoiceSession {
       if (!this.current(id)) return;
       const externalTurn =
         !!spokenTurn &&
-        classifyAssistantExecution(spokenTurn.text).kind !== "site";
+        (classifyAssistantExecution(spokenTurn.text).kind !== "site" ||
+          (this.nativeAppShortcuts && isNativeDesktopAppCommand(spokenTurn.text)));
       const pageBatch =
         !externalTurn &&
         (!!this.activePageTask() ||
@@ -1121,6 +1126,10 @@ export class QwenRealtimeVoiceSession {
   }
   async start(options: RealtimeOptions) {
     this.autoExecution = options.autoExecution === true;
+    this.nativeAppShortcuts =
+      this.autoExecution &&
+      !!options.nativeDesktopDeviceId &&
+      options.nativeDesktopDeviceId === options.desktopDeviceId;
     this.cb.state("connecting");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({

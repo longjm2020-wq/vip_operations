@@ -1757,13 +1757,17 @@ describe("Qwen WebRTC initialization and media ownership", () => {
 });
 
 describe("Qwen WebRTC tools and interruption", () => {
-  it("keeps site controls with a preferred device and dispatches external speech through the workbench", async () => {
+  it.each([
+    ["在我的电脑上打开 Excel", undefined],
+    ["打开微信，给好友阿龙发送「最近好吗？」", "preferred-device"],
+  ])("keeps page tools away from confirmed desktop speech: %s", async (text, nativeDesktopDeviceId) => {
     allowPage();
     session = new QwenRealtimeVoiceSession(callbacks());
     await session.start({
       ...options,
       autoExecution: true,
       desktopDeviceId: "preferred-device",
+      nativeDesktopDeviceId,
     });
     await ready();
     expect(f.pageCreated).toHaveBeenCalledOnce();
@@ -1780,7 +1784,7 @@ describe("Qwen WebRTC tools and interruption", () => {
     channel.emit({
       type: "conversation.item.input_audio_transcription.completed",
       item_id: "speech",
-      transcript: "在我的电脑上打开 Excel",
+      transcript: text,
     });
     channel.emit({ type: "response.created", response: { id: "reply" } });
     channel.emit({
@@ -1803,7 +1807,7 @@ describe("Qwen WebRTC tools and interruption", () => {
         f.api.mock.calls.find(([path]) => path.endsWith("/tool"))?.[2],
       ).toMatchObject({
         callId: "workbench",
-        spokenTurn: { id: "speech", text: "在我的电脑上打开 Excel" },
+        spokenTurn: { id: "speech", text },
       });
     });
     expect(f.observe).not.toHaveBeenCalled();

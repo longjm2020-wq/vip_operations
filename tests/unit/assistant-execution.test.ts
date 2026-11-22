@@ -1,7 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { classifyAssistantExecution } from "../../packages/contracts/src/assistant-execution.js";
+import {
+  classifyAssistantExecution,
+  isNativeDesktopAppCommand,
+} from "../../packages/contracts/src/assistant-execution.js";
 
 describe("workbench execution from direct instructions", () => {
+  it.each([
+    "打开微信，给好友阿龙发句问候",
+    "请打开微信，给好友阿龙发送「最近好吗？」",
+    "打开微信，给阿龙发送“Are you there?”",
+  ])(
+    "recognizes the user's desktop request and preserves questions inside message content: %s",
+    (text) => {
+      expect(isNativeDesktopAppCommand(text)).toBe(true);
+    },
+  );
+
+  it.each([
+    "打开微信会占用多少内存？",
+    "怎么打开微信给好友阿龙发句问候",
+    "你可以打开微信，给好友阿龙发句问候吗？",
+    "请帮我写一句给微信好友阿龙的问候",
+    "生成一个 HTML 演示如何打开微信",
+    "不要打开微信",
+    "在办公室电脑上打开微信，给好友阿龙发句问候",
+  ])(
+    "keeps dialogue, creation and named remote targets out of the shorthand: %s",
+    (text) => {
+      expect(isNativeDesktopAppCommand(text)).toBe(false);
+    },
+  );
   it.each([
     "查一下库存",
     "打开经营分析",
@@ -11,6 +39,11 @@ describe("workbench execution from direct instructions", () => {
     "你可以在我的电脑上点击按钮吗？",
     "在我的电脑上查看连接状态",
     "请不要在我的电脑上操作 Excel",
+    "打开微信会占用多少内存？",
+    "怎么打开微信给好友阿龙发句问候",
+    "请帮我写一句给微信好友阿龙的问候",
+    "生成一个 HTML 演示如何打开微信",
+    "分析微信里这句话「最近好吗？」的语气",
     "在小序独立浏览器中操作当前网页：\n不要点击购买键",
     "在小序本地浏览器中操作当前网页：",
   ])(

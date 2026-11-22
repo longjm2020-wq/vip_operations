@@ -1,4 +1,7 @@
-import { classifyAssistantExecution } from "../../../../../packages/contracts/src/assistant-execution.js";
+import {
+  classifyAssistantExecution,
+  isNativeDesktopAppCommand,
+} from "../../../../../packages/contracts/src/assistant-execution.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
 import type { Context } from "../../core.js";
 
@@ -12,7 +15,29 @@ export async function resolveAutomaticAssistantExecution(
   c: Context,
   instruction: string,
   preferredDeviceId?: string,
+  nativeDesktopDeviceId?: string,
 ): Promise<AutomaticAssistantExecution> {
+  if (nativeDesktopDeviceId && isNativeDesktopAppCommand(instruction)) {
+    const [device] =
+      nativeDesktopDeviceId === preferredDeviceId
+        ? await rows(
+            db,
+            `SELECT id FROM assistant_desktop_devices
+          WHERE id=$1::uuid AND user_id=$2::bigint AND authorization_id IS NOT NULL
+          AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()
+          AND last_seen_at>now()-interval '20 seconds'`,
+            nativeDesktopDeviceId,
+            c.actor.id,
+          )
+        : [];
+    return device
+      ? { kind: "desktop", deviceId: device.id }
+      : {
+          kind: "clarify",
+          message:
+            "请在「我的电脑」核对当前设备、连接和本机跨窗口授权，再重新下达指令。",
+        };
+  }
   const target = classifyAssistantExecution(instruction);
   if (target.kind === "site") return { kind: "site" };
   if (target.kind === "browser") return { kind: "browser" };

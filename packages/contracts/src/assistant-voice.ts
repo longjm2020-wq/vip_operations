@@ -87,7 +87,9 @@ export const voiceTurnSchema = voiceDictationSchema
     includeMemory: z.boolean().default(false),
     autoExecution: z.literal(true).optional(),
     desktopDeviceId: z.string().uuid().optional(),
+    nativeDesktopDeviceId: z.string().uuid().optional(),
   })
+  .refine((v) => !v.nativeDesktopDeviceId || (v.autoExecution && v.desktopDeviceId === v.nativeDesktopDeviceId), "本机快捷指令需明确选择当前设备")
   .refine((v) => !v.desktopDeviceId || !!v.autoExecution, "常用电脑仅用于自动分流");
 export const voiceSpeechSchema = z
   .object({ id: z.string().uuid(), messageId: z.string().uuid() })

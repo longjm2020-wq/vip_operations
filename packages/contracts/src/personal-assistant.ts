@@ -28,12 +28,14 @@ export const assistantSendSchema = z
     webSearch: z.boolean().default(false),
     autoExecution: z.literal(true).optional(),
     desktopDeviceId: z.string().uuid().optional(),
+    nativeDesktopDeviceId: z.string().uuid().optional(),
     browserExecution: z.literal(true).optional(),
     webOpenResult: z
       .enum(["opened", "requested", "blocked", "pending"])
       .optional(),
   })
   .strict()
+  .refine((v) => !v.nativeDesktopDeviceId || (v.autoExecution && v.desktopDeviceId === v.nativeDesktopDeviceId), "本机快捷指令需明确选择当前设备")
   .refine(
     (v) => !(v.browserExecution && (v.desktopDeviceId || v.autoExecution)),
     "独立浏览器与电脑操作只能选择一处执行",

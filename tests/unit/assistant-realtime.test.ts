@@ -166,6 +166,9 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await f.db.exec(
+    await readFile("packages/database/migrations/111_realtime_native_app_commands.sql", "utf8"),
+  );
 });
 beforeEach(async () => {
   await f.db!
@@ -221,61 +224,71 @@ afterAll(async () => {
 });
 
 describe("native realtime voice authorization and lifecycle", () => {
-  it("uses confirmed speech and reserves one external task per spoken turn", async () => {
-    const deviceId = randomUUID();
-    const session = await startRealtime(actor(), {
-      ...input(),
-      autoExecution: true,
-      desktopDeviceId: deviceId,
-    });
-    expect(f.model).not.toHaveBeenCalled();
-    expect(f.browserStatus).not.toHaveBeenCalled();
+  it.each([
+    ["在我的电脑上打开 Excel", false],
+    ["打开微信，给好友阿龙发句问候", true],
+  ] as const)(
+    "uses confirmed speech and reserves one external task per spoken turn: %s",
+    async (request, native) => {
+      const deviceId = randomUUID();
+      const nativeRoute = native ? { nativeDesktopDeviceId: deviceId } : {};
+      const session = await startRealtime(actor(), {
+        ...input(),
+        autoExecution: true,
+        desktopDeviceId: deviceId,
+        ...nativeRoute,
+      });
+      expect(f.model).not.toHaveBeenCalled();
+      expect(f.browserStatus).not.toHaveBeenCalled();
 
-    const request = "在我的电脑上打开 Excel";
-    const missingSpeech = await runRealtimeTool(actor(), session.id, {
-      callId: "provider-hallucinated-a",
-      request,
-    });
-    expect(missingSpeech.text).toContain("没能核实");
-    expect(f.send).not.toHaveBeenCalled();
+      const missingSpeech = await runRealtimeTool(actor(), session.id, {
+        callId: "provider-hallucinated-a",
+        request,
+      });
+      expect(missingSpeech.text).toContain("没能核实");
+      expect(f.send).not.toHaveBeenCalled();
 
-    await runRealtimeTool(actor(), session.id, {
-      callId: "provider-hallucinated-b",
-      request,
-      spokenTurn: { id: "speech-a", text: "不要在我的电脑上打开 Excel" },
-    });
-    expect(f.send.mock.calls[0][1].message).toBe("不要在我的电脑上打开 Excel");
-    const taskId = randomUUID();
-    f.send.mockResolvedValueOnce({
-      state: "IDLE",
-      messages: [
-        {
-          id: randomUUID(),
-          role: "assistant",
-          text: "电脑任务已提交",
-          desktopTaskId: taskId,
-        },
-      ],
-    });
-    const desktop = await runRealtimeTool(actor(), session.id, {
-      callId: "provider-rewrite-a",
-      request: "打开经营分析",
-      spokenTurn: { id: "speech-b", text: request },
-    });
-    expect(desktop.desktopTaskId).toBe(taskId);
-    expect(f.send.mock.calls[1][1]).toMatchObject({
-      autoExecution: true,
-      desktopDeviceId: deviceId,
-      message: request,
-    });
-    const repeated = await runRealtimeTool(actor(), session.id, {
-      callId: "provider-rewrite-b",
-      request: "切换窗口",
-      spokenTurn: { id: "speech-b", text: request },
-    });
-    expect(repeated).toEqual(desktop);
-    expect(f.send).toHaveBeenCalledTimes(2);
-  });
+      await runRealtimeTool(actor(), session.id, {
+        callId: "provider-hallucinated-b",
+        request,
+        spokenTurn: { id: "speech-a", text: "不要在我的电脑上打开 Excel" },
+      });
+      expect(f.send.mock.calls[0][1].message).toBe(
+        "不要在我的电脑上打开 Excel",
+      );
+      const taskId = randomUUID();
+      f.send.mockResolvedValueOnce({
+        state: "IDLE",
+        messages: [
+          {
+            id: randomUUID(),
+            role: "assistant",
+            text: "电脑任务已提交",
+            desktopTaskId: taskId,
+          },
+        ],
+      });
+      const desktop = await runRealtimeTool(actor(), session.id, {
+        callId: "provider-rewrite-a",
+        request: "打开经营分析",
+        spokenTurn: { id: "speech-b", text: request },
+      });
+      expect(desktop.desktopTaskId).toBe(taskId);
+      expect(f.send.mock.calls[1][1]).toMatchObject({
+        autoExecution: true,
+        desktopDeviceId: deviceId,
+        ...nativeRoute,
+        message: request,
+      });
+      const repeated = await runRealtimeTool(actor(), session.id, {
+        callId: "provider-rewrite-b",
+        request: "切换窗口",
+        spokenTurn: { id: "speech-b", text: request },
+      });
+      expect(repeated).toEqual(desktop);
+      expect(f.send).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it.each(["openai", "qwen", "doubao"])(
     "routes %s browser voice tasks to the bound browser planner without a desktop fallback",

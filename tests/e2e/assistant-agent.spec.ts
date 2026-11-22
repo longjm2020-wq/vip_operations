@@ -11,6 +11,7 @@ const resultId = "22222222-2222-4222-8222-222222222222";
 const jobId = "33333333-3333-4333-8333-333333333333";
 const previewId = "44444444-4444-4444-8444-444444444444";
 const desktopFixtureId = "55555555-5555-4555-8555-555555555555";
+const otherDesktopFixtureId = "99999999-9999-4999-8999-999999999999";
 async function desktopScenario(page: Page, native = true) {
   const requests = await setup(page);
   const state = {
@@ -883,6 +884,140 @@ test("窄屏模型听写语音布局不溢出，输入后原位切换发送", as
   ).toBe(true);
   await page.screenshot({ path: ".local/assistant-agent-light-mobile.png" });
 });
+
+test("当前桌面壳与已选本机一致时，微信简写只发一次原文；问句、创作和指名其他电脑不使用简写", async ({
+  page,
+}) => {
+  const { state, requests } = await desktopScenario(page);
+  state.authorized = true;
+  const device = {
+    id: desktopFixtureId,
+    name: "本机测试电脑",
+    online: true,
+    crossWindowAuthorized: true,
+    lastSeenAt: new Date().toISOString(),
+    expiresAt: "2099-01-01T00:00:00Z",
+  };
+  state.devicesOverride = [
+    { ...device, id: otherDesktopFixtureId, name: "办公室电脑" },
+    device,
+  ];
+  await page.addInitScript(
+    (id) => localStorage.setItem("xuti-assistant-preferred-desktop:7", id),
+    desktopFixtureId,
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const inbox = composer.getByPlaceholder(/告诉我你想完成什么/);
+  const send = composer.getByRole("button", { name: "发送给个人助理" });
+  const commands = [
+    "打开微信，给好友阿龙发句问候",
+    "打开微信会占用多少内存？",
+    "写一句给微信好友阿龙的问候",
+    "在办公室电脑上打开微信，给好友阿龙发句问候",
+  ];
+  for (const [index, message] of commands.entries()) {
+    await inbox.fill(message);
+    await send.click();
+    await expect.poll(() => requests.length).toBe(index + 1);
+    expect(requests[index]).toMatchObject({ message, autoExecution: true });
+    if (index === 0) {
+      expect(requests[index]).toMatchObject({
+        desktopDeviceId: desktopFixtureId,
+        nativeDesktopDeviceId: desktopFixtureId,
+      });
+      expect(requests[index]).not.toHaveProperty("authorizationId");
+    } else {
+      expect(requests[index]).not.toHaveProperty("nativeDesktopDeviceId");
+    }
+  }
+  expect(state.actions).not.toContain("authorize");
+  expect(state.actions).not.toContain("pair");
+  expect(state.pairCodes).toBe(0);
+  expect(requests).toHaveLength(commands.length);
+});
+
+test("普通浏览器即使保存了常用电脑，也不会把微信简写标为当前桌面客户端操作", async ({
+  page,
+}) => {
+  const { state, requests } = await desktopScenario(page, false);
+  state.authorized = true;
+  await page.addInitScript(
+    (id) => localStorage.setItem("xuti-assistant-preferred-desktop:7", id),
+    desktopFixtureId,
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const message = "打开微信，给好友阿龙发句问候";
+  await composer.getByPlaceholder(/告诉我你想完成什么/).fill(message);
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toMatchObject({ message, autoExecution: true });
+  expect(requests[0]).not.toHaveProperty("nativeDesktopDeviceId");
+  expect(state.actions).toEqual([]);
+});
+
+for (const condition of [
+  "本机已离线",
+  "本机没有授权",
+  "网站已撤销授权",
+  "没有选择常用电脑",
+  "常用电脑是另一台",
+] as const) {
+  test(
+    "当前桌面客户端" + condition + "时不会派发微信简写",
+    async ({ page }) => {
+      const { state, requests } = await desktopScenario(page);
+      state.online = condition !== "本机已离线";
+      state.authorized = condition !== "本机没有授权";
+      const current = {
+        id: desktopFixtureId,
+        name: "本机测试电脑",
+        online: state.online,
+        crossWindowAuthorized: condition !== "网站已撤销授权",
+        lastSeenAt: new Date().toISOString(),
+        expiresAt: "2099-01-01T00:00:00Z",
+      };
+      state.devicesOverride = [
+        current,
+        {
+          ...current,
+          id: otherDesktopFixtureId,
+          name: "办公室电脑",
+          online: true,
+          crossWindowAuthorized: true,
+        },
+      ];
+      if (condition !== "没有选择常用电脑") {
+        const preferred =
+          condition === "常用电脑是另一台"
+            ? otherDesktopFixtureId
+            : desktopFixtureId;
+        await page.addInitScript(
+          (id) =>
+            localStorage.setItem("xuti-assistant-preferred-desktop:7", id),
+          preferred,
+        );
+      }
+      await page.goto("/my-workspace");
+      const composer = page.locator(".assistant-compose:visible");
+      const input = composer.getByPlaceholder(/告诉我你想完成什么/);
+      const message = "打开微信，给好友阿龙发句问候";
+      await input.fill(message);
+      await composer.getByRole("button", { name: "发送给个人助理" }).click();
+      await expect(
+        page
+          .getByRole("alert")
+          .filter({ hasText: /本机|电脑|授权/ })
+          .first(),
+      ).toBeVisible();
+      await expect(input).toHaveValue(message);
+      expect(requests).toHaveLength(0);
+      expect(state.actions).not.toContain("authorize");
+      expect(state.actions).not.toContain("pair");
+    },
+  );
+}
 
 test("我的电脑无设备只显示连接入口，旧专用偏好不自动选机", async ({ page }) => {
   const { state, requests } = await desktopScenario(page, false);

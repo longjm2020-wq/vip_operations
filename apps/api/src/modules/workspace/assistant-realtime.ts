@@ -37,7 +37,7 @@ import { closeRealtimeRelay } from "./realtime-relay-registry.js";
 import { resolveAgentModel } from "./agent-models.js";
 import { browserStatus } from "./assistant-browser.js";
 import { parseVoiceCommand } from "../../../../../packages/contracts/src/assistant-voice-commands.js";
-import { classifyAssistantExecution } from "../../../../../packages/contracts/src/assistant-execution.js";
+import { classifyAssistantExecution, isNativeDesktopAppCommand } from "../../../../../packages/contracts/src/assistant-execution.js";
 import {
   pageToolDefinitions,
   pageTaskToolDefinitions,
@@ -446,8 +446,8 @@ export async function startRealtime(c: Context, input: unknown) {
       fail("REALTIME_BUSY", "此账号已有实时通话，请先结束原通话", 409);
     const reserved = await one(
       tx,
-      `INSERT INTO public.assistant_realtime_sessions(id,user_id,settings_version,include_context,include_memory,state,expires_at,provider,socket_ticket_hash,desktop_device_id,desktop_model,browser_execution,browser_model,auto_execution,preferred_device_id)
-      VALUES($1::uuid,$2::bigint,$3,$4,$5,'CREATING',now()+interval '1 minute',$6,$7,$8::uuid,$9,$10,$11,$12,$13::uuid) ON CONFLICT(id) DO NOTHING RETURNING id`,
+      `INSERT INTO public.assistant_realtime_sessions(id,user_id,settings_version,include_context,include_memory,state,expires_at,provider,socket_ticket_hash,desktop_device_id,desktop_model,browser_execution,browser_model,auto_execution,preferred_device_id,native_app_commands)
+      VALUES($1::uuid,$2::bigint,$3,$4,$5,'CREATING',now()+interval '1 minute',$6,$7,$8::uuid,$9,$10,$11,$12,$13::uuid,$14) ON CONFLICT(id) DO NOTHING RETURNING id`,
       b.id,
       c.actor.id,
       s.version,
@@ -461,6 +461,7 @@ export async function startRealtime(c: Context, input: unknown) {
       browserModel,
       autoExecution,
       autoExecution ? (b.desktopDeviceId ?? null) : null,
+      !!b.nativeDesktopDeviceId,
     );
     if (!reserved) fail("REALTIME_DUPLICATE", "该通话已处理，请重新开始", 409);
   });
@@ -648,9 +649,8 @@ export async function runRealtimeTool(c: Context, id: string, input: unknown) {
   const autoExecution = session.auto_execution === true;
   const spoken = autoExecution ? b.spokenTurn : undefined;
   const request = spoken?.text ?? b.request;
-  const route = autoExecution
-    ? classifyAssistantExecution(request).kind
-    : "site";
+  const nativeApp = session.native_app_commands && isNativeDesktopAppCommand(request);
+  const route = !autoExecution ? "site" : nativeApp ? "desktop" : classifyAssistantExecution(request).kind;
   if (
     autoExecution &&
     !spoken &&
@@ -737,6 +737,7 @@ export async function runRealtimeTool(c: Context, id: string, input: unknown) {
           ? {
               autoExecution: true,
               desktopDeviceId: session.preferred_device_id ?? undefined,
+              ...(nativeApp ? {nativeDesktopDeviceId: session.preferred_device_id} : {}),
             }
           : {}),
         ...(useBrowser

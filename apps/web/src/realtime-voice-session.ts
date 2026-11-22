@@ -22,6 +22,7 @@ export type RealtimeOptions = {
   includeMemory: boolean;
   autoExecution?: true;
   desktopDeviceId?: string;
+  nativeDesktopDeviceId?: string;
   browserExecution?: true;
   model?: string;
 };

@@ -610,7 +610,7 @@ export async function runVoiceTurn(
         includePersonalContext: b.includePersonalContext,
         includeMemory: b.includeMemory,
         ...(b.autoExecution
-          ? { autoExecution: true, desktopDeviceId: b.desktopDeviceId }
+          ? { autoExecution: true, desktopDeviceId: b.desktopDeviceId, nativeDesktopDeviceId: b.nativeDesktopDeviceId }
           : {}),
       },
       { signal },

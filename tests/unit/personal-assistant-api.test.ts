@@ -13,6 +13,7 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import type { Context } from "../../apps/api/src/core.js";
+import { resolveAutomaticAssistantExecution } from "../../apps/api/src/modules/workspace/assistant-execution.js";
 import type { AssistantMessage } from "../../packages/contracts/src/personal-assistant.js";
 import { Readable } from "node:stream";
 import type { Request } from "express";
@@ -191,6 +192,7 @@ beforeAll(async () => {
     "103_browser_browsing_sessions.sql",
     "108_realtime_automatic_execution.sql",
     "109_assistant_local_browser.sql",
+    "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
       await readFile(`packages/database/migrations/${name}`, "utf8"),
@@ -807,6 +809,86 @@ describe("assistant business tools and private memory", () => {
         webSearch: true,
       }),
     ).rejects.toThrow();
+  });
+  it("queues the native app instruction exactly once on the selected, live and authorized local device", async () => {
+    const selected = randomUUID(),
+      other = randomUUID();
+    await fixture.database!.query(
+      `INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,authorization_id)
+       VALUES($1,7,'本机电脑','session','own-token',now(),$3),
+             ($2,7,'办公室电脑','session','other-token',now(),$4)`,
+      [selected, other, randomUUID(), randomUUID()],
+    );
+    const message = "打开微信，给好友阿龙发句问候";
+    const request = {
+      ...input(),
+      autoExecution: true,
+      desktopDeviceId: selected,
+      nativeDesktopDeviceId: selected,
+      message,
+    };
+    const first = await sendAssistant(actor(), request);
+    const replay = await sendAssistant(actor(), request);
+    expect(first.messages.at(-1)?.desktopTaskId).toBeTruthy();
+    expect(replay.messages.at(-1)?.desktopTaskId).toBe(
+      first.messages.at(-1)?.desktopTaskId,
+    );
+    expect(
+      (
+        await fixture.database!.query(
+          "SELECT device_id,instruction,status FROM assistant_desktop_tasks",
+        )
+      ).rows,
+    ).toEqual([
+      { device_id: selected, instruction: message, status: "WAITING" },
+    ]);
+    expect(fetch).not.toHaveBeenCalled();
+    const resolve = (text: string, preference?: string, local?: string) =>
+      resolveAutomaticAssistantExecution(actor(), text, preference, local);
+    for (const [preference, local] of [
+      [selected, undefined],
+      [undefined, selected],
+      [other, selected],
+      [selected, other],
+    ]) {
+      expect((await resolve(message, preference, local)).kind).not.toBe(
+        "desktop",
+      );
+    }
+    expect(
+      await resolve(
+        "在办公室电脑上打开微信，给好友阿龙发句问候",
+        selected,
+        selected,
+      ),
+    ).toMatchObject({ kind: "desktop", deviceId: other });
+    for (const chat of [
+      "怎么打开微信给好友阿龙发句问候？",
+      "帮我写一句给微信好友阿龙的问候",
+    ]) {
+      expect(await resolve(chat, selected, selected)).toEqual({ kind: "site" });
+    }
+    await fixture.database!.query(
+      "UPDATE assistant_desktop_devices SET last_seen_at=now()-interval '2 minutes' WHERE id=$1",
+      [selected],
+    );
+    expect((await resolve(message, selected, selected)).kind).not.toBe(
+      "desktop",
+    );
+    await fixture.database!.query(
+      "UPDATE assistant_desktop_devices SET last_seen_at=now(),authorization_id=NULL WHERE id=$1",
+      [selected],
+    );
+    expect((await resolve(message, selected, selected)).kind).not.toBe(
+      "desktop",
+    );
+    await fixture.database!.query(
+      "UPDATE assistant_desktop_devices SET authorization_id=$2,revoked_at=now() WHERE id=$1",
+      [selected, randomUUID()],
+    );
+    expect((await resolve(message, selected, selected)).kind).not.toBe(
+      "desktop",
+    );
   });
   it("treats the computer preference as a hint for clear desktop requests only", async () => {
     const deviceId = randomUUID();

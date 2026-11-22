@@ -28,6 +28,8 @@ const desktopName =
   /^(?:在|到|用|使用|通过|操作|on\s+|using\s+)(?:\s*(?:电脑|设备|computer|device)\s*)?[“「『"]([^”」』"\r\n]{1,80})[”」』"]\s*(?:这台(?:电脑|设备)|(?:电脑|设备))?\s*(?:上|里|中|的|[，,:：])?\s*/iu;
 const unquotedDesktopName =
   /^(?:在|用|使用|通过)([^\s，。！？：、；“”「」"'<>]{2,32}电脑)\s*(?:上|里|中|的|[，,])\s*/u;
+const hostnameAfterComputer =
+  /^(?:在|用|使用)(?:我的)?(?:电脑|设备)\s+([A-Za-z0-9][A-Za-z0-9._-]{0,62})\s*(?:上|中|里|[,，:：])\s*/u;
 
 function normalize(text: string) {
   return text
@@ -49,6 +51,33 @@ function requestsAction(text: string) {
   );
 }
 
+// Quoted text can be the message to type, e.g. 「最近怎么样？」. Only
+// punctuation outside the literal tells us whether the user is asking a question.
+const quotedLiterals = /「[^」\n]*」|『[^』\n]*』|“[^”\n]*”|"[^"\n]*"/gu;
+function questionOutsideLiteral(text: string) {
+  return /[?？]/u.test(
+    text.replace(quotedLiterals, "").replace(/https?:\/\/[^\s,，]+/giu, ""),
+  );
+}
+
+export function isNativeDesktopAppCommand(text: string): boolean {
+  const command = normalize(text).replace(
+    /^(?:(?:在|用|使用|通过)\s*)?(?:XUTI\s+DESKTOP|(?:小序)?桌面端)(?:上|中|里)?\s*[,、:]?\s*/iu,
+    "",
+  );
+  const app =
+    /^(?:打开|启动|切换到)(?:已(?:经)?打开的)?\s*(?:企业微信|微信|记事本|计算器)(?=\s*(?:$|[,。！!；;\n]))/u;
+  if (!app.test(command) || questionOutsideLiteral(command)) return false;
+  // Explicit destinations, requests for advice, and cancellations belong to
+  // the normal router even if they mention a familiar desktop application.
+  const outside = command.replace(quotedLiterals, "");
+  return (
+    !/(?:网页|浏览器|网站|工作台内|站内|电脑|计算机|设备|另外一台|另一台|手机|如果可以|教我|如何|怎么操作|怎么做|是否|能否|可以吗|不用打开|别打开|不要打开|取消操作|暂停操作|不要操作)/iu.test(
+      outside,
+    ) && !/[吗么嗎]\s*[.!！。]*$/u.test(outside)
+  );
+}
+
 /** Evaluate only the current user utterance, before any model or page text is available. */
 export function classifyAssistantExecution(text: string): AssistantExecution {
   const instruction = normalize(text);
@@ -59,7 +88,7 @@ export function classifyAssistantExecution(text: string): AssistantExecution {
   const firstClause = command.split(/[,;。；\n]/u, 1)[0] || "";
   if (
     !firstClause ||
-    /[?？]/u.test(command.replace(/https?:\/\/[^\s,，]+/giu, "")) ||
+    questionOutsideLiteral(command) ||
     /^(?:不要|别|不用|不必|无需|禁止|取消|停止|暂停|假如|假设|如果|要是|“|「|"|告诉我|解释|教我|如何|怎么|能不能|能否|可不可以|是否|为何|为什么|有没有|请问|can\b|could\b|would\b|how\b|what\b|why\b|if\b|do not\b|don't\b)/iu.test(
       firstClause,
     ) ||
@@ -86,7 +115,9 @@ export function classifyAssistantExecution(text: string): AssistantExecution {
   if (parseVoiceCommand(instruction)) return { kind: "site" };
 
   const named =
-    desktopName.exec(instruction) || unquotedDesktopName.exec(instruction);
+    desktopName.exec(instruction) ||
+    hostnameAfterComputer.exec(instruction) ||
+    unquotedDesktopName.exec(instruction);
   const explicitDeviceName =
     named &&
     /(?:电脑|计算机|设备|(?:computer|device)\b)/iu.test(named[0]) &&
@@ -120,7 +151,7 @@ export function classifyAssistantExecution(text: string): AssistantExecution {
   if (hasLocalBrowser) {
     const remaining = (
       explicitDeviceName && named
-        ? instruction.slice(named[0].length)
+        ? instruction.slice(named[0].length).replace(/^[,、.:：\s]+/u, "")
         : instruction
     )
       .replace(localBrowserScope, "")
@@ -140,7 +171,7 @@ export function classifyAssistantExecution(text: string): AssistantExecution {
   if (hasDesktop) {
     const remaining =
       explicitDeviceName && named
-        ? instruction.slice(named[0].length)
+        ? instruction.slice(named[0].length).replace(/^[,、.:：\s]+/u, "")
         : instruction
             .replace(/^(?:在|用|使用|通过|到|从|控制|操作|\s)*/u, "")
             .replace(new RegExp("^" + desktopScope.source, "iu"), "")

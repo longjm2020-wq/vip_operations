@@ -48,6 +48,7 @@ export function openLocalBrowser(url?: string) {
 export function desktopClientRequest(
   action: "status" | "pair" | "authorize" | "show-tasks" | "open-local-browser",
   argument?: string,
+  signal?: AbortSignal,
 ) {
   const bridge =
     typeof window !== "undefined" ? window.chrome?.webview : undefined;
@@ -75,6 +76,11 @@ export function desktopClientRequest(
       clearTimeout(timer);
       bridge.removeEventListener("message", receive);
       window.removeEventListener("pagehide", leave);
+      signal?.removeEventListener("abort", cancel);
+    };
+    const cancel = () => {
+      clean();
+      reject(signal?.reason);
     };
     const leave = () => {
       clean();
@@ -123,6 +129,8 @@ export function desktopClientRequest(
     );
     bridge.addEventListener("message", receive);
     window.addEventListener("pagehide", leave, { once: true });
+    if (signal?.aborted) return cancel();
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
       bridge.postMessage({
         channel: "xuti-desktop",
