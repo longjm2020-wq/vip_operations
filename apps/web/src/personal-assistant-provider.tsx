@@ -184,6 +184,11 @@ export function PersonalAssistantProvider({
   const [workspaceChatOpen, setWorkspaceChatOpen] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<string>();
   const [knowledgeTarget, setKnowledgeTarget] = useState<KnowledgeTarget>();
+  const consumeKnowledgeCreate = useCallback((key: string) => {
+    setKnowledgeTarget((current) =>
+      current?.key === key && current.destination === "new" ? { key } : current,
+    );
+  }, []);
   const [employeeDrafts, setEmployeeDrafts] = useState<
     Record<string, EmployeeDraft>
   >({});
@@ -1320,11 +1325,13 @@ export function PersonalAssistantProvider({
       setKnowledgeTarget(
         id
           ? {
-              id,
-              version:
-                Number.isSafeInteger(version) && version > 0
-                  ? version
-                  : undefined,
+              destination: {
+                id,
+                version:
+                  Number.isSafeInteger(version) && version > 0
+                    ? version
+                    : undefined,
+              },
               key: location.key,
             }
           : undefined,
@@ -1817,6 +1824,7 @@ export function PersonalAssistantProvider({
         <AssistantKnowledgePanel
           key={`${user.id}:${knowledgeTarget?.key || ""}`}
           target={knowledgeTarget}
+          consumeCreate={consumeKnowledgeCreate}
         />
       )}
       {allowed && panelGroup === "settings" && (
@@ -2329,6 +2337,10 @@ export function PersonalAssistantProvider({
               openEmployee: (id) => {
                 setSelectedEmployee(id);
                 setSection("employees");
+              },
+              openKnowledge: (destination) => {
+                setKnowledgeTarget({ destination, key: crypto.randomUUID() });
+                setSection("knowledge");
               },
               registerTools: setWorkspaceToolsHost,
               registerChat: setWorkspaceChatHost,

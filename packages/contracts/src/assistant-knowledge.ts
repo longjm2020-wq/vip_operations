@@ -28,6 +28,13 @@ export type KnowledgeNoteSummary = {
   employeeIds: string[];
 };
 export type KnowledgeNote = KnowledgeNoteSummary & { content: string };
+export const knowledgeOverviewSchema = z.object({
+  total: z.number().int().nonnegative(),
+  recent: z
+    .array(z.object({ id: z.string().uuid(), title: z.string() }))
+    .max(3),
+});
+export type KnowledgeOverview = z.infer<typeof knowledgeOverviewSchema>;
 export type KnowledgeRevision = Omit<KnowledgeNote, "employeeIds">;
 export type KnowledgeDirectory = {
   notes: KnowledgeNoteSummary[];

@@ -30,12 +30,14 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   knowledgeContentLimit,
+  knowledgeOverviewSchema,
   knowledgeTitleLimit,
   type KnowledgeDirectory,
   type KnowledgeNote,
   type KnowledgeRevision,
 } from "../../../packages/contracts/src/assistant-knowledge";
 import { useEmployeeDirectory } from "./assistant-employees";
+import { useAssistantHub } from "./assistant-hub-context";
 import { api } from "./api";
 import { copyTextToClipboard } from "./copyable-code";
 import { useUser } from "./shared";
@@ -45,7 +47,10 @@ import "./assistant-knowledge.css";
 
 const root = "/my-workspace/assistant/knowledge";
 type Selection = { id: string; version?: number };
-export type KnowledgeTarget = Selection & { key: string };
+export type KnowledgeTarget = {
+  key: string;
+  destination?: Selection | "new";
+};
 type Draft = Pick<
   KnowledgeNote,
   "id" | "title" | "content" | "version" | "employeeIds"
@@ -60,6 +65,88 @@ const blankDraft = (): Draft => ({
   version: 0,
   employeeIds: [],
 });
+
+export function WorkspaceKnowledgeCard() {
+  const { allowed, workbench } = useAssistantHub();
+  const user = useUser();
+  const overview = useQuery({
+    queryKey: ["assistant-knowledge", user.id, "directory", { overview: true }],
+    enabled: allowed && !!workbench,
+    staleTime: 30000,
+    queryFn: async ({ signal }) => {
+      const { data } = await api(
+        `${root}/overview`,
+        "GET",
+        undefined,
+        undefined,
+        { signal },
+      );
+      return knowledgeOverviewSchema.parse(data);
+    },
+  });
+  if (!allowed || !workbench) return null;
+  const { data, isError } = overview;
+  return (
+    <section
+      className="workspace-knowledge-card"
+      aria-label="公司知识库速览"
+      data-world-ui
+    >
+      <div className="employee-strip-heading">
+        <span className="employee-strip-title">
+          公司知识库 {data && !isError && <small>{data.total} 篇</small>}
+        </span>
+        <button
+          className="employee-strip-dispatch"
+          type="button"
+          aria-label="打开公司知识库"
+          onClick={() => workbench.openKnowledge()}
+        >
+          打开 <RightOutlined aria-hidden />
+        </button>
+        <button
+          className="employee-strip-add"
+          type="button"
+          aria-label="新建笔记"
+          title="新建笔记"
+          onClick={() => workbench.openKnowledge("new")}
+        >
+          <PlusOutlined aria-hidden />
+        </button>
+      </div>
+      {isError ? (
+        <p className="knowledge-card-status">
+          笔记加载失败{" "}
+          <button type="button" onClick={() => void overview.refetch()}>
+            重试
+          </button>
+        </p>
+      ) : data?.recent.length ? (
+        <>
+          <p className="knowledge-card-caption">最近更新</p>
+          <ul className="knowledge-card-notes" aria-label="最近更新的笔记">
+            {data.recent.map((note) => (
+              <li key={note.id}>
+                <button
+                  type="button"
+                  title={note.title}
+                  onClick={() => workbench.openKnowledge({ id: note.id })}
+                >
+                  <FileMarkdownOutlined aria-hidden />
+                  <span>{note.title}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="knowledge-card-status">
+          {data ? "暂无笔记" : "正在加载笔记…"}
+        </p>
+      )}
+    </section>
+  );
+}
 
 function KnowledgeEditor({
   initial,
@@ -262,13 +349,18 @@ function KnowledgeEditor({
 
 export function AssistantKnowledgePanel({
   target,
+  consumeCreate,
 }: {
   target?: KnowledgeTarget;
+  consumeCreate: (key: string) => void;
 }) {
   const user = useUser();
   const client = useQueryClient();
   const { message } = App.useApp();
-  const [selection, select] = useState<Selection | undefined>(target);
+  const destination = target?.destination;
+  const [selection, select] = useState<Selection | undefined>(
+    typeof destination === "object" ? destination : undefined,
+  );
   const [view, setView] = useState<"graph" | "list">("graph");
   const [search, setSearch] = useState("");
   const [term, setTerm] = useState("");
@@ -281,6 +373,12 @@ export function AssistantKnowledgePanel({
     return () => window.clearTimeout(timer);
   }, [search]);
   const employees = useEmployeeDirectory();
+  useEffect(() => {
+    if (target?.destination === "new" && employees.data && !employees.error) {
+      setDraft(blankDraft());
+      consumeCreate(target.key);
+    }
+  }, [target, consumeCreate, employees.data, employees.error]);
   const staff = employees.data?.employees || [];
   const activeStaff = useMemo(
     () => employees.data?.employees.filter((e) => !e.archived) || [],

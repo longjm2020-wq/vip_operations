@@ -7,7 +7,8 @@
   pointer-events: auto;
 }
 .workspace-team-shelf .workspace-world-controls,
-.workspace-employee-strip {
+.workspace-employee-strip,
+.workspace-knowledge-card {
   box-sizing: border-box;
   border: 1px solid rgba(139, 157, 205, 0.18);
   border-radius: 14px;
@@ -39,7 +40,19 @@
 .workspace-team-shelf .workspace-world-controls output {
   min-width: 36px;
 }
-.workspace-employee-strip {
+.workspace-shelf-cards {
+  display: flow-root;
+}
+@media (max-height: 820px) {
+  .workspace-shelf-cards {
+    max-height: max(68px, calc(100dvh - var(--workspace-topbar-height, 48px) - 246px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+}
+.workspace-employee-strip,
+.workspace-knowledge-card {
   position: relative;
   margin-top: 10px;
   padding: 10px 9px 9px;
@@ -195,9 +208,54 @@
   font-size: 12px;
   cursor: pointer;
 }
-.personal-workspace[data-scene-presence="open"] .workspace-employee-strip,
-.personal-workspace[data-scene-presence="entering"] .workspace-employee-strip {
+.personal-workspace[data-scene-presence="open"] .workspace-shelf-cards,
+.personal-workspace[data-scene-presence="entering"] .workspace-shelf-cards {
   display: none;
+}
+.knowledge-card-caption,
+.knowledge-card-status {
+  margin: 0 4px;
+  color: #a4aec3;
+  font-size: 11px;
+}
+.knowledge-card-status {
+  padding-block: 1px 4px;
+}
+.knowledge-card-notes {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+}
+.knowledge-card-notes button,
+.knowledge-card-status button {
+  border: 0;
+  background: transparent;
+  color: #c9d2e5;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.knowledge-card-notes button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 5px;
+  text-align: left;
+  font-size: 12px;
+}
+.knowledge-card-notes button .anticon {
+  flex: none;
+  color: #94a7d5;
+}
+.knowledge-card-notes button > span:last-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.knowledge-card-notes button:is(:hover, :focus-visible),
+.knowledge-card-status button:is(:hover, :focus-visible) {
+  background: rgba(135, 156, 219, 0.16);
 }
 .employee-panel {
   display: flex;

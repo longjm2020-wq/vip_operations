@@ -12,6 +12,7 @@ import {
   type KnowledgeHit,
   type KnowledgeNote,
   type KnowledgeNoteSummary,
+  type KnowledgeOverview,
   type KnowledgeRevision,
 } from "../../../../../packages/contracts/src/assistant-knowledge.js";
 import { fail, parse, type Context } from "../../core.js";
@@ -38,6 +39,23 @@ function summary(row: Row): KnowledgeNoteSummary {
     version: row.version,
     updatedAt: new Date(row.updated_at).toISOString(),
     employeeIds: row.employee_ids,
+  };
+}
+
+export async function knowledgeOverview(
+  c: Context,
+): Promise<KnowledgeOverview> {
+  requireAssistant(c);
+  const recent = await rows(
+    db,
+    `SELECT id, title, count(*) OVER () AS total
+     FROM public.assistant_knowledge_notes WHERE user_id=$1::bigint
+     ORDER BY updated_at DESC, id LIMIT 3`,
+    c.actor.id,
+  );
+  return {
+    total: Number(recent[0]?.total ?? 0),
+    recent: recent.map(({ id, title }) => ({ id, title })),
   };
 }
 

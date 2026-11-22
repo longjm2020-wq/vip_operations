@@ -66,6 +66,7 @@ export type AssistantHubState = {
     setToolsOpen: (open: boolean) => void;
     selectTool: (tool: AssistantToolSection) => void;
     openEmployee: (id?: string) => void;
+    openKnowledge: (destination?: "new" | { id: string }) => void;
     registerTools: (host: HTMLDivElement | null) => void;
     registerChat: (host: HTMLDivElement | null) => void;
   };

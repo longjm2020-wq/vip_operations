@@ -11,6 +11,7 @@ import {
 import { AuthRequest, context } from "../../http.js";
 import {
   deleteKnowledge,
+  knowledgeOverview,
   listKnowledge,
   readKnowledgeNote,
   readKnowledgeRevision,
@@ -23,6 +24,12 @@ export class AssistantKnowledgeController {
   @Header("Cache-Control", "private, no-store")
   directory(@Req() req: AuthRequest, @Query("q") query?: string) {
     return listKnowledge(context(req), query);
+  }
+
+  @Get("overview")
+  @Header("Cache-Control", "private, no-store")
+  overview(@Req() req: AuthRequest) {
+    return knowledgeOverview(context(req));
   }
 
   @Get(":id")

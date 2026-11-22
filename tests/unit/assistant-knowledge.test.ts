@@ -38,6 +38,7 @@ vi.mock("../../packages/database/src/index.js", () => {
 });
 
 import {
+  knowledgeOverview,
   listKnowledge,
   readKnowledgeNote,
   readKnowledgeRevision,
@@ -150,6 +151,37 @@ it("applies the assistant permission, owner scope, employee grants and live revo
   );
   await saveKnowledge(first, { ...request, version: 1, employeeIds: [] });
   expect(await searchEmployeeKnowledge("1", employee, "库存蓝标")).toEqual([]);
+});
+
+it("counts only the owner's notes and returns at most three current titles ordered by update", async () => {
+  const denied = { ...first, actor: { ...first.actor, permissions: [] } };
+  await expect(knowledgeOverview(denied)).rejects.toMatchObject({
+    status: 403,
+  });
+  await expect(knowledgeOverview(first)).resolves.toEqual({
+    total: 0,
+    recent: [],
+  });
+  const drafts = ["春", "夏", "秋", "冬"].map((title) => note(title, "正文"));
+  for (const draft of drafts) await saveKnowledge(first, draft);
+  await saveKnowledge(other, note("其他账号", "其他内容"));
+  for (const [index, draft] of drafts.entries())
+    await fixture.db!.query(
+      "UPDATE public.assistant_knowledge_notes SET updated_at=$1 WHERE user_id=1 AND id=$2",
+      [new Date(Date.UTC(2025, 0, index + 1)), draft.id],
+    );
+  const edited = await saveKnowledge(first, {
+    ...drafts[0],
+    version: 1,
+    title: "春季",
+  });
+  await expect(knowledgeOverview(first)).resolves.toEqual({
+    total: 4,
+    recent: [edited, drafts[3], drafts[2]].map(({ id, title }) => ({
+      id,
+      title,
+    })),
+  });
 });
 
 it("retains cited versions, rejects stale writes/deletes and updates the current search sections", async () => {

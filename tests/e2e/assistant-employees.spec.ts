@@ -95,6 +95,8 @@ async function setup(page: Page, count = 0, conflict = false) {
       data = { devices: [], tasks: [] };
     else if (path === "/my-workspace/assistant/browser")
       data = { sessions: [], tasks: [], ready: false };
+    else if (path === "/my-workspace/assistant/knowledge/overview")
+      data = { total: 0, recent: [] };
     else if (path.endsWith("/voice") || path.endsWith("/realtime"))
       data = {
         ready: false,
@@ -273,6 +275,165 @@ async function openEmployee(page: Page, name: string) {
   ).toBeVisible();
 }
 
+async function overviewFixture(page: Page, titles: string[]) {
+  await setup(page, 10);
+  const notes: KnowledgeNote[] = titles.map((title) => ({
+    id: randomUUID(),
+    title,
+    content: `正文：${title}`,
+    version: 1,
+    employeeIds: [],
+    updatedAt: new Date().toISOString(),
+  }));
+  const path = "/api/v1/my-workspace/assistant/knowledge";
+  const requests: string[] = [];
+  await page.route("**" + path + "**", async (route) => {
+    const request = route.request();
+    const suffix = new URL(request.url()).pathname.slice(path.length);
+    requests.push(request.method() + " " + suffix);
+    if (request.method() === "GET" && suffix === "/overview") {
+      return route.fulfill({
+        json: {
+          data: {
+            total: notes.length,
+            recent: notes.slice(0, 3).map(({ id, title }) => ({ id, title })),
+          },
+        },
+      });
+    }
+    if (request.method() === "GET" && !suffix) {
+      return route.fulfill({ json: { data: { notes, links: [] } } });
+    }
+    if (request.method() === "POST" && !suffix) {
+      const body = request.postDataJSON();
+      const existing = notes.findIndex((n) => n.id === body.id);
+      if (existing !== -1) notes.splice(existing, 1);
+      const saved = {
+        ...body,
+        version: body.version + 1,
+        updatedAt: new Date().toISOString(),
+      };
+      notes.unshift(saved);
+      return route.fulfill({ json: { data: saved } });
+    }
+    const [, id, operation] = suffix.split("/");
+    const index = notes.findIndex((n) => n.id === id);
+    if (index < 0) return route.fulfill({ status: 404 });
+    if (request.method() === "POST" && operation === "delete") {
+      notes.splice(index, 1);
+      return route.fulfill({ json: { data: {} } });
+    }
+    return route.fulfill({ json: { data: notes[index] } });
+  });
+  await page.goto("/my-workspace");
+  return { notes, requests };
+}
+
+test("工作台知识库速览只取最近三篇，直接打开所选笔记并同步改名、删除", async ({
+  page,
+}) => {
+  const titles = ["营销日历", "商品质检说明", "发货地址", "最早的笔记"];
+  const { notes, requests } = await overviewFixture(page, titles);
+  const card = page.getByRole("region", { name: "公司知识库速览" });
+  const panel = page.getByRole("region", { name: "公司知识库", exact: true });
+  await expect(card).toContainText("4 篇");
+  for (const title of titles.slice(0, 3))
+    await expect(
+      card.getByRole("button", { name: title, exact: true }),
+    ).toBeVisible();
+  await expect(card).not.toContainText(titles[3]);
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.every((path) => path === "GET /overview")).toBe(true);
+  await card.getByRole("button", { name: titles[1], exact: true }).click();
+  await expect(panel.getByRole("heading", { name: titles[1] })).toBeVisible();
+  await expect(
+    panel.getByText(notes[1].content, { exact: true }),
+  ).toBeVisible();
+  await panel.getByRole("button", { name: "编辑笔记" }).click();
+  const editor = page.getByRole("dialog");
+  await expect(editor.getByLabel("笔记标题")).toHaveValue(titles[1]);
+  await editor.getByLabel("笔记标题").fill("新版质检说明");
+  await editor.getByRole("button", { name: "保存笔记" }).click();
+  await expect(
+    panel.getByRole("heading", { name: "新版质检说明" }),
+  ).toBeVisible();
+  await expect(
+    card.getByRole("button", { name: "新版质检说明" }),
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: titles[1] })).toHaveCount(0);
+  await panel.getByRole("button", { name: "删除笔记" }).click();
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(card.getByRole("button", { name: "新版质检说明" })).toHaveCount(
+    0,
+  );
+  await expect(card.getByRole("button", { name: titles[3] })).toBeVisible();
+  await expect(card).toContainText("3 篇");
+});
+
+test("工作台知识库速览可从空库直接建笔记、随后打开知识图谱", async ({
+  page,
+}) => {
+  const { notes } = await overviewFixture(page, []);
+  const card = page.getByRole("region", { name: "公司知识库速览" });
+  await expect(card.getByText("暂无笔记", { exact: true })).toBeVisible();
+  await card.getByRole("button", { name: "新建笔记" }).click();
+  const editor = page.getByRole("dialog");
+  await expect(editor.getByLabel("笔记标题")).toHaveValue("");
+  await editor.getByLabel("笔记标题").fill("服装尺码");
+  await editor.getByLabel("正文 · Markdown").fill("尺码以厘米计。");
+  await editor.getByRole("button", { name: "保存笔记" }).click();
+  await expect(card.getByRole("button", { name: "服装尺码" })).toBeVisible();
+  await expect(card).toContainText("1 篇");
+  expect(notes).toHaveLength(1);
+  await card.getByRole("button", { name: "打开公司知识库" }).click();
+  await expect(page.getByRole("region", { name: "知识图谱" })).toBeVisible();
+});
+
+test("工作台知识库速览在大屏、矮屏和手机均位于员工下方，滚动卡片不会遮住输入框", async ({
+  page,
+}) => {
+  const titles = ["主图规范", "客服回复范例", "供应商入驻资料"];
+  await overviewFixture(page, titles);
+  const card = page.getByRole("region", { name: "公司知识库速览" });
+  const employees = page.getByRole("region", { name: "AI 员工列表" });
+  const composer = page.locator(".assistant-compose:visible");
+  const input = composer.locator("textarea");
+  for (const size of [
+    { width: 1440, height: 900 },
+    { width: 1024, height: 640 },
+    { width: 390, height: 740 },
+  ]) {
+    await page.setViewportSize(size);
+    const last = card.getByRole("button", { name: titles[2] });
+    await last.scrollIntoViewIfNeeded();
+    await expect(last).toBeInViewport();
+    await last.click({ trial: true });
+    const cardBox = (await card.boundingBox())!;
+    const employeeBox = (await employees.boundingBox())!;
+    expect(cardBox.y).toBeGreaterThanOrEqual(
+      employeeBox.y + employeeBox.height - 1,
+    );
+    const shelf = (await page.locator(".workspace-shelf-cards").boundingBox())!;
+    const composeBox = (await composer.boundingBox())!;
+    const visibleCardBottom = Math.min(
+      cardBox.y + cardBox.height,
+      shelf.y + shelf.height,
+    );
+    if (
+      cardBox.x < composeBox.x + composeBox.width &&
+      cardBox.x + cardBox.width > composeBox.x
+    )
+      expect(visibleCardBottom).toBeLessThanOrEqual(composeBox.y + 1);
+    await expect(input).toBeInViewport();
+    await input.click({ trial: true });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth + 1,
+      ),
+    ).toBe(true);
+  }
+});
+
 test("知识图谱按真实引用和员工授权连线，支持缩放和版本回查", async ({ page }) => {
   const { employees } = await setup(page, 2);
   const first = {
@@ -283,7 +444,9 @@ test("知识图谱按真实引用和员工授权连线，支持缩放和版本�
   const path = "/api/v1/my-workspace/assistant/knowledge";
   await page.context().route("**" + path + "**", async route => {
     const suffix = new URL(route.request().url()).pathname.slice(path.length);
-    const data = suffix === ""
+    const data = suffix === "/overview"
+      ? { total: 2, recent: [first, second].map(({id,title}) => ({id,title})) }
+      : suffix === ""
       ? { notes: [first, second], links: [{sourceId:first.id,targetId:second.id}] }
       : suffix.endsWith("/versions/1")
         ? { ...first, version:1, content:"历史封面尺寸" }
@@ -873,13 +1036,17 @@ test("知识库导入先生成草稿，保存授权并能安全处理其他设�
     }
     const url = new URL(req.url());
     const note = notes.at(-1);
+    if (url.pathname === path + "/overview") {
+      await route.fulfill({json:{data:{total:note ? 1 : 0,recent:note ? [{id:note.id,title:note.title}] : []}}});
+      return;
+    }
     const data = url.pathname === path ? {
       notes:note && note.content.includes(url.searchParams.get("q") || "") ? [note] : [],links:[],
     } : note;
     await route.fulfill({json:{data}});
   });
   await page.goto("/my-workspace?assistant=knowledge");
-  const panel = page.getByRole("region", { name:"公司知识库" });
+  const panel = page.getByRole("region", { name:"公司知识库", exact:true });
   await panel.locator('input[type="file"]').setInputFiles({name:"上新规范.md", mimeType:"text/markdown", buffer:Buffer.from("# 图片\n首图不能有水印。")});
   const editor = page.getByRole("dialog");
   await expect(editor.getByLabel("笔记标题")).toHaveValue("上新规范");

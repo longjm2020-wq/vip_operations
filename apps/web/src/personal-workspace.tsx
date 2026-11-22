@@ -49,6 +49,7 @@ import { canUsePersonalAssistant } from "../../../packages/contracts/src/persona
 import "./personal-workspace.css";
 import { WorkspaceColumns } from "./workspace-columns";
 import { EmployeeStrip } from "./assistant-employees";
+import { WorkspaceKnowledgeCard } from "./assistant-knowledge-panel";
 import { lazyPage } from "./page-resource-loader";
 import { PageResourceBoundary } from "./page-resource-boundary";
 import { WorkspaceAI } from "./workspace-ai";
@@ -598,7 +599,10 @@ export function PersonalWorkspacePage() {
               <span className="workspace-world-control-divider" aria-hidden />
               <WorkspaceHologram onPresenceChange={setHologramPresence} />
             </div>
-            <EmployeeStrip />
+            <div className="workspace-shelf-cards">
+              <EmployeeStrip />
+              <WorkspaceKnowledgeCard />
+            </div>
           </div>
           <div className="workspace-voice-slot" data-world-ui />
         </header>

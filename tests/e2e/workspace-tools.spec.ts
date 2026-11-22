@@ -95,6 +95,8 @@ async function fixture(
       };
     if (path === "/my-workspace/assistant/memory")
       data = { entries: [], version: 0 };
+    if (path === "/my-workspace/assistant/knowledge/overview")
+      data = { total: 0, recent: [] };
     if (path === "/my-workspace/assistant/desktop")
       data = { devices: [], tasks: [] };
     if (path === "/my-workspace/assistant/browser")
@@ -183,6 +185,11 @@ test("仅有反馈权限的账号通过原入口查看动态，分组不会开�
   page,
 }) => {
   const state = await fixture(page, ["supply.portal"]);
+  const knowledgeRequests: string[] = [];
+  page.on("request", request => {
+    if (new URL(request.url()).pathname.startsWith("/api/v1/my-workspace/assistant/knowledge"))
+      knowledgeRequests.push(request.url());
+  });
   await page.goto("/my-workspace?assistant=knowledge");
   await expect(
     page.getByRole("navigation", { name: "工作台工具入口" }),
@@ -197,6 +204,8 @@ test("仅有反馈权限的账号通过原入口查看动态，分组不会开�
     page.locator(".ant-dropdown:visible").getByRole("menuitem"),
   ).toHaveText(["动态反馈"]);
   await expect(dialog.getByRole("tab", { name: "任务与文件" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "公司知识库速览" })).toHaveCount(0);
+  expect(knowledgeRequests).toEqual([]);
   expect(state.writes).toEqual([]);
 });
 
