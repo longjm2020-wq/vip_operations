@@ -419,7 +419,16 @@ export type TeamRunStatus =
   | "NEEDS_USER"
   | "FAILED"
   | "CANCELED";
-export type TeamCitation = { title: string; url: string };
+export type TeamCitation = {
+  title: string;
+  url: string;
+  consultedOnly?: boolean;
+};
+// Only this same-origin route is accepted for server-generated private citations.
+export const isKnowledgeCitationUrl = (url: string) =>
+  /^\/my-workspace\?assistant=knowledge&note=[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}&version=[1-9][0-9]{0,9}$/i.test(
+    url,
+  );
 export type TeamArtifact = {
   id: string;
   runId: string;

@@ -55,6 +55,10 @@ import "./personal-assistant.css";
 import { useAssistantVoice } from "./use-assistant-voice";
 import { AssistantMemoryPanel } from "./assistant-memory-panel";
 import {
+  AssistantKnowledgePanel,
+  type KnowledgeTarget,
+} from "./assistant-knowledge-panel";
+import {
   AgentComposer,
   AgentMessageResults,
   AgentTasksPanel,
@@ -176,6 +180,7 @@ export function PersonalAssistantProvider({
     useState<AssistantToolSection>("browser");
   const [workspaceChatOpen, setWorkspaceChatOpen] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<string>();
+  const [knowledgeTarget, setKnowledgeTarget] = useState<KnowledgeTarget>();
   const [employeeDrafts, setEmployeeDrafts] = useState<
     Record<string, EmployeeDraft>
   >({});
@@ -1299,12 +1304,31 @@ export function PersonalAssistantProvider({
         "voice",
         "tasks",
         "employees",
+        "knowledge",
       ].includes(target || "") ||
       consumedAssistantLink.current === location.key
     )
       return;
     consumedAssistantLink.current = location.key;
     const connect = target === "desktop" && params.get("connect") === "1";
+    if (target === "knowledge") {
+      const id = params.get("note");
+      const version = Number(params.get("version"));
+      setKnowledgeTarget(
+        id
+          ? {
+              id,
+              version:
+                Number.isSafeInteger(version) && version > 0
+                  ? version
+                  : undefined,
+              key: location.key,
+            }
+          : undefined,
+      );
+      params.delete("note");
+      params.delete("version");
+    }
     params.delete("assistant");
     params.delete("connect");
     navigate(
@@ -1335,13 +1359,15 @@ export function PersonalAssistantProvider({
     else if (target === "team" || target === "employees") {
       setSelectedEmployee(undefined);
       selectSection("employees");
-    } else if (target === "tasks") selectSection("tasks");
+    } else if (target === "knowledge") selectSection("knowledge");
+    else if (target === "tasks") selectSection("tasks");
     else openPanel("chat");
     // React to navigation, not to changing voice/session state.
   }, [location.key, location.pathname, location.search, allowed]);
   const sectionItems = [
     ...(allowed ? [{ key: "chat", label: "聊天" }] : []),
     ...(allowed ? [{ key: "employees", label: "AI 员工" }] : []),
+    ...(allowed ? [{ key: "knowledge", label: "公司知识库" }] : []),
     ...(allowed ? [{ key: "tasks", label: "任务与文件" }] : []),
     ...(allowed ? [{ key: "desktop", label: "我的电脑" }] : []),
     ...(allowed ? [{ key: "browser", label: "独立浏览器" }] : []),
@@ -1770,6 +1796,12 @@ export function PersonalAssistantProvider({
         />
       )}
       {allowed && panelSection === "settings" && conversationSettings}
+      {allowed && panelSection === "knowledge" && (
+        <AssistantKnowledgePanel
+          key={`${user.id}:${knowledgeTarget?.key || ""}`}
+          target={knowledgeTarget}
+        />
+      )}
       {toolsVisible && panelSection === "voice" && allowed && (
         <AssistantVoiceSettingsPanel
           executionLabel={voiceExecutionLabel}

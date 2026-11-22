@@ -96,6 +96,9 @@ describe("private workspace role defaults and validation", () => {
       roleCodes: ["ADMIN"],
     };
     expect(manualPermissions).toHaveProperty("41-assistant-employees");
+    expect(manualPermissions).toHaveProperty("44-workspace-knowledge");
+    expect(canReadManual({...actor,permissions:["analytics.read","analytics.manage"]},"44-workspace-knowledge",null)).toBe(true);
+    expect(canReadManual({...actor,permissions:["supply.portal"]},"44-workspace-knowledge",null)).toBe(false);
     expect(canReadManual({...actor,permissions:["analytics.read","analytics.manage"]},"41-assistant-employees",null)).toBe(true);
     expect(canReadManual({...actor,permissions:["supply.portal"]},"41-assistant-employees",null)).toBe(false);
     expect(canReadManual(actor, "31-ai-settings", "analytics.manage")).toBe(

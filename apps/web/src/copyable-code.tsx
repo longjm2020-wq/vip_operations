@@ -15,7 +15,7 @@ export function codeText(value: unknown): string | undefined {
   return text.trim() && !/^(?:[—–-]+|[•·]+|未填写.*|未填.*|待补充|未维护.*|暂无.*)$/.test(text.trim()) ? text : undefined;
 }
 
-async function writeCode(text: string) {
+export async function copyTextToClipboard(text: string) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
     return;
@@ -54,7 +54,7 @@ export function CopyCodeButton({ value, label = "编号" }: { value: unknown; la
     onBlur={() => setCopied(false)} onMouseLeave={() => setCopied(false)}
     onClick={event => {
       event.stopPropagation();
-      void writeCode(text).then(() => {
+      void copyTextToClipboard(text).then(() => {
         setCopied(true);
         void message.success({ content: `${label}已复制`, key: "product-code-copy" });
       }, () => {

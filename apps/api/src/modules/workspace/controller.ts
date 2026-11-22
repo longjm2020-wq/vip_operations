@@ -49,6 +49,7 @@ import { executeAssistantAction } from "./assistant-actions.js";
 import { AssistantDesktopController } from "./desktop-controller.js";
 import { AssistantBrowserController } from "./browser-controller.js";
 import { AssistantEmployeeController } from "./employee-controller.js";
+import { AssistantKnowledgeController } from "./knowledge-controller.js";
 import {
   readRealtimeStatus,
   saveRealtimeSettings,
@@ -489,6 +490,7 @@ export class PersonalWorkspaceController {
     AssistantDesktopController,
     AssistantBrowserController,
     AssistantEmployeeController,
+    AssistantKnowledgeController,
   ],
 })
 export class PersonalWorkspaceModule {}

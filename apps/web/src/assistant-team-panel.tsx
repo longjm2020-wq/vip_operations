@@ -5,6 +5,7 @@ import { api } from "./api";
 import { useUser } from "./shared";
 import { AgentFileLink } from "./assistant-agent-panel";
 import {
+  isKnowledgeCitationUrl,
   type TeamArtifact,
   type TeamRun,
 } from "../../../packages/contracts/src/assistant-team";
@@ -65,6 +66,7 @@ export function ArtifactCard({ artifact }: { artifact: TeamArtifact }) {
       {!!artifact.citations.length && (
         <div className="team-citations">
           {artifact.citations.map((citation, index) =>
+            isKnowledgeCitationUrl(citation.url) ||
             /^https?:\/\//i.test(citation.url) ? (
               <a
                 key={`${citation.url}-${index}`}

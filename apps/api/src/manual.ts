@@ -35,6 +35,7 @@ export const manualPermissions: Record<string, string | null> = {
   "41-assistant-employees": null,
   "42-product-operating-decisions": "product.read",
   "43-agentai-audio": "analytics.manage",
+  "44-workspace-knowledge": null,
 };
 export function canReadManual(
   actor: Actor,
@@ -47,6 +48,7 @@ export function canReadManual(
       "39-assistant-desktop",
       "40-assistant-team",
       "41-assistant-employees",
+      "44-workspace-knowledge",
     ].includes(id) ||
       canUsePersonalAssistant(actor)) &&
     (id !== "37-image-batch-naming" ||

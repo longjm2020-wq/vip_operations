@@ -1,0 +1,116 @@
+.knowledge-library,
+.knowledge-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.knowledge-toolbar,
+.knowledge-actions,
+.knowledge-history,
+.knowledge-metadata {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.knowledge-toolbar {
+  justify-content: space-between;
+}
+.knowledge-toolbar h2,
+.knowledge-reader h2 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.knowledge-toolbar h2 .anticon {
+  margin-inline-end: 4px;
+}
+.knowledge-library > .ant-segmented {
+  align-self: flex-start;
+  max-width: 100%;
+}
+.knowledge-notes {
+  display: grid;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.knowledge-notes li + li {
+  border-top: 1px solid var(--app-shell-border);
+}
+.knowledge-notes button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-text);
+  text-align: start;
+  font: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.knowledge-notes button:hover,
+.knowledge-notes button:focus-visible {
+  background: var(--app-surface);
+}
+.knowledge-notes button > .anticon:first-child {
+  font-size: 19px;
+  color: var(--app-accent);
+}
+.knowledge-notes small,
+.knowledge-metadata,
+.knowledge-history span,
+.knowledge-readers {
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.knowledge-notes small {
+  display: block;
+  margin-top: 3px;
+}
+.knowledge-reader {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.knowledge-reader .skill-markdown {
+  padding-block: 12px;
+  border-block: 1px solid var(--app-shell-border);
+}
+.knowledge-reader .skill-markdown pre,
+.knowledge-compare pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.knowledge-editor {
+  gap: 7px;
+  padding-top: 6px;
+}
+.knowledge-editor label:not(:first-child) {
+  margin-top: 6px;
+}
+.knowledge-editor textarea,
+.knowledge-compare pre {
+  line-height: 1.65;
+}
+.knowledge-editor textarea {
+  resize: vertical;
+}
+.knowledge-compare {
+  padding: 12px;
+  border: 1px solid var(--app-shell-border);
+  border-radius: 8px;
+}
+.knowledge-compare pre {
+  max-height: 180px;
+  white-space: pre-wrap;
+}

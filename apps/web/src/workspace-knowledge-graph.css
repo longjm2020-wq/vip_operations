@@ -1,0 +1,137 @@
+.workspace-kgraph {
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--app-surface);
+}
+.workspace-kgraph__locator {
+  width: 100%;
+  border-bottom: 1px solid var(--app-border);
+}
+.workspace-kgraph__stage {
+  position: relative;
+  height: clamp(270px, 46vh, 550px);
+  overflow: hidden;
+  background-color: var(--app-bg);
+  background-image:
+    radial-gradient(var(--app-border) 0.8px, transparent 0.9px),
+    radial-gradient(
+      ellipse at 50% 47%,
+      var(--app-accent-soft) -35%,
+      transparent 66%
+    );
+  background-size:
+    18px 18px,
+    100% 100%;
+}
+.workspace-kgraph__stage svg {
+  display: block;
+  touch-action: none;
+  cursor: grab;
+  color: var(--app-accent);
+}
+.workspace-kgraph__stage svg:active {
+  cursor: grabbing;
+}
+.workspace-kgraph__tools {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+}
+.workspace-kgraph__tools .ant-btn {
+  min-width: 30px;
+  height: 30px;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.kgraph-node {
+  cursor: pointer;
+  outline: none;
+  color: var(--app-accent);
+}
+.kgraph-node.employee {
+  color: var(--app-chart-2);
+}
+.kgraph-node.muted {
+  opacity: 0.58;
+}
+.kgraph-hit {
+  fill: transparent;
+}
+.kgraph-halo {
+  fill: var(--app-surface);
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.kgraph-core {
+  fill: currentColor;
+}
+.kgraph-node.selected .kgraph-halo,
+.kgraph-node:focus-visible .kgraph-halo,
+.kgraph-node:hover .kgraph-halo {
+  stroke-width: 3;
+  filter: drop-shadow(0 0 4px currentColor);
+}
+.kgraph-node text {
+  font:
+    500 12px system-ui,
+    sans-serif;
+  fill: var(--app-text);
+  stroke-linejoin: round;
+  stroke: var(--app-bg);
+  stroke-width: 3px;
+  paint-order: stroke;
+}
+.kgraph-edge {
+  stroke: var(--app-accent-border);
+  stroke-width: 1.5;
+}
+.kgraph-edge.active {
+  stroke: var(--app-accent);
+  stroke-width: 2;
+}
+.kgraph-edge.grant {
+  stroke: var(--app-chart-2);
+  stroke-dasharray: 4 5;
+}
+.workspace-kgraph__legend,
+.workspace-kgraph__grants {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--app-border);
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.workspace-kgraph__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.workspace-kgraph__legend i {
+  width: 17px;
+  border-top: 2px solid var(--app-accent);
+}
+.workspace-kgraph__legend i.grant {
+  border-top: 2px dashed var(--app-chart-2);
+}
+.workspace-kgraph__grants button {
+  background: transparent;
+  color: var(--app-accent);
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+  padding: 2px 0;
+}
+.workspace-kgraph__grants button:hover {
+  text-decoration: underline;
+}

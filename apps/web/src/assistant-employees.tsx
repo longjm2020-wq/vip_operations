@@ -36,6 +36,7 @@ import {
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { api } from "./api";
 import { useUser } from "./shared";
 import { useAssistantHub } from "./assistant-hub-context";
@@ -476,6 +477,16 @@ function EmployeeEditor({
             label: "技能与知识",
             children: (
               <>
+                <p className="employee-note">
+                  <Link
+                    to="/my-workspace?assistant=knowledge"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    打开公司知识库
+                  </Link>
+                  ，设置这位员工可查阅的笔记。
+                </p>
                 <div className="employee-skill-controls">
                   <strong>岗位技能 · SKILL.md</strong>
                   <Segmented

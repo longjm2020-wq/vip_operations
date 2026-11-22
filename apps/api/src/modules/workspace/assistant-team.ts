@@ -10,6 +10,7 @@ import type {
   TeamRun,
   TeamStep,
 } from "../../../../../packages/contracts/src/assistant-team.js";
+import { isKnowledgeCitationUrl } from "../../../../../packages/contracts/src/assistant-team.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import { fail, parse, type Context } from "../../core.js";
 import { encryptionReady } from "../analytics/secrets.js";
@@ -56,17 +57,30 @@ export async function teamServiceReady() {
 
 function safeCitations(input: unknown): TeamArtifact["citations"] {
   if (!Array.isArray(input)) return [];
-  return input.slice(0, 20).flatMap((item) => {
+  let publicCount = 0;
+  // An accepted dependency can carry citations from several earlier steps.
+  // Keep their immutable knowledge versions even after the public-link quota.
+  return input.slice(0, 512).flatMap((item): TeamArtifact["citations"] => {
     try {
       if (!item || typeof item.url !== "string" || item.url.length > 3000)
         return [];
+      if (isKnowledgeCitationUrl(item.url))
+        return [
+          {
+            title: safeText(item.title, 400),
+            url: item.url,
+            consultedOnly: item.consultedOnly === true,
+          },
+        ];
       const url = new URL(item.url);
       if (
+        publicCount >= 20 ||
         !["https:", "http:"].includes(url.protocol) ||
         url.username ||
         url.password
       )
         return [];
+      publicCount++;
       return [
         { title: safeText(item.title, 180) || url.hostname, url: url.href },
       ];

@@ -8,6 +8,7 @@ import {
   type EmployeeTaskCreate,
 } from "../../packages/contracts/src/assistant-employees.js";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
+import type { KnowledgeNote } from "../../packages/contracts/src/assistant-knowledge.js";
 import { selectAssistantPanel } from "./assistant-controls.js";
 
 const root = "/my-workspace/assistant/employees";
@@ -271,6 +272,53 @@ async function openEmployee(page: Page, name: string) {
     page.getByRole("region", { name: "AI 员工工作台" }),
   ).toBeVisible();
 }
+
+test("知识图谱按真实引用和员工授权连线，支持缩放和版本回查", async ({ page }) => {
+  const { employees } = await setup(page, 2);
+  const first = {
+    id: randomUUID(), title: "商品上新规范", employeeIds: [employees[0].id],
+    updatedAt: new Date().toISOString(), version: 2,
+  };
+  const second = { ...first, id: randomUUID(), title: "素材验收标准", employeeIds: [] };
+  const path = "/api/v1/my-workspace/assistant/knowledge";
+  await page.context().route("**" + path + "**", async route => {
+    const suffix = new URL(route.request().url()).pathname.slice(path.length);
+    const data = suffix === ""
+      ? { notes: [first, second], links: [{sourceId:first.id,targetId:second.id}] }
+      : suffix.endsWith("/versions/1")
+        ? { ...first, version:1, content:"历史封面尺寸" }
+        : { ...first, content:"参见 [[素材验收标准]]" };
+    await route.fulfill({json:{data}});
+  });
+  await page.goto("/my-workspace?assistant=knowledge");
+  const graph = page.getByRole("region", {name:"知识图谱"});
+  await expect(graph.locator(".kgraph-edge.grant")).toHaveCount(1);
+  await expect(graph.locator(".kgraph-edge:not(.grant)")).toHaveCount(1);
+  await expect(graph.getByRole("button", {name:"查看授权员工 "+employees[1].name})).toHaveCount(0);
+  const transform = graph.locator("svg > g").first();
+  const initial = await transform.getAttribute("transform");
+  await graph.getByRole("button", {name:"放大图谱"}).click();
+  await expect(transform).not.toHaveAttribute("transform", initial!);
+  await graph.getByRole("button", {name:"图谱全览"}).click();
+  await expect(transform).toHaveAttribute("transform", initial!);
+  await graph.getByRole("button", {name:"查看授权员工 "+employees[0].name}).press("Enter");
+  await expect(graph.getByText(employees[0].name+"可查阅")).toBeVisible();
+  await graph.getByRole("button", {name:first.title,exact:true}).click();
+  await expect(page.getByRole("heading", {name:first.title})).toBeVisible();
+  await page.getByRole("button",{name:"上一版"}).click();
+  await expect(page.getByText("历史封面尺寸")).toBeVisible();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator,"clipboard",{configurable:true,value:{
+      writeText:async (value: string) => sessionStorage.setItem("test-copied-version",value),
+    }});
+  });
+  await page.getByRole("link",{name:"复制版本链接"}).click();
+  await expect(page.getByText("已复制第 1 版链接",{exact:true})).toBeVisible();
+  const copied = await page.evaluate(() => sessionStorage.getItem("test-copied-version"));
+  expect(copied).toBe(new URL("/my-workspace?assistant=knowledge&note="+first.id+"&version=1",page.url()).href);
+  await page.goto(copied!);
+  await expect(page.getByText("历史封面尺寸")).toBeVisible();
+});
 
 test("旧团队书签进入员工派单，档案仍可只读查看", async ({ page }) => {
   await setup(page, 2);
@@ -804,4 +852,60 @@ test("岗位技能批量补空，模板预览和 MD 导入下载不提前保存�
   expect(f.submissions).toHaveLength(0);
   expect(f.personal).toHaveLength(0);
   await page.screenshot({ path: ".local/employee-skill-editor.png" });
+});
+
+test("知识库导入先生成草稿，保存授权并能安全处理其他设备的修改", async ({ page }) => {
+  const { employees } = await setup(page, 1);
+  const notes: KnowledgeNote[] = [];
+  const path = "/api/v1/my-workspace/assistant/knowledge";
+  await page.route("**/api/v1/my-workspace/assistant/knowledge**", async route => {
+    const req = route.request();
+    if(req.method() === "POST") {
+      const body = req.postDataJSON();
+      if(body.version !== (notes.at(-1)?.version || 0)) {
+        await route.fulfill({status:409,json:{error:{message:"笔记已在其他页面更新或删除，请重新载入后核对"}}});
+        return;
+      }
+      const newNote = { ...body, version:body.version + 1, updatedAt:new Date().toISOString() };
+      notes.push(newNote);
+      await route.fulfill({json:{data:newNote}});
+      return;
+    }
+    const url = new URL(req.url());
+    const note = notes.at(-1);
+    const data = url.pathname === path ? {
+      notes:note && note.content.includes(url.searchParams.get("q") || "") ? [note] : [],links:[],
+    } : note;
+    await route.fulfill({json:{data}});
+  });
+  await page.goto("/my-workspace?assistant=knowledge");
+  const panel = page.getByRole("region", { name:"公司知识库" });
+  await panel.locator('input[type="file"]').setInputFiles({name:"上新规范.md", mimeType:"text/markdown", buffer:Buffer.from("# 图片\n首图不能有水印。")});
+  const editor = page.getByRole("dialog");
+  await expect(editor.getByLabel("笔记标题")).toHaveValue("上新规范");
+  await expect(editor.getByLabel("正文 · Markdown")).toHaveValue("# 图片\n首图不能有水印。");
+  expect(notes).toHaveLength(0);
+  await editor.getByRole("combobox").click();
+  await page.locator(".ant-select-item-option-content").filter({ hasText:employees[0].name }).click();
+  await editor.getByLabel("笔记标题").click();
+  await editor.getByRole("button", {name:"保存笔记"}).click();
+  await expect(panel.getByText("第 1 版", {exact:true})).toBeVisible();
+  expect(notes[0].employeeIds).toEqual([employees[0].id]);
+  await panel.getByRole("button",{name:"编辑笔记",exact:true}).click();
+  await editor.getByLabel("正文 · Markdown").fill("本机自己的草稿");
+  notes.push({...notes[0],version:2,content:"另一台电脑的修订",employeeIds:[]});
+  await editor.getByRole("button",{name:"保存笔记"}).click();
+  await editor.getByRole("button",{name:"查看线上版本"}).click();
+  await expect(editor.getByText("另一台电脑的修订",{exact:true})).toBeVisible();
+  await editor.getByRole("button",{name:"保留草稿，按线上权限继续编辑"}).click();
+  await expect(editor.getByLabel("正文 · Markdown")).toHaveValue("本机自己的草稿");
+  await editor.getByRole("button",{name:"保存笔记"}).click();
+  await expect(panel.getByText("第 3 版", {exact:true})).toBeVisible();
+  expect(notes.at(-1)?.employeeIds).toEqual([]);
+  await panel.getByRole("button",{name:"返回知识库",exact:true}).click();
+  await panel.getByText("笔记列表",{exact:true}).click();
+  await panel.getByRole("textbox",{name:"搜索笔记标题或正文"}).fill("不匹配");
+  await expect(panel.getByText("没有匹配的笔记")).toBeVisible();
+  await panel.getByRole("textbox",{name:"搜索笔记标题或正文"}).fill("自己的草稿");
+  await expect(panel.getByRole("button",{name:/上新规范/})).toBeVisible();
 });

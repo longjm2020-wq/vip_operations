@@ -64,6 +64,7 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
   if (!dock) return children;
   const extra: { key: AssistantToolSection; label: string }[] = [
     { key: "employees", label: "AI 员工" },
+    { key: "knowledge", label: "公司知识库" },
     { key: "tasks", label: "任务与文件" },
     { key: "activity", label: "动态反馈" },
     { key: "memory", label: "个人记忆" },

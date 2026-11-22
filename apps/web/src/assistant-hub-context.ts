@@ -16,6 +16,7 @@ export type AssistantSection =
   | "desktop"
   | "browser"
   | "employees"
+  | "knowledge"
   | "settings";
 export type AssistantToolSection = Exclude<AssistantSection, "chat">;
 

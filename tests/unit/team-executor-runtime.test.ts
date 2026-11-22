@@ -72,6 +72,8 @@ vi.mock(
   }),
 );
 import { runTeamExecution } from "../../apps/api/src/modules/workspace/team-executor.js";
+import { saveKnowledge } from "../../apps/api/src/modules/workspace/assistant-knowledge.js";
+import { readTeamRun } from "../../apps/api/src/modules/workspace/assistant-team.js";
 
 const c: Context = {
   actor: {
@@ -117,6 +119,12 @@ beforeAll(async () => {
   await f.db.exec(
     await readFile(
       "packages/database/migrations/101_assistant_employees.sql",
+      "utf8",
+    ),
+  );
+  await f.db.exec(
+    await readFile(
+      "packages/database/migrations/110_assistant_knowledge.sql",
       "utf8",
     ),
   );
@@ -272,6 +280,161 @@ async function configureAgentAiRuntime() {
   f.route.mockResolvedValue({ ...model, provider: "agentai" });
 }
 describe("production team adapter", () => {
+  it("keeps shared planning and public search free of retrieved passages and records each employee's versioned evidence", async () => {
+    const { run, lease } = await runRow();
+    const author = run.input.employeeContext.employees[0];
+    const reviewer = {
+      id: randomUUID(),
+      version: 1,
+      profile: employeeTemplate("review"),
+    };
+    await f.db!.query(
+      "INSERT INTO personal_assistant_employees(id,user_id,profile) VALUES($1,1,$2::jsonb)",
+      [reviewer.id, JSON.stringify(reviewer.profile)],
+    );
+    const owner = {
+      ...c,
+      actor: { ...c.actor, permissions: ["product.read", "product.update"] },
+    };
+    const addNote = (employeeId: string, title: string, content: string) =>
+      saveKnowledge(owner, {
+        id: randomUUID(),
+        version: 0,
+        title,
+        content,
+        employeeIds: [employeeId],
+      });
+    const writeNote = await addNote(
+      author.id,
+      "产品文案规范",
+      "## 语气\n保密片段 ALPHA，只使用日常词。",
+    );
+    const reviewNote = await addNote(
+      reviewer.id,
+      "产品文案验收",
+      "## 检查\n保密片段 BRAVO，检查颜色名。",
+    );
+    const authorMember = employeeMemberId(author.id);
+    const input = {
+      ...run.input,
+      goal: "依据产品文案规范完成文字审核",
+      employeeContext: {
+        origin: "dispatch",
+        employees: [author, reviewer],
+        maxModelCalls: 20,
+      },
+      settings: {
+        ...run.input.settings,
+        allowWeb: true,
+        members: run.input.settings.members.map((m) =>
+          m.id === "writing"
+            ? { ...m, role: "custom", id: authorMember }
+            : m.role === "coordinator"
+              ? { ...m, id: employeeMemberId(reviewer.id) }
+              : m,
+        ),
+      },
+    };
+    startDocumentScenario("research", authorMember);
+    f.fetch
+      .mockResolvedValueOnce(response("跳过"))
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "采用日常词。[K1]" }),
+      )
+      .mockResolvedValueOnce(
+        response({ accepted: true, review: "颜色已核对。[K1]" }),
+      )
+      .mockResolvedValueOnce(response({ summary: "验收通过", tags: [] }))
+      .mockResolvedValueOnce(response({ summary: "完成" }));
+    const result = await runTeamExecution(
+      c,
+      { ...run, input },
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("DONE");
+    const requests = f.fetch.mock.calls.map(([, init]) =>
+      JSON.parse(init.body),
+    );
+    expect(requests).toHaveLength(7);
+    const prompts = requests.map((body) => JSON.stringify(body.messages));
+    expect(prompts.filter((text) => text.includes("ALPHA"))).toEqual([
+      prompts[3],
+    ]);
+    expect(prompts.filter((text) => text.includes("BRAVO"))).toEqual([
+      prompts[4],
+    ]);
+    expect(requests[2].tools.map((t: any) => t.function.name)).toEqual([
+      "search_web",
+    ]);
+    expect(
+      requests[3].tools.some((t: any) => t.function.name === "search_web"),
+    ).toBe(false);
+    const saved = (await readTeamRun(c, run.id, "employee")).artifacts[0];
+    expect(saved.content).toContain("产品文案规范（v1）");
+    expect(saved.review).toContain("产品文案验收（v1）");
+    expect(saved.citations).toEqual([
+      {
+        title: "执行引用 [K1] · 产品文案规范（v1） · 语气",
+        url: `/my-workspace?assistant=knowledge&note=${writeNote.id}&version=1`,
+        consultedOnly: false,
+      },
+      {
+        title: "验收引用 [K1] · 产品文案验收（v1） · 检查",
+        url: `/my-workspace?assistant=knowledge&note=${reviewNote.id}&version=1`,
+        consultedOnly: false,
+      },
+    ]);
+  });
+  it("stops private work if the note grant is revoked during a model call", async () => {
+    const { run, lease } = await runRow();
+    const author = run.input.employeeContext.employees[0];
+    const owner = {
+      ...c,
+      actor: { ...c.actor, permissions: ["product.read", "product.update"] },
+    };
+    const note = await saveKnowledge(owner, {
+      id: randomUUID(),
+      version: 0,
+      title: "说明正文",
+      content: "## 真实产物\n生成文字文件时列出日期。",
+      employeeIds: [author.id],
+    });
+    const memberId = employeeMemberId(author.id);
+    const input = {
+      ...run.input,
+      settings: {
+        ...run.input.settings,
+        members: run.input.settings.members.map((m) =>
+          m.id === "writing" ? { ...m, id: memberId } : m,
+        ),
+      },
+    };
+    startDocumentScenario("document", memberId);
+    f.fetch
+      .mockImplementationOnce(async () => {
+        await saveKnowledge(owner, {
+          employeeIds: [],
+          id: note.id,
+          title: note.title,
+          content: note.content,
+          version: note.version,
+        });
+        return toolResponse();
+      })
+      .mockResolvedValueOnce(response({ summary: "需要用户确认。" }));
+    const result = await runTeamExecution(
+      c,
+      { ...run, input },
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("NEEDS_USER");
+    expect(result.state.steps[0].error).toContain(
+      "知识库资料或员工授权已经变化",
+    );
+    expect(f.queue).not.toHaveBeenCalled();
+  });
   it.each(["openrouter", "agentai"])(
     "uses employee snapshots and the selected %s connection with independent metering",
     async (provider) => {

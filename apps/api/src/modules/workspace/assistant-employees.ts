@@ -488,7 +488,11 @@ export async function createEmployeeTask(
           tx,
           `SELECT r.input->>'goal' AS goal,r.summary FROM public.personal_assistant_employee_tasks t
       JOIN public.personal_assistant_team_runs r ON r.id=t.run_id WHERE t.user_id=$1::bigint AND t.employee_id=$2::uuid
-      AND r.status='DONE' ORDER BY r.created_at DESC LIMIT 6`,
+      AND r.status='DONE' AND NOT EXISTS (
+        SELECT 1 FROM public.personal_assistant_team_artifacts a,
+          LATERAL jsonb_array_elements(a.citations) AS source
+        WHERE a.run_id=r.id AND a.user_id=r.user_id AND source->>'url' LIKE '/my-workspace?assistant=knowledge&%'
+      ) ORDER BY r.created_at DESC LIMIT 6`,
           c.actor.id,
           body.employeeId,
         )
