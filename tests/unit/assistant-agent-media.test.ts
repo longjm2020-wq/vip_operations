@@ -226,6 +226,44 @@ describe("assistant real artifacts", () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 45000);
+  it("accepts >100MP images and tall detail-page PNGs exceeding WebP 16383px limit", async () => {
+    // 1. 超过 1 亿像素（10500x10500 = 1.1025 亿像素）的纯色 PNG 应可正常通过校验与解析
+    const hugePng = await sharp({
+      create: {
+        width: 10500,
+        height: 10500,
+        channels: 3,
+        background: { r: 240, g: 242, b: 245 },
+      },
+    })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+    const hugeMeta = await inspectAgentUpload("studio-huge.png", hugePng);
+    expect(hugeMeta.mime).toBe("image/png");
+
+    // 2. 高度超过 WebP 16383px 限制的电商详情长图（20x17000）应自动绕过 WebP 单边限制并成功压缩
+    const tallPng = await sharp({
+      create: {
+        width: 20,
+        height: 17000,
+        channels: 3,
+        background: { r: 220, g: 230, b: 240 },
+      },
+    })
+      .png({ compressionLevel: 0 })
+      .toBuffer();
+    const tallLimit = Math.floor(tallPng.length * 0.25);
+    const compressedTall = await compressAgentUpload(
+      "detail-long.png",
+      tallPng,
+      tallLimit,
+    );
+    expect(compressedTall.compressed).toBe(true);
+    expect(compressedTall.content.length).toBeLessThanOrEqual(tallLimit);
+    expect((await inspectAgentUpload(compressedTall.name, compressedTall.content)).mime).toBe(
+      compressedTall.mime,
+    );
+  }, 30000);
   it("only renders verified public URL citations", () => {
     expect(
       publicCitations([

@@ -3,7 +3,6 @@ import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
 import { request } from "node:https";
 import { setTimeout as delay } from "node:timers/promises";
-import sharp from "sharp";
 import {
   videoProviders,
   videoKey,
@@ -25,7 +24,7 @@ import { videoGenerationSchema } from "../../../../../packages/contracts/src/ass
 import type { TeamVideoModel } from "../../../../../packages/contracts/src/assistant-team.js";
 import { fail, parse, requirePermission, type Context } from "../../core.js";
 import { engineConfig } from "../aigc/config.js";
-import { ownedAgentFiles } from "./agent-files.js";
+import { openAgentImage, ownedAgentFiles } from "./agent-files.js";
 import { modelRef } from "./agent-models.js";
 
 const signature = (value: unknown) =>
@@ -332,17 +331,13 @@ export async function generateTeamVideo(
   for (const file of files) {
     if (!file.mime.startsWith("image/"))
       throw Error("视频生成参考素材必须为图片");
-    const meta = await sharp(Buffer.from(file.content), {
-      limitInputPixels: 40000000,
-    }).metadata();
+    const meta = await openAgentImage(Buffer.from(file.content)).metadata();
     if (
       route.model.minImageSide &&
       Math.min(meta.width || 0, meta.height || 0) < route.model.minImageSide
     )
       throw Error("视频参考图尺寸低于所选模型要求");
-    const buffer = await sharp(Buffer.from(file.content), {
-      limitInputPixels: 40000000,
-    })
+    const buffer = await openAgentImage(Buffer.from(file.content))
       .resize({
         width: 1800,
         height: 1800,

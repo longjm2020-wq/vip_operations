@@ -20,6 +20,7 @@ import { fail, parse, type Context } from "../../core.js";
 import { requireAssistant } from "./assistant-memory.js";
 import {
   agentFileView,
+  openAgentImage,
   ownedAgentFiles,
   saveAgentFile,
   inspectAgentUpload,
@@ -386,7 +387,7 @@ export async function runAgentJob(
           url:
             "data:image/png;base64," +
             (
-              await sharp(Buffer.from(file.content))
+              await openAgentImage(Buffer.from(file.content))
                 .resize({
                   width: 1800,
                   height: 1800,

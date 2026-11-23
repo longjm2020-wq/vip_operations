@@ -23,8 +23,25 @@ const TARGET_VIDEO_BYTES = 64 * MiB;
 const RAW_IMAGE_BYTES = 100 * MiB;
 const RAW_OFFICE_BYTES = 60 * MiB;
 const RAW_VIDEO_BYTES = 200 * MiB;
-const SHARP_MAX_PIXELS = 100_000_000;
+export const AGENT_IMAGE_MAX_PIXELS = 500_000_000;
+const WEBP_MAX_SIDE = 16383;
+const JPEG_MAX_SIDE = 65535;
 const OFFICE_EXTS = new Set([".docx", ".xlsx", ".pptx"]);
+
+/** 统一打开工作台素材图片，支持超高像素与电商长图并启用顺序流式解码以控制内存峰值。 */
+export const openAgentImage = (content: Buffer) =>
+  sharp(content, {
+    limitInputPixels: AGENT_IMAGE_MAX_PIXELS,
+    sequentialRead: true,
+  });
+
+const normalizeImageError = (err: unknown): never => {
+  const msg = err instanceof Error ? err.message : "";
+  if (/pixel limit/i.test(msg)) {
+    throw Error("图片总像素超过 5 亿上限，请适当缩小尺寸后重试");
+  }
+  throw err instanceof Error ? err : Error("无法解析图片文件");
+};
 
 const formatSize = (bytes: number) =>
   bytes < MiB
@@ -230,7 +247,7 @@ export async function inspectAgentUpload(
   let text = "";
   const metadata: Row = {};
   if (mime.startsWith("image/")) {
-    const info = await sharp(b, { limitInputPixels: SHARP_MAX_PIXELS }).metadata();
+    const info = await openAgentImage(b).metadata().catch(normalizeImageError);
     if (!["png", "jpeg", "webp"].includes(info.format || ""))
       throw Error("图片格式不受支持");
   } else if (mime.startsWith("video/")) {
@@ -338,18 +355,20 @@ export async function compressAgentUpload(
   }
 
   if (mime.startsWith("image/")) {
-    const meta = await sharp(content, {
-      limitInputPixels: SHARP_MAX_PIXELS,
-    }).metadata();
+    const meta = await openAgentImage(content)
+      .metadata()
+      .catch(normalizeImageError);
     if (!["png", "jpeg", "webp"].includes(meta.format || "")) {
       throw Error("图片格式不受支持");
     }
+    const width = meta.width || 0;
+    const height = meta.height || 0;
+    const canUseWebp = width <= WEBP_MAX_SIDE && height <= WEBP_MAX_SIDE;
+    const canUseJpeg = width <= JPEG_MAX_SIDE && height <= JPEG_MAX_SIDE;
 
     // 第一阶段：严格像素无损压缩（剥离冗余元数据并采用最高压缩率）
     if (mime === "image/png") {
-      const pngBuf = await sharp(content, {
-        limitInputPixels: SHARP_MAX_PIXELS,
-      })
+      const pngBuf = await openAgentImage(content)
         .png({ compressionLevel: 9, adaptiveFiltering: true, palette: false })
         .toBuffer();
       if (pngBuf.length <= limit) {
@@ -363,26 +382,24 @@ export async function compressAgentUpload(
           note: `已自动无损压缩（${formatSize(originalSize)} → ${formatSize(pngBuf.length)}）。`,
         };
       }
-      const losslessWebp = await sharp(content, {
-        limitInputPixels: SHARP_MAX_PIXELS,
-      })
-        .webp({ lossless: true, effort: 6 })
-        .toBuffer();
-      if (losslessWebp.length <= limit) {
-        return {
-          name: replaceExt(name, ".webp"),
-          mime: "image/webp",
-          content: losslessWebp,
-          compressed: true,
-          mode: "lossless",
-          originalSize,
-          note: `已自动无损压缩为 WebP（${formatSize(originalSize)} → ${formatSize(losslessWebp.length)}）。`,
-        };
+      if (canUseWebp) {
+        const losslessWebp = await openAgentImage(content)
+          .webp({ lossless: true, effort: 6 })
+          .toBuffer();
+        if (losslessWebp.length <= limit) {
+          return {
+            name: replaceExt(name, ".webp"),
+            mime: "image/webp",
+            content: losslessWebp,
+            compressed: true,
+            mode: "lossless",
+            originalSize,
+            note: `已自动无损压缩为 WebP（${formatSize(originalSize)} → ${formatSize(losslessWebp.length)}）。`,
+          };
+        }
       }
-    } else if (mime === "image/webp") {
-      const losslessWebp = await sharp(content, {
-        limitInputPixels: SHARP_MAX_PIXELS,
-      })
+    } else if (mime === "image/webp" && canUseWebp) {
+      const losslessWebp = await openAgentImage(content)
         .webp({ lossless: true, effort: 6 })
         .toBuffer();
       if (losslessWebp.length <= limit) {
@@ -399,29 +416,27 @@ export async function compressAgentUpload(
     }
 
     // 第二阶段：严格无损仍超限时，保持原分辨率进行视觉无损高保真压缩
-    if (mime === "image/jpeg") {
-      for (const quality of [96, 92, 86, 80]) {
-        const jpegBuf = await sharp(content, {
-          limitInputPixels: SHARP_MAX_PIXELS,
-        })
-          .jpeg({ mozjpeg: true, quality, progressive: true })
-          .toBuffer();
-        if (jpegBuf.length <= limit) {
-          return {
-            name,
-            mime: "image/jpeg",
-            content: jpegBuf,
-            compressed: true,
-            mode: "high-fidelity",
-            originalSize,
-            note: `原图超过上限，已自动高清保真压缩（${formatSize(originalSize)} → ${formatSize(jpegBuf.length)}）。`,
-          };
+    if (mime === "image/jpeg" || !canUseWebp) {
+      if (canUseJpeg) {
+        for (const quality of [96, 92, 86, 80]) {
+          const jpegBuf = await openAgentImage(content)
+            .jpeg({ mozjpeg: true, quality, progressive: true })
+            .toBuffer();
+          if (jpegBuf.length <= limit) {
+            return {
+              name: mime === "image/jpeg" ? name : replaceExt(name, ".jpg"),
+              mime: "image/jpeg",
+              content: jpegBuf,
+              compressed: true,
+              mode: "high-fidelity",
+              originalSize,
+              note: `原图超过上限，已自动高清保真压缩（${formatSize(originalSize)} → ${formatSize(jpegBuf.length)}）。`,
+            };
+          }
         }
       }
       for (const side of [4096, 3072, 2400]) {
-        const jpegBuf = await sharp(content, {
-          limitInputPixels: SHARP_MAX_PIXELS,
-        })
+        const jpegBuf = await openAgentImage(content)
           .resize({
             width: side,
             height: side,
@@ -432,7 +447,7 @@ export async function compressAgentUpload(
           .toBuffer();
         if (jpegBuf.length <= limit) {
           return {
-            name,
+            name: mime === "image/jpeg" ? name : replaceExt(name, ".jpg"),
             mime: "image/jpeg",
             content: jpegBuf,
             compressed: true,
@@ -450,11 +465,7 @@ export async function compressAgentUpload(
         { quality: 80, effort: 6 },
       ];
       for (const options of candidates) {
-        const webpBuf = await sharp(content, {
-          limitInputPixels: SHARP_MAX_PIXELS,
-        })
-          .webp(options)
-          .toBuffer();
+        const webpBuf = await openAgentImage(content).webp(options).toBuffer();
         if (webpBuf.length <= limit) {
           return {
             name: replaceExt(name, ".webp"),
@@ -468,9 +479,7 @@ export async function compressAgentUpload(
         }
       }
       for (const side of [4096, 3072, 2400]) {
-        const webpBuf = await sharp(content, {
-          limitInputPixels: SHARP_MAX_PIXELS,
-        })
+        const webpBuf = await openAgentImage(content)
           .resize({
             width: side,
             height: side,
@@ -718,7 +727,7 @@ export async function attachmentContext(
           "所选能力不支持看图，请选择标有“识图”的能力",
           400,
         );
-      const data = await sharp(b)
+      const data = await openAgentImage(b)
         .resize({
           width: 1800,
           height: 1800,
