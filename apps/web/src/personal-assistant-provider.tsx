@@ -199,34 +199,17 @@ export function PersonalAssistantProvider({
   useEffect(() => {
     setSelectedEmployee(undefined);
     setEmployeeDrafts({});
+    setWorkspaceToolsOpen(false);
   }, [user.id]);
-  const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(() => {
-    try {
-      return (
-        localStorage.getItem(`xuti-workspace-tools-open:${user.id}`) === "true"
-      );
-    } catch {
-      return false;
-    }
-  });
+  // 进入或刷新「我的工作台」时右侧工具栏默认保持收起状态，不再从本地存储自动展开。
+  const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(false);
   const [workspaceToolsHost, setWorkspaceToolsHost] =
     useState<HTMLDivElement | null>(null);
   const [workspaceChatHost, setWorkspaceChatHost] =
     useState<HTMLDivElement | null>(null);
-  const setToolsOpen = useCallback(
-    (value: boolean) => {
-      setWorkspaceToolsOpen(value);
-      try {
-        localStorage.setItem(
-          `xuti-workspace-tools-open:${user.id}`,
-          String(value),
-        );
-      } catch {
-        /* Keep the current layout when storage is unavailable. */
-      }
-    },
-    [user.id],
-  );
+  const setToolsOpen = useCallback((value: boolean) => {
+    setWorkspaceToolsOpen(value);
+  }, []);
   const setSection = useCallback(
     (next: AssistantSection) => {
       setSectionState(next);
@@ -357,7 +340,10 @@ export function PersonalAssistantProvider({
   };
   const previousWorkspace = useRef(inWorkspace);
   useEffect(() => {
-    if (previousWorkspace.current && !inWorkspace) setOpen(false);
+    if (previousWorkspace.current && !inWorkspace) {
+      setOpen(false);
+      setWorkspaceToolsOpen(false);
+    }
     previousWorkspace.current = inWorkspace;
   }, [inWorkspace]);
   const chatVisible = docked ? workspaceChatOpen : open && section === "chat";

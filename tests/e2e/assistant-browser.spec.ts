@@ -1130,6 +1130,8 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await browserEntry.click();
   await expect(panel).toBeVisible();
   await page.reload();
+  await expect(panel).toBeHidden();
+  await browserEntry.click();
   await expect(panel).toBeVisible();
   await expect(separator).toHaveAttribute("aria-valuenow", savedWidth!);
   expect(state.requests).toEqual([]);
