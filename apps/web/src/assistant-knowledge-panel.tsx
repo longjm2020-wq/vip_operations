@@ -533,16 +533,19 @@ export function AssistantKnowledgePanel({
     if (!file) return;
     setReadingFile(true);
     try {
-      if (
-        !/\.(md|markdown)$/i.test(file.name) ||
-        file.size > knowledgeContentLimit * 4 + 3
-      )
-        throw new Error("请选择不超过 60000 字符的 UTF-8 Markdown 文件");
+      if (!/\.(md|markdown)$/i.test(file.name))
+        throw new Error("请选择 .md 或 .markdown 格式的 Markdown 文件");
+      if (file.size > knowledgeContentLimit * 4 + 3)
+        throw new Error(
+          `请选择不超过 ${knowledgeContentLimit} 字符的 UTF-8 Markdown 文件`,
+        );
       const content = new TextDecoder("utf-8", { fatal: true }).decode(
         await file.arrayBuffer(),
       );
+      if (content.includes("\0"))
+        throw new Error("文件内容包含无效字符，请确认是纯文本 Markdown 文件");
       if (!content.trim() || content.length > knowledgeContentLimit)
-        throw new Error("笔记正文需为 1 至 60000 字符");
+        throw new Error(`笔记正文需为 1 至 ${knowledgeContentLimit} 字符`);
       setDraft({
         ...blankDraft(),
         title: file.name

@@ -47,6 +47,7 @@ import {
   employeeKnowledgeStillCurrent,
   searchEmployeeKnowledge,
 } from "../../apps/api/src/modules/workspace/assistant-knowledge.js";
+import { knowledgeContentLimit } from "../../packages/contracts/src/assistant-knowledge.js";
 import { indexKnowledgeMarkdown } from "../../apps/api/src/modules/workspace/knowledge-markdown.js";
 
 const owner = (id: string): Context => ({
@@ -80,6 +81,12 @@ beforeAll(async () => {
   await fixture.db.exec(
     await readFile(
       "packages/database/migrations/110_assistant_knowledge.sql",
+      "utf8",
+    ),
+  );
+  await fixture.db.exec(
+    await readFile(
+      "packages/database/migrations/112_assistant_knowledge_content_limit.sql",
       "utf8",
     ),
   );
@@ -277,4 +284,18 @@ it("keeps excerpts bounded, skips example links, and preserves headings across c
     expect(section.heading).toBe("标题");
     expect(section.excerpt.length).toBeLessThanOrEqual(900);
   }
+});
+
+it("accepts long Markdown notes above 60000 characters up to knowledgeContentLimit", async () => {
+  const longBody = `# 长文档规范\n${"棉质说明".repeat(30_000)}\n## 结尾要求\n末尾水洗标必须清晰。`;
+  expect(longBody.length).toBeGreaterThan(120_000);
+  const draft = note("长文档规范", longBody, [employee]);
+  const saved = await saveKnowledge(first, draft);
+  expect(saved.content.length).toBe(longBody.length);
+  expect(await searchEmployeeKnowledge("1", employee, "水洗标")).toMatchObject([
+    { noteId: draft.id, heading: "结尾要求" },
+  ]);
+  await expect(
+    saveKnowledge(first, note("超限笔记", "a".repeat(knowledgeContentLimit + 1))),
+  ).rejects.toThrow();
 });

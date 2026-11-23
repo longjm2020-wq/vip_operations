@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const knowledgeTitleLimit = 160;
-export const knowledgeContentLimit = 60_000;
+export const knowledgeContentLimit = 1_000_000;
 const textValue = z
   .string()
   .refine((value) => !value.includes("\0"), "文本包含无效字符");
