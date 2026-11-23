@@ -24,13 +24,22 @@ vi.mock("../../packages/database/src/index.js", async importOriginal => {
     fixture.transactions.push(options);
     return fixture.database!.transaction(async tx => work(wrap(tx)));
   };
-  return { ...original, db: { $transaction: transaction } };
+  return {
+    ...original,
+    db: {
+      $transaction: transaction,
+      $queryRawUnsafe: async (query: string, ...values: unknown[]) =>
+        wrap(fixture.database!).$queryRawUnsafe(query, ...values),
+      $executeRawUnsafe: async (query: string, ...values: unknown[]) =>
+        wrap(fixture.database!).$executeRawUnsafe(query, ...values),
+    },
+  };
 });
 
 import { inventorySummary } from "../../apps/api/src/modules/inventory/summary.js";
 import { replenishmentPolicy, saveReplenishmentPolicy } from "../../apps/api/src/modules/inventory/replenishment-policy.js";
 import { defaultReplenishmentPolicy } from "../../packages/contracts/src/inventory-replenishment.js";
-import { beginImport, finishImport } from "../../apps/api/src/modules/analytics/service.js";
+import { beginImport, dashboard, entityTrend, finishImport } from "../../apps/api/src/modules/analytics/service.js";
 import { camel, db } from "../../packages/database/src/index.js";
 
 const query = async (text: string, values: unknown[] = []) =>
@@ -348,26 +357,48 @@ describe("complete barcode daily history and inventory median windows", () => {
     expect(result.reportCoverage.window.coveredDays).toBe(3);
   });
 
-  it("keeps copied history after 45-day raw import cleanup and prevents historical normalization downgrade", async () => {
+  it("retains previously imported reports beyond 45 days and prevents historical normalization downgrade", async () => {
     const hash = "a".repeat(64);
     const old = await report("2026-06-01", "2026-06-03", { hash }); await finish(old);
-    await query("UPDATE compass_imports SET created_at=now()-interval '46 days' WHERE id=$1", [old]);
+    await query("UPDATE compass_imports SET created_at=now()-interval '60 days' WHERE id=$1", [old]);
     await finish(await report("2026-10-13", day));
-    expect(await query("SELECT * FROM compass_imports WHERE id=$1", [old])).toEqual([]);
+    expect((await query("SELECT id FROM compass_imports WHERE id=$1", [old])).length).toBe(1);
     expect((await query("SELECT count(*)::int AS n FROM compass_barcode_history_records WHERE barcode='001234' AND business_date<'2026-10-01'"))[0].n).toBe(3);
-    // Another file can win every historical day; the old file's parser version
-    // still has to remain protected after its raw import and daily pointers go.
     await finish(await report("2026-06-01", "2026-06-03", { sales: 5 }));
     const downgrade = await report("2026-06-01", "2026-06-03", { hash, version: 1 });
     await expect(finish(downgrade)).rejects.toMatchObject({ response: { error: { code: "OLD_NORMALIZATION" } } });
     expect((await query("SELECT normalization_version FROM compass_barcode_history_days WHERE business_date='2026-06-01'"))[0].normalization_version).toBe(3);
   });
 
-  it("retains old-report rejection for non-barcode analytics and validates period inputs", async () => {
-    await finish(await report("2026-10-13", day, { dimension: "style" }));
-    await expect(finish(await report("2026-09-01", "2026-09-03", { dimension: "style" }))).rejects.toMatchObject({ response: { error: { code: "OLD_REPORT" } } });
+  it("supports >30-day lookback across retained historical style imports without double-counting overlaps or rolling back active source", async () => {
+    const firstBatch = await report("2026-08-01", "2026-08-30", { dimension: "style", sales: 2 });
+    await finish(firstBatch);
+    await query("UPDATE compass_imports SET created_at=now()-interval '70 days' WHERE id=$1", [firstBatch]);
+    const secondBatch = await report("2026-08-26", "2026-09-24", { dimension: "style", sales: 4 });
+    await finish(secondBatch);
+    const latestBatch = await report("2026-09-20", "2026-10-19", { dimension: "style", sales: 6 });
+    await finish(latestBatch);
+    // 导入更早区间的历史补导不应回退当前活跃来源，且可立即参与回看
+    const backfill = await report("2026-07-15", "2026-07-31", { dimension: "style", sales: 1 });
+    await finish(backfill);
+    expect(String((await query("SELECT import_id FROM compass_active_imports WHERE dimension='style'"))[0].import_id)).toBe(latestBatch);
+    expect((await query("SELECT id FROM compass_imports WHERE id=$1", [firstBatch])).length).toBe(1);
+
+    const view = await dashboard({ dimension: "style", startDate: "2026-07-15", endDate: "2026-10-19" }, db);
+    // 17 天(sales=1) + 25 天(08-01..08-25, sales=2) + 25 天(08-26..09-19, sales=4) + 30 天(09-20..10-19, sales=6) = 97 天
+    expect(view.complete).toBe(true);
+    expect(view.days).toBe(97);
+    expect(view.daily).toHaveLength(97);
+    expect(Number(view.summary.salesQty)).toBe(17 * 1 + 25 * 2 + 25 * 4 + 30 * 6);
+    expect(view.source?.history_start_date).toBe("2026-07-15");
+    expect(view.source?.history_end_date).toBe("2026-10-19");
+
+    const trend = await entityTrend({ dimension: "style", code: "STYLE", startDate: "2026-07-15", endDate: "2026-10-19" }, db);
+    expect(trend.daily).toHaveLength(97);
+    expect(Number(trend.daily[0].salesQty)).toBe(1);
+    expect(Number(trend.daily[trend.daily.length - 1].salesQty)).toBe(6);
     await expect(summary({ referencePeriod: "365d" })).rejects.toThrow();
-  });
+  }, 20000);
 
   describe("inventory listing cards and filters", () => {
     const cards = (extra: Row = {}) => summary({ skuId: undefined, q: "CARDS", ...extra });

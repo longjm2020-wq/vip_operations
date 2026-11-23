@@ -198,8 +198,6 @@ export async function finishImport(c: Context, value: string) {
       task.dimension, task.file_hash, task.normalization_version);
     if (higherNormalization)
       fail("OLD_NORMALIZATION", "此报表已补充新字段，请刷新页面后重新导入", 400);
-    if (active && active.end_date > task.end_date && task.dimension !== "barcode")
-      fail("OLD_REPORT", "已有更新日期的报表，不能用旧报表覆盖", 400);
     if (active && active.file_hash === task.file_hash && active.normalization_version > task.normalization_version)
       fail("OLD_NORMALIZATION", "此报表已补充新字段，请刷新页面后重新导入", 400);
     const result = await one(
@@ -207,9 +205,10 @@ export async function finishImport(c: Context, value: string) {
       "UPDATE compass_imports SET status='COMPLETE',completed_at=now() WHERE id=$1::bigint RETURNING *",
       importId,
     );
-    // Historical barcode segments enrich inventory references without rolling
-    // the current analytics panel back to an older reporting date.
-    const useForPanel = !active || task.dimension !== "barcode" || task.end_date > active.end_date ||
+    // 保留所有已完整导入的历史报表，较早区间的历史补导仅补充历史数据，不回退当前最新活跃来源。
+    const useForPanel =
+      !active ||
+      task.end_date > active.end_date ||
       (task.end_date >= active.end_date && task.start_date <= active.start_date);
     if (useForPanel) {
       await tx.$executeRawUnsafe(
@@ -225,17 +224,16 @@ export async function finishImport(c: Context, value: string) {
       start: task.start_date,
       end: task.end_date,
     });
-    // Active snapshots are immutable; retain recent imports without letting daily files grow indefinitely.
-    await tx.$executeRawUnsafe(
-      "DELETE FROM compass_imports WHERE created_at<now()-interval '45 days' AND id NOT IN(SELECT import_id FROM compass_active_imports)",
-    );
     return result;
   });
 }
 export async function compassSources(tx: Tx = db) {
   return rows(
     tx,
-    "SELECT i.id,i.dimension,i.file_name,i.start_date::text,i.end_date::text,i.expected_rows,i.completed_at FROM compass_active_imports a JOIN compass_imports i ON i.id=a.import_id ORDER BY i.dimension",
+    `SELECT i.id,i.dimension,i.file_name,i.start_date::text,i.end_date::text,i.expected_rows,i.completed_at,
+      coalesce((SELECT min(h.start_date)::text FROM compass_imports h WHERE h.dimension=i.dimension AND h.status='COMPLETE'),i.start_date::text) AS history_start_date,
+      coalesce((SELECT max(h.end_date)::text FROM compass_imports h WHERE h.dimension=i.dimension AND h.status='COMPLETE'),i.end_date::text) AS history_end_date
+     FROM compass_active_imports a JOIN compass_imports i ON i.id=a.import_id ORDER BY i.dimension`,
   );
 }
 const querySchema = z.object({
@@ -280,6 +278,19 @@ const metricSQL = (prefix: string) =>
       (k) => `sum((${prefix}payload->'metrics'->>'${k}')::numeric) AS "${k}"`,
     )
     .join(",");
+/** 按日期从该维度全部已完成的历史导入中选出每日最新有效来源，避免重叠日期重复累计。 */
+const daySourceCte = `day_source AS MATERIALIZED (
+  SELECT DISTINCT ON (d::date) d::date AS business_date, i.id AS import_id
+  FROM compass_imports i
+  CROSS JOIN LATERAL generate_series(
+    GREATEST(i.start_date, $2::date)::timestamp,
+    LEAST(i.end_date, $3::date)::timestamp,
+    interval '1 day'
+  ) AS d
+  WHERE i.dimension=$1 AND i.status='COMPLETE' AND i.start_date<=$3::date AND i.end_date>=$2::date
+  ORDER BY d::date, i.end_date DESC, COALESCE(i.completed_at, i.created_at) DESC, i.normalization_version DESC, i.id DESC
+)`;
+
 export async function dashboard(
   input: unknown,
   tx: Tx = db,
@@ -313,9 +324,10 @@ export async function dashboard(
   }[b.dimension];
   let search: ReturnType<typeof parseCompassSearch>;
   try { search = parseCompassSearch(b.q); } catch (e) { fail("INVALID_SEARCH", (e as Error).message, 400); }
-  const params = [source.id, startDate, endDate, search.text, b.styleNo, b.articleNo, search.batch ? search.codes : null];
-  const where = `import_id=$1::bigint AND business_date BETWEEN $2::date AND $3::date AND ($4='' OR ($7::text[] IS NULL AND position(lower($4) in lower(style_no||' '||article_no||' '||barcode||' '||coalesce(payload->>'category','')||' '||coalesce(payload->>'size','')))>0) OR ($7::text[] IS NOT NULL AND (lower(style_no)=ANY($7::text[]) OR lower(article_no)=ANY($7::text[]) OR lower(barcode)=ANY($7::text[])))) AND ($5='' OR lower(trim(style_no))=lower($5)) AND ($6='' OR article_no=$6)`;
-  const cte = `WITH filtered AS (SELECT * FROM compass_records WHERE ${where}), grouped AS (SELECT ${column} AS code,
+  const params = [b.dimension, startDate, endDate, search.text, b.styleNo, b.articleNo, search.batch ? search.codes : null];
+  const recordFilter = `($4='' OR ($7::text[] IS NULL AND position(lower($4) in lower(r.style_no||' '||r.article_no||' '||r.barcode||' '||coalesce(r.payload->>'category','')||' '||coalesce(r.payload->>'size','')))>0) OR ($7::text[] IS NOT NULL AND (lower(r.style_no)=ANY($7::text[]) OR lower(r.article_no)=ANY($7::text[]) OR lower(r.barcode)=ANY($7::text[])))) AND ($5='' OR lower(trim(r.style_no))=lower($5)) AND ($6='' OR r.article_no=$6)`;
+  const filteredCte = `WITH ${daySourceCte}, filtered AS (SELECT r.* FROM day_source ds JOIN compass_records r ON r.import_id=ds.import_id AND r.business_date=ds.business_date WHERE ${recordFilter})`;
+  const cte = `${filteredCte}, grouped AS (SELECT ${column} AS code,
     min(style_no) AS style_no,min(article_no) AS article_no,min(barcode) AS barcode,
     (array_agg(payload->>'image' ORDER BY business_date DESC) FILTER(WHERE payload->>'image'<>''))[1] AS image,
     (array_agg((payload->>'saleAge')::numeric ORDER BY business_date DESC,entity_key) FILTER(WHERE payload->>'saleAge' IS NOT NULL))[1] AS "saleAge",
@@ -325,14 +337,21 @@ export async function dashboard(
     sum((payload->'metrics'->>'onSaleStock')::numeric) FILTER(WHERE business_date=$3::date) AS "onSaleStock",
     sum((payload->'metrics'->>'saleableStock')::numeric) FILTER(WHERE business_date=$3::date) AS "saleableStock",
     max(business_date)::text AS last_date FROM filtered GROUP BY ${column})`;
+  const coverageRow = await one(
+    tx,
+    `WITH ${daySourceCte} SELECT count(*)::int AS days FROM day_source`,
+    b.dimension,
+    startDate,
+    endDate,
+  );
   const summary = await one(
     tx,
-    `SELECT ${metricSQL("")},sum((payload->'metrics'->>'onSaleStock')::numeric) FILTER(WHERE business_date=$3::date) AS "onSaleStock",sum((payload->'metrics'->>'saleableStock')::numeric) FILTER(WHERE business_date=$3::date) AS "saleableStock",count(DISTINCT ${column})::int AS entities,count(DISTINCT business_date)::int AS covered_days FROM compass_records WHERE ${where}`,
+    `${filteredCte} SELECT ${metricSQL("")},sum((payload->'metrics'->>'onSaleStock')::numeric) FILTER(WHERE business_date=$3::date) AS "onSaleStock",sum((payload->'metrics'->>'saleableStock')::numeric) FILTER(WHERE business_date=$3::date) AS "saleableStock",count(DISTINCT ${column})::int AS entities,count(DISTINCT business_date)::int AS covered_days FROM filtered`,
     ...params,
   );
   const daily = await rows(
     tx,
-    `SELECT business_date::text AS date,${metricSQL("")} FROM compass_records WHERE ${where} GROUP BY business_date ORDER BY business_date`,
+    `${filteredCte} SELECT business_date::text AS date,${metricSQL("")} FROM filtered GROUP BY business_date ORDER BY business_date`,
     ...params,
   );
   const total = await one(
@@ -359,7 +378,7 @@ export async function dashboard(
   );
   const format = (row: any) => ({ ...json(row), ...compassRatios(row) });
   const miniRows = b.miniMetric && items.length ? await rows(tx,
-    `SELECT ${column} AS code,business_date::text AS date,sum((payload->'metrics'->>'${b.miniMetric}')::numeric) AS value FROM compass_records WHERE ${where} AND ${column}=ANY($8::text[]) GROUP BY ${column},business_date ORDER BY business_date`,
+    `${filteredCte} SELECT ${column} AS code,business_date::text AS date,sum((payload->'metrics'->>'${b.miniMetric}')::numeric) AS value FROM filtered WHERE ${column}=ANY($8::text[]) GROUP BY ${column},business_date ORDER BY business_date`,
     ...params, items.map(item => item.code)) : [];
   const miniature = new Map<string, any[]>();
   for (const row of miniRows) {
@@ -367,7 +386,7 @@ export async function dashboard(
     points.push({date:row.date,value:row.value});
     miniature.set(row.code,points);
   }
-  const complete = startDate >= source.start_date && endDate <= source.end_date;
+  const complete = Number(coverageRow?.days || 0) === periodDays;
   return {
     sources,
     dimension: b.dimension,
@@ -407,12 +426,15 @@ export async function entityTrend(input: unknown, tx: Tx = db) {
   const column = {style:"style_no",article:"article_no",barcode:"barcode"}[b.dimension];
   let search: ReturnType<typeof parseCompassSearch>;
   try { search = parseCompassSearch(b.q); } catch (e) { fail("INVALID_SEARCH", (e as Error).message,400); }
-  const daily = await rows(tx,`SELECT business_date::text AS date,${metricSQL("")},
-    sum((payload->'metrics'->>'onSaleStock')::numeric) AS "onSaleStock",sum((payload->'metrics'->>'saleableStock')::numeric) AS "saleableStock",
-    (array_agg((payload->>'saleAge')::numeric ORDER BY entity_key) FILTER(WHERE payload->>'saleAge' IS NOT NULL))[1] AS "saleAge",
-    sum((payload->'metrics'->>'returnsQty')::numeric)+sum((payload->'metrics'->>'rejectedQty')::numeric) AS "rejectedReturnQty"
-    FROM compass_records WHERE import_id=$1::bigint AND business_date BETWEEN $2::date AND $3::date AND ${column}=$4 AND ($5='' OR lower(trim(style_no))=lower($5)) AND ($6='' OR article_no=$6)
-    AND ($7='' OR ($8::text[] IS NULL AND position(lower($7) in lower(style_no||' '||article_no||' '||barcode||' '||coalesce(payload->>'category','')||' '||coalesce(payload->>'size','')))>0) OR ($8::text[] IS NOT NULL AND (lower(style_no)=ANY($8::text[]) OR lower(article_no)=ANY($8::text[]) OR lower(barcode)=ANY($8::text[]))))
-    GROUP BY business_date ORDER BY business_date`,source.id,startDate,endDate,b.code,b.styleNo,b.articleNo,search.text,search.batch ? search.codes : null);
+  const daily = await rows(tx,`WITH ${daySourceCte}
+    SELECT r.business_date::text AS date,${metricSQL("r.")},
+    sum((r.payload->'metrics'->>'onSaleStock')::numeric) AS "onSaleStock",sum((r.payload->'metrics'->>'saleableStock')::numeric) AS "saleableStock",
+    (array_agg((r.payload->>'saleAge')::numeric ORDER BY r.entity_key) FILTER(WHERE r.payload->>'saleAge' IS NOT NULL))[1] AS "saleAge",
+    sum((r.payload->'metrics'->>'returnsQty')::numeric)+sum((r.payload->'metrics'->>'rejectedQty')::numeric) AS "rejectedReturnQty"
+    FROM day_source ds
+    JOIN compass_records r ON r.import_id=ds.import_id AND r.business_date=ds.business_date
+    WHERE r.${column}=$4 AND ($5='' OR lower(trim(r.style_no))=lower($5)) AND ($6='' OR r.article_no=$6)
+    AND ($7='' OR ($8::text[] IS NULL AND position(lower($7) in lower(r.style_no||' '||r.article_no||' '||r.barcode||' '||coalesce(r.payload->>'category','')||' '||coalesce(r.payload->>'size','')))>0) OR ($8::text[] IS NOT NULL AND (lower(r.style_no)=ANY($8::text[]) OR lower(r.article_no)=ANY($8::text[]) OR lower(r.barcode)=ANY($8::text[]))))
+    GROUP BY r.business_date ORDER BY r.business_date`,b.dimension,startDate,endDate,b.code,b.styleNo,b.articleNo,search.text,search.batch ? search.codes : null);
   return {dimension:b.dimension,code:b.code,startDate,endDate,sourceId:String(source.id),daily:daily.map(row=>({...json(row),...compassRatios(row)}))};
 }

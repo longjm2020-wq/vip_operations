@@ -503,7 +503,9 @@ export function CompassAnalyticsPage() {
                     日期覆盖不足：{coverage || 0}/{data.days} 天
                   </Tag>
                   <span>
-                    报表覆盖 {data.source.startDate} — {data.source.endDate}
+                    报表覆盖{" "}
+                    {data.source.historyStartDate || data.source.startDate} —{" "}
+                    {data.source.historyEndDate || data.source.endDate}
                   </span>
                 </>
               )}
@@ -645,6 +647,12 @@ export function CompassAnalyticsPage() {
                   {compassLabels[s.dimension as CompassDimension]}：{s.fileName}{" "}
                   · {number(s.expectedRows)} 行 · 更新时间{" "}
                   {new Date(s.completedAt).toLocaleString("zh-CN")}
+                  {s.historyStartDate && s.historyEndDate && (
+                    <>
+                      {" "}
+                      · 历史回看覆盖 {s.historyStartDate} — {s.historyEndDate}
+                    </>
+                  )}
                 </p>
               ))}
             </details>
