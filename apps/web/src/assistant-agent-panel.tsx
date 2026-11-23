@@ -44,10 +44,52 @@ export type AgentOptions = {
 };
 export const agentContentUrl = (id: string) =>
   `/api/v1/my-workspace/assistant/files/${encodeURIComponent(id)}/content`;
+const MiB = 1024 * 1024;
 const sizeLabel = (size: number) =>
-  size < 1048576
+  size < MiB
     ? `${Math.ceil(size / 1024)} KB`
-    : `${(size / 1048576).toFixed(1)} MB`;
+    : `${(size / MiB).toFixed(1)} MB`;
+
+/** 按素材类型计算目标存储上限与允许自动压缩的原始上传上限。 */
+function uploadLimits(file: File): {
+  target: number;
+  raw: number;
+  overflowMessage: string;
+} {
+  const lower = file.name.toLowerCase();
+  const isVideo =
+    file.type.startsWith("video/") || /\.(mp4|mov|webm)$/i.test(lower);
+  if (isVideo) {
+    return {
+      target: 64 * MiB,
+      raw: 200 * MiB,
+      overflowMessage: "单个原视频最大支持200MB（超过64MB将自动压缩）",
+    };
+  }
+  const isImage =
+    file.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(lower);
+  if (isImage) {
+    return {
+      target: 20 * MiB,
+      raw: 100 * MiB,
+      overflowMessage: "单张原图最大支持100MB（超过20MB将自动无损优先压缩）",
+    };
+  }
+  const isOffice = /\.(docx|xlsx|pptx)$/i.test(lower);
+  if (isOffice) {
+    return {
+      target: 20 * MiB,
+      raw: 60 * MiB,
+      overflowMessage: "Office 文档原文件最大支持60MB（超过20MB将自动无损压缩）",
+    };
+  }
+  return {
+    target: 20 * MiB,
+    raw: 20 * MiB,
+    overflowMessage: "该类型文档最大支持20MB",
+  };
+}
+
 export function AgentComposer({
   value,
   change,
@@ -74,13 +116,19 @@ export function AgentComposer({
     setUploading(true);
     onUploading(true);
     const uploaded = [...value.attachments];
+    const progressKey = "agent-file-upload-compress";
     try {
       for (const file of chosen) {
-        if (
-          file.size >
-          (file.type.startsWith("video/") ? 64 : 20) * 1024 * 1024
-        )
-          throw Error("文档/图片最大20MB，视频最大64MB");
+        const limits = uploadLimits(file);
+        if (file.size > limits.raw) throw Error(limits.overflowMessage);
+        const willCompress = file.size > limits.target;
+        if (willCompress) {
+          message.loading({
+            key: progressKey,
+            content: `正在上传并无损优先压缩 ${file.name}（${sizeLabel(file.size)}）…`,
+            duration: 0,
+          });
+        }
         const form = new FormData();
         form.append("file", file);
         const res = await fetch("/api/v1/my-workspace/assistant/files", {
@@ -92,12 +140,26 @@ export function AgentComposer({
           },
           body: form,
         });
-        const data = await res.json();
-        if (!res.ok) throw Error(data.error?.message || "上传失败");
+        const text = await res.text();
+        let data: { data?: AgentFile; error?: { message?: string } } = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch {
+          data = {};
+        }
+        if (willCompress) message.destroy(progressKey);
+        if (!res.ok || !data.data)
+          throw Error(data.error?.message || `上传失败（HTTP ${res.status}）`);
         uploaded.push(data.data);
         change({ ...value, attachments: [...uploaded] });
+        if (willCompress && data.data.size < file.size) {
+          message.success(
+            `${data.data.name} 已自动压缩并上传（${sizeLabel(file.size)} → ${sizeLabel(data.data.size)}）`,
+          );
+        }
       }
     } catch (e) {
+      message.destroy(progressKey);
       message.error((e as Error).message);
     } finally {
       setUploading(false);

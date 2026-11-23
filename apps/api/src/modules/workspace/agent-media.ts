@@ -248,3 +248,131 @@ export async function editVideo(
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+/**
+ * 优先对超大视频执行无损流重封装（剥离冗余元数据与无效轨道）；
+ * 若无损封装后仍超过目标体积，则按目标码率进行高保真 H.264 压缩以落入限制以内。
+ */
+export async function compressVideoUpload(
+  content: Buffer,
+  ext: string,
+  targetBytes: number,
+): Promise<{
+  content: Buffer;
+  ext: ".mp4" | ".webm";
+  mode: "lossless" | "high-fidelity";
+}> {
+  const safeExt = ext === ".webm" ? ".webm" : ext === ".mov" ? ".mov" : ".mp4";
+  const info = await inspectVideo(content);
+  const dir = await mkdtemp(join(tmpdir(), "xuti-compress-"));
+  try {
+    const input = join(dir, `source${safeExt}`);
+    await writeFile(input, content);
+
+    // 第一阶段：严格无损流拷贝 + 清除冗余元数据
+    const remuxExt: ".mp4" | ".webm" = safeExt === ".webm" ? ".webm" : ".mp4";
+    const remuxedPath = join(dir, `remuxed${remuxExt}`);
+    try {
+      const remuxArgs = [
+        "-y",
+        "-protocol_whitelist",
+        "file,pipe",
+        "-i",
+        input,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-c",
+        "copy",
+        "-map_metadata",
+        "-1",
+      ];
+      if (remuxExt === ".mp4") remuxArgs.push("-movflags", "+faststart");
+      remuxArgs.push(remuxedPath);
+      await runMedia(remuxArgs, undefined, 60000);
+      const remuxed = await readFile(remuxedPath);
+      if (remuxed.length > 0 && remuxed.length <= targetBytes) {
+        return { content: remuxed, ext: remuxExt, mode: "lossless" };
+      }
+    } catch {
+      // 部分封装或轨道无法直接 stream copy，回退至高保真重编码
+    }
+
+    // 第二阶段：保持原分辨率与帧率，按目标体积计算高保真码率上限进行 H.264 压缩
+    const totalKbps = Math.floor(
+      ((targetBytes * 0.94) * 8) / Math.max(info.duration, 1) / 1000,
+    );
+    const audioKbps = info.audio
+      ? Math.min(128, Math.max(48, Math.floor(totalKbps * 0.12)))
+      : 0;
+    const videoKbps = Math.max(150, totalKbps - audioKbps);
+    const encodedPath = join(dir, "encoded.mp4");
+
+    const attempts = [
+      {
+        args: [
+          "-c:v",
+          "libx264",
+          "-preset",
+          "medium",
+          "-crf",
+          "18",
+          "-maxrate",
+          `${videoKbps}k`,
+          "-bufsize",
+          `${videoKbps * 2}k`,
+        ],
+      },
+      {
+        args: [
+          "-c:v",
+          "libx264",
+          "-preset",
+          "medium",
+          "-b:v",
+          `${Math.max(120, Math.floor(videoKbps * 0.78))}k`,
+          "-maxrate",
+          `${Math.max(150, Math.floor(videoKbps * 0.85))}k`,
+          "-bufsize",
+          `${Math.max(300, Math.floor(videoKbps * 1.5))}k`,
+        ],
+      },
+    ];
+
+    for (const attempt of attempts) {
+      const encodeArgs = [
+        "-y",
+        "-protocol_whitelist",
+        "file,pipe",
+        "-i",
+        input,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        ...attempt.args,
+        "-pix_fmt",
+        "yuv420p",
+        "-map_metadata",
+        "-1",
+        "-movflags",
+        "+faststart",
+      ];
+      if (info.audio && audioKbps > 0) {
+        encodeArgs.push("-c:a", "aac", "-b:a", `${audioKbps}k`);
+      } else {
+        encodeArgs.push("-an");
+      }
+      encodeArgs.push(encodedPath);
+      await runMedia(encodeArgs, undefined, 240000);
+      const encoded = await readFile(encodedPath);
+      if (encoded.length > 0 && encoded.length <= targetBytes) {
+        return { content: encoded, ext: ".mp4", mode: "high-fidelity" };
+      }
+    }
+    throw Error("视频压缩后仍超过限制，请缩短时长或降低分辨率后重试");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}

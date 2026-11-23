@@ -614,6 +614,36 @@ test("公司知识库卡片的图谱在桌面和手机能原位查看，场景�
   }
 });
 
+test("桌面分屏打开右侧知识库并展示 10 位员工与知识图谱卡片时，不应出现多余滚动条", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1920, height: 960 });
+  const { notes, employees } = await overviewFixture(page, [
+    "A_可复用穿戴商品视频自动拆解编译系统_v3.2.18_正式版",
+  ]);
+  notes[0].employeeIds.push(employees[0].id, employees[1].id);
+  const card = page.getByRole("region", { name: "公司知识库速览" });
+  await card.getByText("知识图谱", { exact: true }).click();
+  await card.getByRole("button", { name: "打开公司知识库" }).click();
+  await expect(
+    page.getByRole("region", { name: "公司知识库", exact: true }),
+  ).toBeVisible();
+  const shelf = page.locator(".workspace-shelf-cards");
+  await expect(card.getByRole("region", { name: "知识图谱速览" })).toBeVisible();
+  for (const size of [
+    { width: 1920, height: 960 },
+    { width: 1440, height: 900 },
+  ]) {
+    await page.setViewportSize(size);
+    const metrics = await shelf.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
+    await assertKnowledgeCardLayout(page);
+  }
+});
+
 test("知识图谱按真实引用和员工授权连线，支持缩放和版本回查", async ({ page }) => {
   const { employees } = await setup(page, 2);
   const first = {

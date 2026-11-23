@@ -211,10 +211,10 @@ body:has(.workspace-columns[data-chat-open="true"])
   .workspace-center .workspace-team-shelf {
     position: relative;
   }
-  /* In stacked layouts, keep room for the docked robot above the composer.
-     The cards scroll together while the view controls and voice prompt stay in place. */
+  /* In stacked layouts, keep room for the docked robot above the composer without
+     artificially clipping the cards on tall desktop split views. */
   .workspace-center .personal-welcome:has(.workspace-kgraph--compact) {
-    max-height: 50%;
+    max-height: max(50%, calc(100% - 200px));
     flex-wrap: nowrap;
   }
   .workspace-center .workspace-team-shelf:has(.workspace-kgraph--compact) {

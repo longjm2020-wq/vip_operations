@@ -3,9 +3,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import JSZip from "jszip";
+import sharp from "sharp";
 import * as XLSX from "xlsx";
 import { createAgentDocument } from "../../apps/api/src/modules/workspace/agent-documents.js";
 import {
+  compressAgentUpload,
   inspectAgentUpload,
   validateOfficeZip,
 } from "../../apps/api/src/modules/workspace/agent-files.js";
@@ -124,6 +126,102 @@ describe("assistant real artifacts", () => {
         (await videoFrames(result, output.duration)).length,
       ).toBeGreaterThan(0);
       expect(progress).toContain(85);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 45000);
+  it("compresses oversized PNG, Office, and video uploads lossless-first to fit target limits", async () => {
+    // 1. 无压缩 PNG 通过无损重编码（PNG level 9 或无损 WebP）缩减至目标大小且像素完全一致
+    const width = 320,
+      height = 320;
+    const rawPixels = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        rawPixels[i] = (x * 3) % 256;
+        rawPixels[i + 1] = (y * 5) % 256;
+        rawPixels[i + 2] = ((x + y) * 2) % 256;
+        rawPixels[i + 3] = 255;
+      }
+    }
+    const bloatedPng = await sharp(rawPixels, {
+      raw: { width, height, channels: 4 },
+    })
+      .png({ compressionLevel: 0 })
+      .toBuffer();
+    expect(bloatedPng.length).toBeGreaterThan(100_000);
+    const pngLimit = Math.floor(bloatedPng.length * 0.45);
+    const compressedImg = await compressAgentUpload(
+      "lookbook.png",
+      bloatedPng,
+      pngLimit,
+    );
+    expect(compressedImg.compressed).toBe(true);
+    expect(compressedImg.mode).toBe("lossless");
+    expect(compressedImg.content.length).toBeLessThanOrEqual(pngLimit);
+    const decodedPixels = await sharp(compressedImg.content)
+      .ensureAlpha()
+      .raw()
+      .toBuffer();
+    expect(decodedPixels.equals(rawPixels)).toBe(true);
+
+    // 2. 未压缩 STORE 的 Office docx 通过 DEFLATE 9 级严格无损压缩，正文完整可读
+    const zip = new JSZip();
+    const xmlPayload = `<w:document><w:body><w:p>${"服装质检标准细节说明。".repeat(4000)}</w:p></w:body></w:document>`;
+    zip.file("word/document.xml", xmlPayload);
+    const storedDocx = await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "STORE",
+    });
+    const docxLimit = Math.floor(storedDocx.length * 0.25);
+    const compressedDocx = await compressAgentUpload(
+      "质检规范.docx",
+      storedDocx,
+      docxLimit,
+    );
+    expect(compressedDocx.compressed).toBe(true);
+    expect(compressedDocx.mode).toBe("lossless");
+    expect(compressedDocx.content.length).toBeLessThanOrEqual(docxLimit);
+    const parsedDocx = await inspectAgentUpload(
+      compressedDocx.name,
+      compressedDocx.content,
+    );
+    expect(parsedDocx.text).toContain("服装质检标准细节说明");
+
+    // 3. 超限视频压缩至目标大小且保持可播放与完整时长
+    const dir = await mkdtemp(join(tmpdir(), "assistant-compress-video-"));
+    try {
+      const sourcePath = join(dir, "high-bitrate.mp4");
+      await runMedia([
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=640x360:rate=24:duration=3",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "0",
+        "-pix_fmt",
+        "yuv420p",
+        "-threads",
+        "1",
+        sourcePath,
+      ]);
+      const rawVideo = await readFile(sourcePath);
+      const videoLimit = Math.floor(rawVideo.length * 0.45);
+      const compressedVideo = await compressAgentUpload(
+        "raw-shoot.mov",
+        rawVideo,
+        videoLimit,
+      );
+      expect(compressedVideo.compressed).toBe(true);
+      expect(compressedVideo.content.length).toBeLessThanOrEqual(videoLimit);
+      expect(compressedVideo.mime).toBe("video/mp4");
+      const videoMeta = await inspectVideo(compressedVideo.content);
+      expect(videoMeta.duration).toBeCloseTo(3, 0);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
