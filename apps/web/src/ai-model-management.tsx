@@ -1,5 +1,6 @@
 import { BailianChatSettings } from "./bailian-chat-settings";
 import { AgentAiSettings } from "./agentai-settings";
+import { SmartModelPanel } from "./smart-model-panel";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Alert,
@@ -20,6 +21,7 @@ import {
   ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
+  ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
@@ -170,6 +172,13 @@ export function AiModelManagementPage({
         subtitle="按功能管理模型、连接和实际消耗"
         extra={
           <>
+            <Button
+              type="primary"
+              icon={<ThunderboltOutlined />}
+              onClick={() => setDrawer("smart")}
+            >
+              智选模型
+            </Button>
             <Button
               icon={<SettingOutlined />}
               aria-label="OpenRouter 连接配置"
@@ -509,25 +518,34 @@ export function AiModelManagementPage({
       </Modal>
       <Drawer
         title={
-          drawer === "aigc"
-            ? "AIGC 模型与工作流连接"
-            : drawer === "bailian-chat"
-              ? "百炼聊天连接"
-              : drawer === "agentai"
-                ? "AgentAI 模型连接"
-                : "语音模型配置"
+          drawer === "smart"
+            ? "智选模型与算力中转站"
+            : drawer === "aigc"
+              ? "AIGC 模型与工作流连接"
+              : drawer === "bailian-chat"
+                ? "百炼聊天连接"
+                : drawer === "agentai"
+                  ? "AgentAI 模型连接"
+                  : "语音模型配置"
         }
         open={!!drawer}
-        width={drawer === "agentai" ? 960 : 680}
+        width={drawer === "smart" ? 1080 : drawer === "agentai" ? 960 : 680}
         destroyOnHidden
         onClose={() => {
           setDrawer(undefined);
           void refresh();
         }}
       >
-        {drawer === "agentai" ? (
+        {drawer === "smart" ? (
+          <SmartModelPanel
+            onApplied={() => {
+              void refresh();
+            }}
+          />
+        ) : drawer === "agentai" ? (
           <AgentAiSettings
             initialAudio={audioEntry}
+            onOpenSmart={() => setDrawer("smart")}
             saved={() => {
               void refresh();
               void client.invalidateQueries({

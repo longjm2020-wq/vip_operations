@@ -3,7 +3,7 @@ import {
   saveBailianChat,
   testBailianChat,
 } from "./modules/workspace/bailian-chat.js";
-import { Controller, Get, Post, Body, Query, Req, Res } from "@nestjs/common";
+import { Controller, Get, Post, Body, Param, Query, Req, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { AuthRequest, context, Permission } from "./http.js";
 import {
@@ -17,9 +17,62 @@ import {
   testAgentAiModel,
   refreshAgentAiPrices,
 } from "./modules/workspace/agentai-connection.js";
+import {
+  applySmartAllocations,
+  deleteRelayStation,
+  probeRelayStationModel,
+  readSmartModelsOverview,
+  saveRelayStation,
+  saveSmartModelPolicy,
+  syncRelayStation,
+} from "./modules/workspace/smart-models.js";
 
 @Controller("api/v1/ai-model-management")
 export class AiModelManagementController {
+  @Get("smart") @Permission("analytics.manage") readSmart(
+    @Req() req: AuthRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader("Cache-Control", "private, no-store");
+    return readSmartModelsOverview(context(req));
+  }
+  @Post("smart/policy") @Permission("analytics.manage") saveSmartPolicy(
+    @Req() req: AuthRequest,
+    @Body() body: unknown,
+  ) {
+    return saveSmartModelPolicy(context(req), body);
+  }
+  @Post("smart/stations") @Permission("analytics.manage") saveSmartStation(
+    @Req() req: AuthRequest,
+    @Body() body: unknown,
+  ) {
+    return saveRelayStation(context(req), body);
+  }
+  @Post("smart/stations/:id/sync") @Permission("analytics.manage") syncSmartStation(
+    @Req() req: AuthRequest,
+    @Param("id") id: string,
+  ) {
+    return syncRelayStation(context(req), id);
+  }
+  @Post("smart/stations/:id/probe") @Permission("analytics.manage") probeSmartStation(
+    @Req() req: AuthRequest,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return probeRelayStationModel(context(req), id, body);
+  }
+  @Post("smart/stations/:id/delete") @Permission("analytics.manage") deleteSmartStation(
+    @Req() req: AuthRequest,
+    @Param("id") id: string,
+  ) {
+    return deleteRelayStation(context(req), id);
+  }
+  @Post("smart/apply") @Permission("analytics.manage") applySmart(
+    @Req() req: AuthRequest,
+    @Body() body: unknown,
+  ) {
+    return applySmartAllocations(context(req), body);
+  }
   @Get("agentai") @Permission("analytics.manage") readAgentAi(
     @Req() req: AuthRequest,
     @Res({ passthrough: true }) res: Response,

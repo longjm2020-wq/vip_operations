@@ -20,7 +20,12 @@ const sharedFeatures = [
 
 /** Read current server receipts; listing models never sends a paid probe. */
 export async function connectedModelRefs(
-  models: { id: string; actual: string; provider?: "bailian" | "agentai" }[],
+  models: {
+    id: string;
+    actual: string;
+    provider?: "bailian" | "agentai" | "relay";
+    stationId?: string;
+  }[],
 ): Promise<Set<string>> {
   if (!models.length || !encryptionReady()) return new Set();
   const latest = await rows(
@@ -98,6 +103,55 @@ export async function connectedModelRefs(
         )
       )
         result.add(model.id);
+  }
+  const relayModels = models.filter((model) => model.provider === "relay");
+  if (relayModels.length) {
+    try {
+      const stations = await rows(
+        db,
+        `SELECT id::text, base_url, enabled, api_key_encrypted IS NOT NULL AS configured,
+                probe_stats, updated_at
+         FROM public.ai_relay_stations
+         WHERE enabled AND api_key_encrypted IS NOT NULL`,
+      );
+      for (const st of stations) {
+        const probeStats =
+          st.probe_stats && typeof st.probe_stats === "object"
+            ? (st.probe_stats as Record<string, { verifiedAt?: string | null }>)
+            : {};
+        let hostname = "";
+        try {
+          hostname = new URL(String(st.base_url)).hostname;
+        } catch {
+          continue;
+        }
+        const stationModels = relayModels.filter((m) => m.stationId === st.id);
+        const receipts =
+          hostname && stationModels.length
+            ? await rows(
+                db,
+                `SELECT DISTINCT ON(u.model) u.model, u.status
+                 FROM public.ai_model_usage u
+                 WHERE u.source=$1 AND u.model=ANY($2::text[])
+                   AND u.started_at >= $3::timestamptz
+                   AND u.status IN ('success','failed','responded')
+                 ORDER BY u.model, u.started_at DESC, u.id DESC`,
+                hostname,
+                stationModels.map((m) => m.actual),
+                st.updated_at,
+              )
+            : [];
+        for (const m of stationModels) {
+          const probed = Boolean(probeStats[m.actual]?.verifiedAt);
+          const recentOk = receipts.some(
+            (r) => r.model === m.actual && r.status === "success",
+          );
+          if (probed || recentOk) result.add(m.id);
+        }
+      }
+    } catch {
+      /* Minimal unit tests may omit ai_relay_stations. */
+    }
   }
   return result;
 }

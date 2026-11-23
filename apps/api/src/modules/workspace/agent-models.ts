@@ -19,6 +19,7 @@ import {
   safeConnectedModelRefs,
 } from "./model-fallback.js";
 import { agentaiModelCandidates } from "./agentai-connection.js";
+import { relayModelCandidates } from "./smart-models.js";
 
 export const modelRef = (id: string) =>
   "engine/" + createHash("sha256").update(id).digest("hex").slice(0, 24);
@@ -26,7 +27,9 @@ const flashModel = "deepseek/deepseek-v4.1-flash-1017";
 const flashCanonicalModel = "deepseek/deepseek-v4.1-flash-20261017";
 export type AgentInternalModel = AgentModel & {
   actual: string;
-  provider?: "bailian" | "agentai";
+  provider?: "bailian" | "agentai" | "relay";
+  stationId?: string;
+  stationName?: string;
   chatVerifiedAt?: string | null;
   reasoningEffort?: "none";
 };
@@ -203,13 +206,17 @@ export async function publicAgentCatalog(): Promise<AgentCatalog> {
   const connected = await safeConnectedModelRefs(data.models);
   const models = data.models.filter((model) => connected.has(model.id));
   const configured = (await featureModelRef("assistant_chat")) || primary.id;
-  const fallback = configured.startsWith("agentai/")
-    ? undefined
-    : firstEligibleConnected(
-        models,
-        connected,
-        (model) => model.vision === true && model.provider !== "agentai",
-      );
+  const fallback =
+    configured.startsWith("agentai/") || configured.startsWith("relay/")
+      ? undefined
+      : firstEligibleConnected(
+          models,
+          connected,
+          (model) =>
+            model.vision === true &&
+            model.provider !== "agentai" &&
+            model.provider !== "relay",
+        );
   const defaultModel = models.some((model) => model.id === configured)
     ? configured
     : fallback?.id || configured;
@@ -219,6 +226,8 @@ export async function publicAgentCatalog(): Promise<AgentCatalog> {
       ({
         actual: _actual,
         provider: _provider,
+        stationId: _stationId,
+        stationName: _stationName,
         reasoningEffort: _reasoningEffort,
         ...m
       }) => m,
@@ -243,6 +252,7 @@ export async function publicAgentCatalog(): Promise<AgentCatalog> {
 
 async function chatModelPool(requested?: string): Promise<Model[]> {
   if (requested?.startsWith("agentai/")) return agentaiModelCandidates();
+  if (requested?.startsWith("relay/")) return relayModelCandidates();
   const baseline: Model[] = [primary, bailian];
   if (!requested || baseline.some((model) => model.id === requested))
     return baseline;
@@ -286,6 +296,27 @@ export async function resolveChatModel(
       );
     return { model: preferred, notice: "" };
   }
+  if (requested?.startsWith("relay/")) {
+    if (!preferred || preferred.provider !== "relay")
+      fail(
+        "RELAY_MODEL_UNAVAILABLE",
+        "此算力中转站型号已不在当前可用目录；未自动切换线路",
+        409,
+      );
+    if (!preferred.chatVerifiedAt || !connected.has(preferred.id))
+      fail(
+        "RELAY_MODEL_UNVERIFIED",
+        "此算力中转站型号尚未测速验证或最近调用失败，请在智选模型中测速验证；未自动切换线路",
+        409,
+      );
+    if (!eligible(preferred))
+      fail(
+        "AI_MODEL_CAPABILITY",
+        "此中转站型号不支持本次附件类型，请选择匹配型号",
+        409,
+      );
+    return { model: preferred, notice: "" };
+  }
   if (
     preferred &&
     eligible(preferred) &&
@@ -295,7 +326,10 @@ export async function resolveChatModel(
   const fallback = firstEligibleConnected(
     pool,
     connected,
-    (model) => model.provider !== "agentai" && eligible(model),
+    (model) =>
+      model.provider !== "agentai" &&
+      model.provider !== "relay" &&
+      eligible(model),
     preferred ? [preferred.id] : [],
   );
   if (fallback)
@@ -315,7 +349,8 @@ export async function fallbackChatModel(
   current: Model,
   needs: { vision?: boolean; pdf?: boolean } = {},
 ) {
-  if (current.provider === "agentai") return undefined;
+  if (current.provider === "agentai" || current.provider === "relay")
+    return undefined;
   let models: Model[] = [primary, bailian];
   try {
     models = (await catalog()).models;
@@ -328,6 +363,7 @@ export async function fallbackChatModel(
     connected,
     (model) =>
       model.provider !== "agentai" &&
+      model.provider !== "relay" &&
       (!needs.vision || model.vision) &&
       (!needs.pdf || model.pdf),
     [current.id],
@@ -347,11 +383,15 @@ export async function fallbackChatModel(
 export async function agentModelCandidates() {
   const data = await catalog();
   // A missing/unavailable independent connection cannot break existing providers.
-  const agentai = await agentaiModelCandidates().catch(() => []);
+  const [agentai, relay] = await Promise.all([
+    agentaiModelCandidates().catch(() => []),
+    relayModelCandidates().catch(() => []),
+  ]);
   return {
     models: [
       ...data.models.map((model) => ({ ...model })),
       ...agentai,
+      ...relay,
     ] as Model[],
     imageModels: data.imageModels.map((model) => ({ ...model })),
     defaultModel: primary.id,
@@ -366,7 +406,9 @@ export async function resolveAgentModel(
   const model = (
     ref.startsWith("agentai/")
       ? await agentaiModelCandidates()
-      : (await catalog()).models
+      : ref.startsWith("relay/")
+        ? await relayModelCandidates()
+        : (await catalog()).models
   ).find((m) => m.id === ref);
   if (!model)
     fail(
@@ -381,12 +423,12 @@ export async function resolveAgentModel(
       409,
     );
   if (
-    model.provider === "agentai" &&
+    (model.provider === "agentai" || model.provider === "relay") &&
     !["assistant_chat", "assistant_employee"].includes(feature)
   )
     fail(
       "AI_MODEL_CAPABILITY",
-      "此功能尚未接入 AgentAI 线路，请选择已支持的模型",
+      "此功能尚未接入该独立中转线路，请选择已支持的模型",
       409,
     );
   return model;

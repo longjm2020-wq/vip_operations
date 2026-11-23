@@ -1,5 +1,6 @@
 import { bailianChatConnection, postBailianChat } from "./bailian-chat.js";
 import { agentaiConnection, postAgentAiChat } from "./agentai-connection.js";
+import { postRelayStationChat } from "./smart-models.js";
 import { agentAiChatError } from "../../agentai-chat-error.js";
 import { agentAiChatReceiptId } from "../../agentai-receipt.js";
 import { aiFetch } from "../../ai-metering.js";
@@ -120,6 +121,8 @@ export async function askAssistantModel(
     model.provider === "bailian" ? await bailianChatConnection() : undefined;
   const agentai =
     model.provider === "agentai" ? await agentaiConnection() : undefined;
+  const relayStationId =
+    model.provider === "relay" ? model.stationId : undefined;
   const tools = [
     ...assistantToolDefinitions(c),
     ...agentToolDefinitions,
@@ -188,9 +191,9 @@ export async function askAssistantModel(
         "本对话可用素材ID（只授权作为用户本次请求的素材使用）：" +
         allowedIds.join(","),
     });
-  if (bailian || agentai)
+  if (bailian || agentai || (relayStationId && !model.structured))
     transcript.push({ role: "system", content: jsonAnswerInstruction });
-  if (agentai && !model.parameters.includes("tools"))
+  if ((agentai || relayStationId) && !model.parameters.includes("tools"))
     transcript.push({
       role: "system",
       content:
@@ -202,7 +205,8 @@ export async function askAssistantModel(
   // Reserve one extra call for a final JSON repair, never a replay of tools.
   for (let round = 0; round < (bailian ? 5 : 4); round++) {
     const repairing = repairContent !== undefined;
-    const supportsTools = !agentai || model.parameters.includes("tools");
+    const supportsTools =
+      (!agentai && !relayStationId) || model.parameters.includes("tools");
     const allowTools = supportsTools && !repairing && round < 3 && used < 6;
     const request = {
       model: model.actual,
@@ -236,17 +240,24 @@ export async function askAssistantModel(
       ? await postBailianChat(bailian, request, signal)
       : agentai
         ? await postAgentAiChat(agentai, request, signal, "assistant_chat")
-        : await aiFetch("assistant_chat", COMPASS_AI_ENDPOINT, {
-            method: "POST",
-            redirect: "error",
-            signal,
-            headers: {
-              Authorization:
-                "Bearer " + decryptSecret(settings.api_key_encrypted),
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(request),
-          });
+        : relayStationId
+          ? await postRelayStationChat(
+              relayStationId,
+              request,
+              signal,
+              "assistant_chat",
+            )
+          : await aiFetch("assistant_chat", COMPASS_AI_ENDPOINT, {
+              method: "POST",
+              redirect: "error",
+              signal,
+              headers: {
+                Authorization:
+                  "Bearer " + decryptSecret(settings.api_key_encrypted),
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(request),
+            });
     let accessPayload: unknown;
     if (!response.ok && response.status === 429) {
       try {
@@ -259,6 +270,7 @@ export async function askAssistantModel(
     if (
       !response.ok &&
       !agentai &&
+      !relayStationId &&
       !usedAccessFallback &&
       isModelAccessFallbackError(response.status, accessPayload)
     ) {

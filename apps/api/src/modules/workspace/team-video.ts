@@ -26,6 +26,7 @@ import { fail, parse, requirePermission, type Context } from "../../core.js";
 import { engineConfig } from "../aigc/config.js";
 import { openAgentImage, ownedAgentFiles } from "./agent-files.js";
 import { modelRef } from "./agent-models.js";
+import { smartRankVideoModels } from "./smart-models.js";
 
 const signature = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -86,9 +87,10 @@ export async function resolveTeamVideoModel(
       m.info.aspects.includes(input.aspectRatio) &&
       input.referenceIds.length >= m.info.minImages &&
       input.referenceIds.length <= m.info.maxImages);
+  const ranked = ref ? models : await smartRankVideoModels(models);
   const found = ref
     ? models.find((m) => m.info.id === ref)
-    : models.find(matches);
+    : ranked.find(matches);
   if (!found)
     fail(
       "VIDEO_UNAVAILABLE",

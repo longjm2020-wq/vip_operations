@@ -61,6 +61,7 @@ vi.mock("../../packages/database/src/index.js", () => ({
 }));
 vi.mock("../../apps/api/src/modules/workspace/agent-files.js", () => ({
   ownedAgentFiles: (...args: unknown[]) => fixture.files(...args),
+  openAgentImage: (content: Buffer) => sharp(content),
 }));
 vi.mock("../../apps/api/src/modules/workspace/agent-models.js", () => ({
   modelRef: (id: string) => "engine/" + id.replaceAll("/", "-"),

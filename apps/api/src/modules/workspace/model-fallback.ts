@@ -40,7 +40,12 @@ export function firstEligibleConnected<T extends { id: string }>(
 }
 
 export async function safeConnectedModelRefs(
-  models: { id: string; actual: string; provider?: "bailian" | "agentai" }[],
+  models: {
+    id: string;
+    actual: string;
+    provider?: "bailian" | "agentai" | "relay";
+    stationId?: string;
+  }[],
 ) {
   try {
     return await connectedModelRefs(models);

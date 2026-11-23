@@ -35,6 +35,7 @@ import {
   agentaiReady,
   readAgentAiConnection,
 } from "./modules/workspace/agentai-connection.js";
+import { listRelayStations } from "./modules/workspace/smart-models.js";
 
 const agentaiFeatures = new Set(["assistant_chat", "assistant_employee"]);
 const historicalTeams = [
@@ -68,7 +69,7 @@ export const emptyAiUsage = (): AiFeatureUsage => ({
 });
 export function supportsFeature(kind: string, model: AgentInternalModel) {
   if (model.provider === "bailian" && kind !== "chat") return false;
-  if (model.provider === "agentai")
+  if (model.provider === "agentai" || model.provider === "relay")
     return (
       kind === "chat" ||
       (kind === "team" &&
@@ -128,6 +129,7 @@ export async function aiModelManagement(
     state,
     bailian,
     agentai,
+    relayStations,
   ] = await Promise.all([
     rows(
       db,
@@ -185,6 +187,7 @@ export async function aiModelManagement(
       "SELECT enabled,workspace_id,api_key_encrypted IS NOT NULL AS configured,verified_at,updated_at FROM public.bailian_chat_settings WHERE id=1",
     ),
     readAgentAiConnection(),
+    listRelayStations(),
   ]);
   const aigc = aigcModelManagement(config, state?.compiler);
   const readyKey = !!(
@@ -427,32 +430,53 @@ export async function aiModelManagement(
           (model) =>
             supportsFeature(feature.kind, model) &&
             (model.provider !== "agentai" || agentaiFeatures.has(feature.id)) &&
+            (model.provider !== "relay" || agentaiFeatures.has(feature.id)) &&
             (model.provider !== "bailian" || feature.id === "assistant_chat"),
         )
-        .map((model) => ({
-          value: model.id,
-          label: model.displayName || model.actual,
-          source:
-            model.provider === "agentai"
-              ? agentaiSource
-              : model.provider === "bailian"
-                ? "阿里云百炼 · 北京"
-                : row.source,
-          boundary:
-            capability(model) +
-            (model.provider === "agentai"
-              ? " · 小序聊天与 AI 员工，能力按型号分别验证"
-              : "") +
-            (model.provider === "bailian" ? " · 网站内聊天 · JSON Object" : ""),
-          available:
-            model.provider === "agentai"
-              ? agentaiReady(agentai) && Boolean(model.chatVerifiedAt)
-              : model.provider === "bailian"
-                ? Boolean(
-                    bailian?.enabled && bailian.configured && encryptionReady(),
-                  )
-                : true,
-        }));
+        .map((model) => {
+          const relayStation =
+            model.provider === "relay"
+              ? relayStations.find((st) => st.id === model.stationId)
+              : undefined;
+          return {
+            value: model.id,
+            label: model.displayName || model.actual,
+            source:
+              model.provider === "agentai"
+                ? agentaiSource
+                : model.provider === "relay"
+                  ? `${model.stationName || "算力中转站"} · ${relayStation?.baseUrl || ""}`
+                  : model.provider === "bailian"
+                    ? "阿里云百炼 · 北京"
+                    : row.source,
+            boundary:
+              capability(model) +
+              (model.provider === "agentai"
+                ? " · 小序聊天与 AI 员工，能力按型号分别验证"
+                : "") +
+              (model.provider === "relay"
+                ? " · 算力中转站线路，需先在智选模型测速验证"
+                : "") +
+              (model.provider === "bailian" ? " · 网站内聊天 · JSON Object" : ""),
+            available:
+              model.provider === "agentai"
+                ? agentaiReady(agentai) && Boolean(model.chatVerifiedAt)
+                : model.provider === "relay"
+                  ? Boolean(
+                      relayStation?.enabled &&
+                      relayStation.apiKeyConfigured &&
+                      encryptionReady() &&
+                      model.chatVerifiedAt,
+                    )
+                  : model.provider === "bailian"
+                    ? Boolean(
+                        bailian?.enabled &&
+                        bailian.configured &&
+                        encryptionReady(),
+                      )
+                    : true,
+          };
+        });
       const automatic = feature.kind === "team";
       const followsChat =
         feature.id === "assistant_search" || feature.id === "assistant_website";
@@ -506,6 +530,23 @@ export async function aiModelManagement(
           ? "连接已验证；各型号能力以调用验证为准"
           : "AgentAI 连接尚未启用或验证";
       }
+      const selectedRelayStation =
+        selected?.provider === "relay"
+          ? relayStations.find((st) => st.id === selected.stationId)
+          : undefined;
+      if (selected?.provider === "relay" && agentaiFeatures.has(feature.id)) {
+        row.source = selectedRelayStation
+          ? `${selectedRelayStation.name} · ${selectedRelayStation.baseUrl}`
+          : "算力中转站";
+        row.status = !selectedRelayStation?.enabled
+          ? "disabled"
+          : !selectedRelayStation.apiKeyConfigured || !encryptionReady()
+            ? "unconfigured"
+            : "configured";
+        row.statusText = selectedRelayStation?.verifiedAt
+          ? "中转站已接通；按测速与调用回执验证"
+          : "中转站尚未启用或测速验证";
+      }
       if (agentaiFeatures.has(feature.id))
         row.boundary +=
           " AgentAI 文字连接独立配置。普通聊天可使用已验证的文字型号，员工要求工具与严格结构化输出两项验证均通过。媒体按对应功能配置。公开搜索、浏览器和电脑识屏使用各自的 OpenRouter 连接。";
@@ -533,7 +574,7 @@ export async function aiModelManagement(
         row.selection &&
         (!selected ||
           !supportsFeature(feature.kind, selected) ||
-          (selected.provider === "agentai" &&
+          ((selected.provider === "agentai" || selected.provider === "relay") &&
             !agentaiFeatures.has(feature.id)) ||
           (selected.provider === "bailian" && feature.id !== "assistant_chat"))
       ) {
@@ -555,6 +596,17 @@ export async function aiModelManagement(
       agentaiFeatures.has(feature.id) &&
       (selectedModel?.provider === "agentai" ||
         (automatic && last?.source === "agentai.token6688.com"));
+    const selectedRelay =
+      agentaiFeatures.has(feature.id) && selectedModel?.provider === "relay"
+        ? relayStations.find((st) => st.id === selectedModel.stationId)
+        : undefined;
+    let relayHostname = "";
+    try {
+      if (selectedRelay?.baseUrl)
+        relayHostname = new URL(selectedRelay.baseUrl).hostname;
+    } catch {
+      relayHostname = "";
+    }
     const activeConnection = usingAgentai
       ? agentai
       : usingBailianChat
@@ -562,15 +614,19 @@ export async function aiModelManagement(
         : shared;
     const matchingSource = usingAgentai
       ? last?.source === "agentai.token6688.com"
-      : usingBailianChat
-        ? last?.source ===
-          bailian?.workspace_id + ".cn-beijing.maas.aliyuncs.com"
-        : feature.group === "AIGC" || last?.source === "openrouter.ai";
+      : selectedRelay
+        ? Boolean(relayHostname && last?.source === relayHostname)
+        : usingBailianChat
+          ? last?.source ===
+            bailian?.workspace_id + ".cn-beijing.maas.aliyuncs.com"
+          : feature.group === "AIGC" || last?.source === "openrouter.ai";
     const after = Math.max(
       new Date(binding?.updated_at || 0).getTime(),
       feature.group === "AIGC"
         ? new Date(config.aiConfigurationUpdatedAt || 0).getTime()
-        : new Date(activeConnection?.updated_at || 0).getTime(),
+        : selectedRelay
+          ? new Date(selectedRelay.catalogAt || 0).getTime()
+          : new Date(activeConnection?.updated_at || 0).getTime(),
       feature.id === "aigc_compile" && row.source.startsWith("OpenRouter")
         ? new Date(shared?.updated_at || 0).getTime()
         : 0,
@@ -580,12 +636,18 @@ export async function aiModelManagement(
       (feature.group === "AIGC" ||
         (usingAgentai
           ? agentaiReady(agentai)
-          : usingBailianChat
-            ? bailian?.verified_at &&
-              bailian.configured &&
-              bailian.enabled &&
-              encryptionReady()
-            : readyKey)) &&
+          : selectedRelay
+            ? Boolean(
+                selectedRelay.enabled &&
+                selectedRelay.apiKeyConfigured &&
+                encryptionReady(),
+              )
+            : usingBailianChat
+              ? bailian?.verified_at &&
+                bailian.configured &&
+                bailian.enabled &&
+                encryptionReady()
+              : readyKey)) &&
       matchingSource &&
       last?.status === "success" &&
       new Date(last.completed_at).getTime() > after &&

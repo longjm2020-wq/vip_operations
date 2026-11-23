@@ -34,4 +34,10 @@ export async function installAiManagementSchema(database: PGlite) {
       "utf8",
     ),
   );
+  await database.exec(
+    await readFile(
+      "packages/database/migrations/113_smart_model_selection.sql",
+      "utf8",
+    ),
+  );
 }

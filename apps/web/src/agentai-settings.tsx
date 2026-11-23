@@ -12,11 +12,16 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   AgentAiModel,
   AgentAiStatus,
 } from "../../../packages/contracts/src/agentai";
+import type {
+  SmartChannelOverride,
+  SmartModelsOverview,
+  SmartModelsSettingsState,
+} from "../../../packages/contracts/src/smart-models";
 import { api } from "./api";
 import { QueryState } from "./shared";
 import { AgentAiPrice, AgentAiPriceChannels } from "./agentai-pricing";
@@ -25,14 +30,24 @@ import { AgentAiAudio } from "./agentai-audio";
 export function AgentAiSettings({
   saved,
   initialAudio = false,
+  onOpenSmart,
 }: {
   saved: () => void;
   initialAudio?: boolean;
+  onOpenSmart?: () => void;
 }) {
+  const client = useQueryClient();
   const q = useQuery({
     queryKey: ["agentai-settings"],
     queryFn: async () =>
       (await api("/ai-model-management/agentai")).data as AgentAiStatus,
+  });
+  const smart = useQuery({
+    queryKey: ["smart-models"],
+    retry: false,
+    queryFn: async () =>
+      (await api("/ai-model-management/smart"))
+        .data as SmartModelsOverview | undefined,
   });
   return (
     <>
@@ -41,9 +56,30 @@ export function AgentAiSettings({
         <Connection
           key={q.data.version}
           value={q.data}
+          smartSettings={smart.data?.settings}
+          onOpenSmart={onOpenSmart}
+          onOverrideChannel={
+            smart.data?.settings
+              ? async (channelKey, action) => {
+                  const s = smart.data!.settings;
+                  const nextOverrides = [
+                    ...s.channelOverrides.filter(
+                      (o) => o.channelKey !== channelKey,
+                    ),
+                    ...(action ? [{ channelKey, action }] : []),
+                  ];
+                  await api("/ai-model-management/smart/policy", "POST", {
+                    ...s,
+                    channelOverrides: nextOverrides,
+                  });
+                  await client.invalidateQueries({ queryKey: ["smart-models"] });
+                }
+              : undefined
+          }
           initialAudio={initialAudio}
           saved={async () => {
             await q.refetch();
+            await client.invalidateQueries({ queryKey: ["smart-models"] });
             saved();
           }}
         />
@@ -54,10 +90,19 @@ export function AgentAiSettings({
 
 function Connection({
   value,
+  smartSettings,
+  onOpenSmart,
+  onOverrideChannel,
   saved,
   initialAudio,
 }: {
   value: AgentAiStatus;
+  smartSettings?: SmartModelsSettingsState;
+  onOpenSmart?: () => void;
+  onOverrideChannel?: (
+    channelKey: string,
+    action: SmartChannelOverride["action"] | null,
+  ) => Promise<void>;
   saved: () => Promise<void>;
   initialAudio: boolean;
 }) {
@@ -157,7 +202,14 @@ function Connection({
         type="info"
         showIcon
         message="智能调度 · 自动避开故障渠道"
-        description="综合成功率、耗时与价格选择可用渠道，故障时由平台自动切换。每个型号按账号实付价展示；实际结算以本次参数与供应商回执为准。"
+        description="综合稳定、价格、速度、质量 4 维度自动评分并屏蔽低分渠道；每个型号按账号实付价展示，实际结算以本次参数与供应商回执为准。"
+        action={
+          onOpenSmart ? (
+            <Button size="small" onClick={onOpenSmart}>
+              智选策略与中转站
+            </Button>
+          ) : undefined
+        }
       />
       <Alert
         showIcon
@@ -322,7 +374,21 @@ function Connection({
         scroll={{ x: 720 }}
         expandable={{
           rowExpandable: (m) => !!m.pricing?.channels.length,
-          expandedRowRender: (m) => <AgentAiPriceChannels model={m} />,
+          expandedRowRender: (m) => (
+            <AgentAiPriceChannels
+              model={m}
+              smartSettings={smartSettings}
+              onOverrideChannel={
+                onOverrideChannel
+                  ? (key, action) =>
+                      void onOverrideChannel(key, action).then(
+                        () => message.success("渠道偏好已更新"),
+                        (e: Error) => message.error(e.message),
+                      )
+                  : undefined
+              }
+            />
+          ),
         }}
         columns={[
           {
@@ -347,8 +413,10 @@ function Connection({
           },
           {
             title: "账号价格",
-            width: 225,
-            render: (_, m) => <AgentAiPrice model={m} />,
+            width: 245,
+            render: (_, m) => (
+              <AgentAiPrice model={m} smartSettings={smartSettings} />
+            ),
           },
           {
             title: "能力验证",

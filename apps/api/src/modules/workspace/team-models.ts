@@ -12,6 +12,10 @@ import {
   publicModelLabel,
   safeConnectedModelRefs,
 } from "./model-fallback.js";
+import {
+  smartRankImageModels,
+  smartRankTeamModels,
+} from "./smart-models.js";
 
 export type TeamModelTier = "fast" | "standard" | "strong";
 
@@ -20,6 +24,8 @@ function supportsSynchronousTeamChat(model: AgentInternalModel): boolean {
   return (
     model.provider !== "bailian" &&
     (model.provider !== "agentai" ||
+      (model.structured && model.parameters.includes("tools"))) &&
+    (model.provider !== "relay" ||
       (model.structured && model.parameters.includes("tools"))) &&
     !/(?:^|:)(?:batch|async|asynchronous)(?=:|$)/i.test(model.actual)
   );
@@ -125,10 +131,13 @@ export async function resolveTeamModel(options: {
         "指定模型不支持本步骤需要的输入或结构化输出能力；未切换到其他模型",
         409,
       );
-    if (model.provider === "agentai" && !connected.has(model.id))
+    if (
+      (model.provider === "agentai" || model.provider === "relay") &&
+      !connected.has(model.id)
+    )
       fail(
         "TEAM_MODEL_UNAVAILABLE",
-        "所选 AgentAI 型号尚未通过当前连接的调用验证；未切换其他连接",
+        "所选外部中转型号尚未通过当前连接的调用验证；未切换其他连接",
         409,
       );
     if (policy?.mode === "fixed" || !connected.size || connected.has(model.id))
@@ -176,24 +185,46 @@ export async function resolveTeamModel(options: {
         : ["standard", "strong", "fast"];
   // Stable sorting preserves the catalog's configured preference within a tier.
   // Opaque model IDs are identifiers, never a quality or priority ranking.
-  const available = catalog.models
+  let available = catalog.models
     .filter(
       (model) =>
         matches(model) &&
         (connected.has(model.id) ||
-          (!connected.size && model.provider !== "agentai")),
+          (!connected.size &&
+            model.provider !== "agentai" &&
+            model.provider !== "relay")),
     )
     .sort(
       (left, right) =>
         priorities.indexOf(teamModelTier(left)) -
         priorities.indexOf(teamModelTier(right)),
     );
+  let smartReason: string | undefined;
   if (restricted && policy.mode === "fallback") {
     // Only catalog availability/capability can select a backup before submission.
     // Provider timeouts and uncertain media submissions never trigger a retry.
     available.sort(
       (a, b) => policy.modelIds.indexOf(a.id) - policy.modelIds.indexOf(b.id),
     );
+  } else if (!restricted && available.length) {
+    const smart = await smartRankTeamModels(available, {
+      orchestrator: options.orchestrator,
+      difficulty: options.difficulty,
+    });
+    const unshielded = smart.ranked.filter(
+      (m) => !smart.shieldedIds.has(m.id) && !smart.shieldedIds.has(m.actual),
+    );
+    const pool = unshielded.length ? unshielded : smart.ranked;
+    const rankIndex = new Map(smart.ranked.map((m, i) => [m.id, i]));
+    available = [...pool].sort(
+      (left, right) =>
+        priorities.indexOf(teamModelTier(left)) -
+          priorities.indexOf(teamModelTier(right)) ||
+        (rankIndex.get(left.id) ?? 0) - (rankIndex.get(right.id) ?? 0),
+    );
+    if (available[0]) {
+      smartReason = smart.reasons.get(available[0].id);
+    }
   }
   const preferred = available[0];
   // A "flash" model can expose both a normal reasoning profile and an explicit
@@ -223,7 +254,8 @@ export async function resolveTeamModel(options: {
     selectionReason: restricted
       ? `员工${policy.mode === "fallback" ? "主备顺序" : "限定候选"}：${model.name}`
       : tier === desired
-        ? `按${options.orchestrator ? "主智能体" : "任务"}的${desired}能力偏好自动匹配${desired === "fast" && model.reasoningEffort === "none" ? "，使用同型号已配置的快速模式" : ""}`
+        ? smartReason ||
+          `按${options.orchestrator ? "主智能体" : "任务"}的${desired}能力偏好自动匹配${desired === "fast" && model.reasoningEffort === "none" ? "，使用同型号已配置的快速模式" : ""}`
         : `当前${desired}候选不可用，自动选择满足输入能力的${tier}候选`,
   };
 }
@@ -243,9 +275,13 @@ export async function resolveTeamImageModel(options: {
       ? policy.modelIds[0]
       : undefined
     : options.taskImageModel || options.profileImageModel;
-  const candidates = restricted
+  const rawCandidates = restricted
     ? policy.modelIds.flatMap((id) => imageModels.filter((m) => m.id === id))
     : imageModels;
+  const candidates =
+    !fixed && !restricted
+      ? await smartRankImageModels(rawCandidates)
+      : rawCandidates;
   const model = fixed
     ? imageModels.find((item) => item.id === fixed)
     : candidates.find(

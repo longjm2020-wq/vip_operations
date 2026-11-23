@@ -24,6 +24,12 @@ import { appearanceSchema } from "../../../packages/contracts/src/appearance.js"
 import { agentaiSaveSchema, agentaiTestSchema } from "../../../packages/contracts/src/agentai.js";
 import { agentAiAudioInputSchema, agentAiSpeechSchema } from "../../../packages/contracts/src/agentai-audio.js";
 import {
+  relayProbeSchema,
+  relayStationSaveSchema,
+  smartApplySchema,
+  smartPolicySaveSchema,
+} from "../../../packages/contracts/src/smart-models.js";
+import {
   listingRequestSchema,
   listingStates,
 } from "./integrations/vip/listing.js";
@@ -315,6 +321,14 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   set("/api/v1/my-workspace/assistant/memory", "post", assistantMemorySaveSchema, "保存本人个人记忆，检查版本并发冲突");
   set("/api/v1/my-workspace/assistant/actions", "post", z.object({ id: z.string().uuid() }).strict(), "执行本人待确认同步卡片，复核当前权限并防止重复提交");
   set("/api/v1/my-workspace/assistant/clear", "post", z.object({ version: z.number().int().min(0) }).strict(), "清空本人助理对话，不修改工作台记录");
+  const smart = "/api/v1/ai-model-management/smart";
+  set(smart, "get", undefined, "读取智选模型四维评估、渠道屏蔽状态与算力中转站列表");
+  set(smart + "/policy", "post", smartPolicySaveSchema, "保存智选模型四维权重、自动屏蔽门槛与人工干预");
+  set(smart + "/stations", "post", relayStationSaveSchema, "新增或更新算力中转站连接（密钥加密保存）");
+  set(smart + "/stations/{id}/sync", "post", z.object({}).strict(), "拉取并按聊天/图片/视频/音频/其他自动分类中转站模型渠道");
+  set(smart + "/stations/{id}/probe", "post", relayProbeSchema, "显式测速验证中转站指定聊天模型");
+  set(smart + "/stations/{id}/delete", "post", z.object({}).strict(), "删除指定算力中转站");
+  set(smart + "/apply", "post", smartApplySchema, "按编排/执行/图像/视频/音频角色一键应用最优已验证模型到全站配置");
   const agentai = "/api/v1/ai-model-management/agentai";
   set(agentai, "get", undefined, "读取指定20型号、能力验证和账号私有价格，不调用模型");
   set(agentai, "post", agentaiSaveSchema, "加密保存AgentAI连接，更换连接使旧价格与验证失效");
@@ -340,7 +354,7 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   };
   set(audio + "/tasks/{id}/refresh", "post", z.object({}).strict(), "查询本人同一供应商任务，不重复生成");
   set(audio + "/tasks/{id}/result", "get", undefined, "按本人任务归属安全代理已完成音频");
-  for (const methods of Object.entries(doc.paths).filter(([path]) => path.startsWith(agentai)).map(([, methods]) => methods)) {
+  for (const methods of Object.entries(doc.paths).filter(([path]) => path.startsWith(agentai) || path.startsWith(smart)).map(([, methods]) => methods)) {
     for (const operation of Object.values(methods!)) {
       if (!operation || typeof operation !== "object" || !("parameters" in operation)) continue;
       const op = operation as any;

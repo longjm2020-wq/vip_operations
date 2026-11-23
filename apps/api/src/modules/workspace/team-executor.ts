@@ -27,6 +27,7 @@ import { assistantPublicText } from "../../../../../packages/contracts/src/ai-pr
 import type { Context } from "../../core.js";
 import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { agentaiConnection, postAgentAiChat } from "./agentai-connection.js";
+import { postRelayStationChat } from "./smart-models.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 import { requireAssistant } from "./assistant-memory.js";
 import {
@@ -1165,7 +1166,13 @@ export async function runTeamExecution(
     for (let round = publicFirst ? -1 : 0; round < 5; round++) {
       await check();
       const agentai = model.provider === "agentai";
-      const current = agentai ? await agentaiConnection() : await settings();
+      const relayStationId =
+        model.provider === "relay" ? model.stationId : undefined;
+      const current = agentai
+        ? await agentaiConnection()
+        : relayStationId
+          ? undefined
+          : await settings();
       const requestSignal = AbortSignal.any([
         signal,
         AbortSignal.timeout(150000),
@@ -1244,27 +1251,37 @@ export async function runTeamExecution(
             }
           : {}),
       };
-      const apiKey = decryptSecret(current.api_key_encrypted);
+      const apiKey =
+        current && !relayStationId
+          ? decryptSecret(current.api_key_encrypted)
+          : "";
       if (!publicPass) await confirmNotes();
       await reserveCall();
       await check();
-      const response = agentai
-        ? await postAgentAiChat(
-            current,
+      const response = relayStationId
+        ? await postRelayStationChat(
+            relayStationId,
             modelBody,
             requestSignal,
             "assistant_employee",
           )
-        : await aiFetch("assistant_employee", COMPASS_AI_ENDPOINT, {
-            method: "POST",
-            redirect: "error",
-            signal: requestSignal,
-            headers: {
-              Authorization: "Bearer " + apiKey,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(modelBody),
-          });
+        : agentai
+          ? await postAgentAiChat(
+              current!,
+              modelBody,
+              requestSignal,
+              "assistant_employee",
+            )
+          : await aiFetch("assistant_employee", COMPASS_AI_ENDPOINT, {
+              method: "POST",
+              redirect: "error",
+              signal: requestSignal,
+              headers: {
+                Authorization: "Bearer " + apiKey,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(modelBody),
+            });
       if (!response.ok) {
         let payload: unknown;
         try {
@@ -1380,7 +1397,7 @@ export async function runTeamExecution(
               args,
               AbortSignal.any([signal, AbortSignal.timeout(90000)]),
               (returned) => matchesAgentModel(model, returned),
-              model.provider === "agentai",
+              model.provider === "agentai" || model.provider === "relay",
             );
             citations.push(...found.citations);
             result = found;
