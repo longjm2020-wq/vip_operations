@@ -69,8 +69,10 @@ export type SelectionTitleAIRow = {
   poeticName?: string; series?: string;
   titles: SelectionTitleAICandidate[]; evidence: string[]; warnings: string[];
 };
+export type SelectionTitleAISkippedRow = { id: string; reason: string };
 export type SelectionTitleAIPreview = {
   planToken: string; expiresAt: string; model: string;
   rows: SelectionTitleAIRow[]; warnings: string[];
+  skippedRows?: SelectionTitleAISkippedRow[];
 };
 export type SelectionTitleAIApplyResult = { updatedCount: number; ids: string[] };

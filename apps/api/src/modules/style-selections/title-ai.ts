@@ -6,7 +6,7 @@ import { db, one, rows, type Row, type Tx } from "../../../../../packages/databa
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
 import { selectionFieldSchema, type SelectionField } from "../../../../../packages/contracts/src/selection-layout.js";
 import { splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
-import { selectionTitleAIApplySchema, selectionTitleAIGenerateSchema, selectionTitleAIModeSchema, selectionTitleTargetEligible, selectionTitleWordingIssue, type SelectionTitleAIPreview, type SelectionTitleAIStatus, type SelectionTitleAIRow } from "../../../../../packages/contracts/src/selection-title-ai.js";
+import { selectionTitleAIApplySchema, selectionTitleAIGenerateSchema, selectionTitleAIModeSchema, selectionTitleTargetEligible, selectionTitleWordingIssue, type SelectionTitleAIPreview, type SelectionTitleAIStatus, type SelectionTitleAIRow, type SelectionTitleAISkippedRow } from "../../../../../packages/contracts/src/selection-title-ai.js";
 import { command, fail, parse, requirePermission, type Context } from "../../core.js";
 import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
@@ -102,22 +102,46 @@ async function snapshot(c: Context, rowIds: string[], targetKeys: string[], tx?:
   return tx ? read(tx) : db.$transaction(read, { isolationLevel: "RepeatableRead" });
 }
 const sourceFingerprint = (row: Row, fields: SelectionField[]) => protection.digest([String(row.updatedAt), sourceFacts(row, fields), row.images || [], titleSeries(row, fields)]);
-const candidateSchema = z.object({ rows: z.array(z.object({
-  id: z.string(), titles: z.array(z.object({ key: z.string(), value: z.string().trim().min(1).max(2000) }).strict()).max(2),
+const candidateIdentity = z.object({ id: z.string() });
+const candidateSchema = candidateIdentity.extend({
+  titles: z.array(z.object({ key: z.string(), value: z.string().trim().min(1).max(2000) }).strict()).max(2),
   poeticName: z.string().trim().max(4).optional(), nameAlternatives: z.array(z.string().trim().max(4)).max(4).optional(),
   evidence: z.array(z.string().max(300)).max(6), warnings: z.array(z.string().max(300)).max(6),
-}).strict()).max(10) }).strict();
+}).strict();
+const candidateBatchSchema = z.object({ rows: z.array(z.unknown()) }).strict();
 export function parseTitleAIResponse(content: unknown, expected: { id: string; keys: string[] }[]) {
-  const result = candidateSchema.safeParse(content);
-  if (!result.success || result.data.rows.length !== expected.length || new Set(result.data.rows.map(row => row.id)).size !== expected.length)
-    fail("AI_RESPONSE_INVALID", "AI 返回的款式或标题格式不完整，未采用此结果", 502);
-  for (const row of result.data.rows) {
-    const requested = expected.find(value => value.id === row.id);
-    if (!requested || new Set(row.titles.map(title => title.key)).size !== row.titles.length ||
-      row.titles.some(title => !requested.keys.includes(title.key)) || (row.titles.length > 0 && row.titles.length !== requested.keys.length) ||
-      (!row.titles.length && !row.warnings.length)) fail("AI_RESPONSE_INVALID", "AI 返回了未请求、重复或缺失的标题，未采用此结果", 502);
+  const envelope = candidateBatchSchema.safeParse(content);
+  if (!envelope.success) fail("AI_RESPONSE_INVALID", "AI 返回的标题批次格式无效，未采用此批结果", 502);
+  const matching = new Map<string, unknown[]>(expected.map(({ id }) => [id, []]));
+  for (const raw of envelope.data.rows) {
+    const identity = candidateIdentity.safeParse(raw);
+    if (identity.success) matching.get(identity.data.id)?.push(raw);
   }
-  return result.data.rows;
+  const candidates: z.infer<typeof candidateSchema>[] = [], skippedRows: SelectionTitleAISkippedRow[] = [];
+  for (const { id, keys } of expected) {
+    const rows = matching.get(id)!;
+    if (rows.length !== 1) {
+      skippedRows.push({ id, reason: rows.length ? "AI 重复返回了本款候选" : "AI 未返回本款候选" });
+      continue;
+    }
+    const parsed = candidateSchema.safeParse(rows[0]);
+    if (!parsed.success) {
+      skippedRows.push({ id, reason: "AI 返回的标题候选格式不完整" });
+      continue;
+    }
+    const row = parsed.data;
+    if (!row.titles.length) {
+      skippedRows.push({ id: row.id, reason: row.warnings.map(warning => warning.trim()).find(Boolean) || "AI 未返回可用标题" });
+      continue;
+    }
+    if (row.titles.length !== keys.length || new Set(row.titles.map(title => title.key)).size !== row.titles.length ||
+      row.titles.some(title => !keys.includes(title.key))) {
+      skippedRows.push({ id: row.id, reason: "AI 返回的标题字段缺失、重复或超出本次范围" });
+      continue;
+    }
+    candidates.push(row);
+  }
+  return { candidates, skippedRows };
 }
 async function callTitleModel(selected: AgentInternalModel, settings: Row, products: Row[], examples: Row[], preferences: unknown, namingContext: unknown) {
   const content: Row[] = [{ type: "text", text: JSON.stringify({ products: products.map(({ pictures: _pictures, ...product }) => product), styleExamples: examples, preferences, namingContext }) }];
@@ -162,12 +186,12 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     const selected = await resolveFeatureModel("product_titles");
     const settings = await one(db, "SELECT enabled,api_key_encrypted,verified_at FROM public.compass_ai_settings WHERE id=1");
     if (!verifiedSettings(settings)) fail("AI_NOT_READY", "请超级管理员先启用并测试 AI 连接", 503);
-    const initial = await snapshot(c, body.rowIds, body.targetKeys), products: Row[] = [], signedRows: SignedRow[] = [], skipped: string[] = [];
+    const initial = await snapshot(c, body.rowIds, body.targetKeys), products: Row[] = [], signedRows: SignedRow[] = [], skippedRows: SelectionTitleAISkippedRow[] = [];
     for (const row of initial.projected) {
-      const raw = initial.raw.find(value => String(value.id) === String(row.id))!;
-      if (blank(row.xutiStyleNo)) { skipped.push(String(row.id)); continue; }
+      const id = String(row.id), raw = initial.raw.find(value => String(value.id) === id)!;
+      if (blank(row.xutiStyleNo)) { skippedRows.push({ id, reason: "缺少可查看的款号" }); continue; }
       const targets = initial.targets.filter(field => selectionTitleTargetEligible(body.mode, titleKind(field)!, cell(row, field.key)) && protection.access(initial.policy, c.actor, raw, field.key) === "edit");
-      if (!targets.length) { skipped.push(String(row.id)); continue; }
+      if (!targets.length) { skippedRows.push({ id, reason: "没有符合本次处理方式的可编辑标题" }); continue; }
       for (const field of targets) {
         const issue = titleFieldLimitIssue(field, body.mode);
         if (issue) fail("AI_TITLE_LIMIT", `字段「${field.label}」：${issue}`, 400);
@@ -244,10 +268,13 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     }
     for (let index = products.length - 1; index >= 0; index--) {
       const product = products[index], source = initial.projected.find(row => String(row.id) === product.id)!;
-      if (!sourceFacts(source, initial.fields).facts && !product.pictures.length && !(body.mode !== "blank" && product.targets.some((target: Row) => !blank(target.currentValue)))) { skipped.push(product.id); products.splice(index, 1); signedRows.splice(index, 1); }
+      if (!sourceFacts(source, initial.fields).facts && !product.pictures.length && !(body.mode !== "blank" && product.targets.some((target: Row) => !blank(target.currentValue)))) {
+        skippedRows.push({ id: product.id, reason: "缺少可用于生成的商品资料或图片" });
+        products.splice(index, 1); signedRows.splice(index, 1);
+      }
     }
-    const warnings = ["候选标题和款名需人工核对；系统未执行实时趋势、商标或侵权检索。", ...(skipped.length ? [`跳过 ${skipped.length} 行：没有符合本次处理方式的可编辑标题、缺少款号或产品资料。`] : [])];
-    let result: SelectionTitleAIRow[] = [];
+    const warnings = ["候选标题和款名需人工核对；系统未执行实时趋势、商标或侵权检索。"];
+    const result: SelectionTitleAIRow[] = [];
     if (products.length) {
       const beforeProvider = await snapshot(c, body.rowIds, body.targetKeys);
       if (beforeProvider.digest !== initial.digest || signedRows.some(row => sourceFingerprint(beforeProvider.projected.find(value => String(value.id) === row.id)!, beforeProvider.fields) !== row.fingerprint))
@@ -256,40 +283,42 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
       try { response = await callTitleModel(selected, settings!, products, examples, body.preferences || { usePoeticName: true, instruction: "" }, naming.context); }
       catch (error) { if ((error as { getStatus?: unknown }).getStatus) throw error; fail("AI_PROVIDER_ERROR", "AI 请求未完成，请检查网络或稍后重试；本次没有填入标题", 502); }
       const generated = parseTitleAIResponse(response, signedRows.map(row => ({ id: row.id, keys: row.keys })));
-      result = generated.map(candidate => {
+      skippedRows.push(...generated.skippedRows);
+      for (const candidate of generated.candidates) {
         const source = initial.projected.find(row => String(row.id) === candidate.id)!, product = products.find(row => row.id === candidate.id)!;
         const facts = sourceFacts(source, initial.fields);
         const originalName = normalizeTitleName(candidate.poeticName || candidate.titles.map(title => inferTitleName(title.value)).find(Boolean) || "");
         const owner = titleNameOwner(source, initial.fields);
-        let chosenName = originalName, chosenTitles = candidate.titles, namingIssue = "";
+        let chosenName = "", chosenTitles: SelectionTitleAIRow["titles"] = [], issue = "";
         const alternatives = originalName ? [...new Set([originalName, ...(candidate.nameAlternatives || [])].map(normalizeTitleName).filter(Boolean))] : [""];
         for (const name of alternatives) {
-          namingIssue = titleNameIssue(name) || (name ? titleNameConflict(name, owner, naming.records) : "");
-          if (namingIssue) continue;
+          issue = titleNameIssue(name) || (name ? titleNameConflict(name, owner, naming.records) : "");
+          if (issue) continue;
           const titles = candidate.titles.map(title => ({ ...title, value: name === originalName ? title.value : replaceTitleName(title.value, originalName, name) }));
-          if (name && titles.some(title => !titleStartsWithName(title.value, name))) { namingIssue = "长短标题须使用同一个款名，并放在卖点括号之后、描述之前"; continue; }
-          const issue = titles.map(title => titleValueIssue(initial.targets.find(field => field.key === title.key)!, title.value, facts.material, facts.facts, !!product.pictures.length,
-            { mode: body.mode, existingDescription: String(cell(source, title.key) ?? "") })).find(Boolean);
-          if (issue) { namingIssue = issue; continue; }
-          chosenName = name; chosenTitles = titles; break;
-        }
-        if (candidate.titles.length && namingIssue) fail("AI_TITLE_INVALID", `款名候选未通过校验：${namingIssue}；请重新生成`, 502);
-        if (candidate.titles.length && chosenName) {
-          signedRows.find(row => row.id === candidate.id)!.poeticName = chosenName;
-          naming.records.push({ ...owner, names: [chosenName], titles: chosenTitles.map(title => title.value) });
-        }
-        return { id: candidate.id, xutiStyleNo: product.xutiStyleNo, expectedUpdatedAt: String(source.updatedAt),
-          ...(candidate.titles.length && chosenName ? { poeticName: chosenName, series: owner.series } : {}),
-          titles: chosenTitles.map(title => {
+          if (name && titles.some(title => !titleStartsWithName(title.value, name))) { issue = "长短标题须使用同一个款名，并放在卖点括号之后、描述之前"; continue; }
+          const validated: SelectionTitleAIRow["titles"] = [];
+          for (const title of titles) {
             const field = initial.targets.find(field => field.key === title.key)!;
             const previousValue = String(cell(source, title.key) ?? "");
-            const issue = titleValueIssue(field, title.value, facts.material, facts.facts, !!product.pictures.length, { mode: body.mode, existingDescription: previousValue });
-            const duplicated = naming.records.some(other => other.id !== owner.id && !(owner.style && other.style === owner.style) && !(owner.series && other.series === owner.series) && other.titles.includes(title.value));
-            if (issue || duplicated) fail("AI_TITLE_INVALID", `${field.label}候选未通过校验：${issue || "与现有标题完全重复"}；本次未采用结果`, 502);
-            return { key: title.key, label: field.label, kind: titleKind(field)!, value: title.value, previousValue, ...titleLimit(field, body.mode) };
-          }), evidence: [...(product.pictures.length ? [`已读取 ${product.pictures.length} 张商品图片作为生成依据`] : []), ...candidate.evidence], warnings: [...product.inputWarnings, ...candidate.warnings],
-        };
-      });
+            const wordingIssue = titleValueIssue(field, title.value, facts.material, facts.facts, !!product.pictures.length, { mode: body.mode, existingDescription: previousValue });
+            const duplicate = naming.records.some(other => other.id !== owner.id && !(owner.style && other.style === owner.style) && !(owner.series && other.series === owner.series) && other.titles.includes(title.value));
+            if (wordingIssue || duplicate) { issue = `${field.label}：${wordingIssue || "与现有标题完全重复"}`; break; }
+            validated.push({ key: title.key, label: field.label, kind: titleKind(field)!, value: title.value, previousValue, ...titleLimit(field, body.mode) });
+          }
+          if (issue) continue;
+          chosenName = name; chosenTitles = validated; break;
+        }
+        if (issue) {
+          skippedRows.push({ id: candidate.id, reason: issue });
+          continue;
+        }
+        if (chosenName) signedRows.find(row => row.id === candidate.id)!.poeticName = chosenName;
+        naming.records.push({ ...owner, names: chosenName ? [chosenName] : [], titles: chosenTitles.map(title => title.value) });
+        result.push({ id: candidate.id, xutiStyleNo: product.xutiStyleNo, expectedUpdatedAt: String(source.updatedAt),
+          ...(chosenName ? { poeticName: chosenName, series: owner.series } : {}), titles: chosenTitles,
+          evidence: [...(product.pictures.length ? [`已读取 ${product.pictures.length} 张商品图片作为生成依据`] : []), ...candidate.evidence], warnings: [...product.inputWarnings, ...candidate.warnings],
+        });
+      }
       const latest = await snapshot(c, body.rowIds, body.targetKeys);
       if (latest.digest !== initial.digest || signedRows.some(row => {
         const source = latest.projected.find(value => String(value.id) === row.id);
@@ -298,7 +327,7 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     }
     const expires = Date.now() + 30 * 60_000;
     const accepted = signedRows.filter(row => result.some(candidate => candidate.id === row.id && candidate.titles.length));
-    return { planToken: signTitlePlan({ actor: c.actor.id, scope: scopeKey(), mode: body.mode, expires, nonce: randomUUID(), policy: initial.digest, rows: accepted }), expiresAt: new Date(expires).toISOString(), model: selected.actual, rows: result, warnings };
+    return { planToken: signTitlePlan({ actor: c.actor.id, scope: scopeKey(), mode: body.mode, expires, nonce: randomUUID(), policy: initial.digest, rows: accepted }), expiresAt: new Date(expires).toISOString(), model: selected.actual, rows: result, warnings, skippedRows };
   } finally { active.delete(caller); activeRequests--; }
 }
 

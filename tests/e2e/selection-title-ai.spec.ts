@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { projectSelectionSharedLayout, selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 type Values = Record<string, any>;
-type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; longCharacterLimit?: number; longHanLimit?: number; firstTtlMs?: number; material?: string; longTitle?: string; path?: string; firstOriginal?: string; names?: string[]; series?: string };
+type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; longCharacterLimit?: number; longHanLimit?: number; firstTtlMs?: number; material?: string; longTitle?: string; path?: string; firstOriginal?: string; names?: string[]; series?: string; skipFirstBatchIds?: string[]; legacyEmptyTitleRows?: boolean };
 const generatedLongTitle = "【100桑蚕丝】锦纨春秋冬新中式国风提花盘扣圆领背心女马甲";
 const editedLongTitle = "【100桑蚕丝】庭春漾秋冬新中式国风提花盘扣圆领背心女马甲";
 async function fixture(page: Page, options: FixtureOptions = {}) {
@@ -35,6 +35,9 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
     const request = route.request(), path = new URL(request.url()).pathname;
     let data: unknown = [];
     if (path.endsWith("/auth/me")) data = { id: "101", displayName: "标题测试", csrfToken: "fixture", roleCodes: ["SUPER_ADMIN"], permissions: ["selection.read", "selection.manage", "selection.protect", "product.read", "product.manage", "project.read", "project.create", "setting.manage"] };
+    if (path.endsWith("/my-workspace/assistant/desktop")) data = { devices: [], tasks: [] };
+    if (path.endsWith("/my-workspace/assistant/browser")) data = { sessions: [], tasks: [], ready: false };
+    if (path.endsWith("/my-workspace/assistant/capabilities")) data = { models: [], imageModels: [] };
     if (path.endsWith("/product-archive-table")) data = { id: "3", initialLayout: "selection", fields: [], references: {}, canEdit: true, canManage: true };
     if (path.endsWith("/project-tables/7")) data = { id: "7", name: "标题测试协作表", initialLayout: "selection", canEdit: true, canManage: true };
     if (path.endsWith("/revision")) data = { revision: String(revision) };
@@ -45,9 +48,12 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
     if (path.endsWith("/ai-titles/generate")) {
       const body = request.postDataJSON(); generations.push(body);
       if (options.pauseFirst && generations.length === 1) await new Promise<void>(resolve => { releaseFirst = resolve; });
+      const skipped = generations.length === 1 ? new Set(options.skipFirstBatchIds) : new Set<string>();
       data = { planToken: `title-ai-fixture-plan-${generations.length}-abcdefghijklmnop`, expiresAt: new Date(Date.now() + (generations.length === 1 ? options.firstTtlMs ?? 30 * 60 * 1000 : 30 * 60 * 1000)).toISOString(), model: "fixture-model", warnings: [],
-        rows: body.rowIds.map((id: string) => {
+        ...(skipped.size && !options.legacyEmptyTitleRows ? { skippedRows: body.rowIds.filter((id: string) => skipped.has(id)).map((id: string) => ({ id, reason: "里料材质需要注明对应部位" })) } : {}),
+        rows: body.rowIds.filter((id: string) => options.legacyEmptyTitleRows || !skipped.has(id)).map((id: string) => {
           const row = rows.find(row => row.id === id)!;
+          if (skipped.has(id)) return { id, xutiStyleNo: row.xutiStyleNo, expectedUpdatedAt: row.updatedAt, evidence: [], warnings: ["里料材质需要注明对应部位"], titles: [] };
           const name = options.names?.[Number(id) - 1];
           return { id, xutiStyleNo: row.xutiStyleNo, expectedUpdatedAt: row.updatedAt, evidence: [`成分：${row.material}`, "三级类目：女式马夹"], warnings: ["款名请人工核对"],
             ...(name ? { poeticName: name, series: options.series || "" } : {}),
@@ -55,7 +61,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
               previousValue: row.extraFields[key] || "", ...(body.mode === "complete" ? { maxCharacters: 30 } : {}),
               value: (key === "custom:long-title" ? options.longTitle || (body.mode === "complete" ? generatedLongTitle + "款" : generatedLongTitle) : "锦纨春马甲").replace("锦纨春", name || "锦纨春"), minCharacters: key === "custom:long-title" ? body.mode === "complete" ? 30 : 29 : 1, maxLength: key === "custom:long-title" ? longLimit : options.shortHanLimit || 30, countMode: key === "custom:long-title" ? longCountMode : key === "custom:short-title" && options.shortHanLimit ? "han" : "characters" })),
           };
-        }).filter((row: Values) => row.titles.length),
+        }).filter((row: Values) => row.titles.length || skipped.has(row.id)),
       };
     }
     if (path.endsWith("/ai-titles/apply")) {
@@ -73,7 +79,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
     await route.fulfill({ json: { data } });
   });
   await page.goto(options.path || "/style-selections");
-  await expect(page.locator("tr[data-selection-row]")).toHaveCount(rows.length);
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(rows.length, { timeout: 15000 });
   return { rows, generations, applies, gridWrites, applyKeys, releaseFirst: () => releaseFirst?.() };
 }
 async function openPanel(page: Page) {
@@ -124,6 +130,31 @@ test("连续生成时将前批未保存款名传给后批避重", async ({ page 
   expect(state.generations[1].pendingNames).toEqual(names.slice(0, 10).map((name, index) => ({ rowId: String(index + 1), name })));
   await expect(panel.getByRole("button", { name: "确认填补 12 个空白单元格", exact: true })).toBeEnabled();
 });
+
+for (const [skippedCount, legacyEmptyTitleRows] of [[1, false], [10, false], [1, true]] as const) {
+  test(`首批跳过 ${skippedCount} 款后继续生成，确认合格款后只重试跳过的款${legacyEmptyTitleRows ? "（旧接口）" : ""}`, async ({ page }) => {
+    const skippedIds = Array.from({ length: skippedCount }, (_, index) => String(index + 1));
+    const state = await fixture(page, { count: 12, skipFirstBatchIds: skippedIds, legacyEmptyTitleRows });
+    const panel = await openPanel(page);
+    await panel.getByRole("checkbox", { name: /^长标题/ }).uncheck();
+    await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+    await expect(panel.getByText(`已跳过 ${skippedCount} 款`, { exact: true })).toBeVisible();
+    await expect(panel.getByText("AI-001 · 里料材质需要注明对应部位", { exact: true })).toBeVisible();
+    const confirm = panel.getByRole("button", { name: `确认填补 ${12 - skippedCount} 个空白单元格`, exact: true });
+    await expect(confirm).toBeEnabled();
+    expect(state.generations.map(request => request.rowIds.length)).toEqual([10, 2]);
+    expect(state.applies).toHaveLength(0);
+    await confirm.click();
+    await expect(panel).toContainText(`已填补 ${12 - skippedCount} 款的空白标题`);
+    expect(state.applies.flatMap(request => request.rows.map((row: Values) => row.id))).toEqual(state.rows.slice(skippedCount).map(row => row.id));
+    expect(state.rows[0].extraFields["custom:short-title"]).toBe("");
+    expect(state.rows[11].extraFields["custom:short-title"]).toBe("锦纨春马甲");
+    await panel.getByRole("button", { name: "重试跳过款式", exact: true }).click();
+    await expect(panel.getByText(`候选标题 · ${skippedCount} 款`, { exact: true })).toBeVisible();
+    expect(state.generations[2].rowIds).toEqual(skippedIds);
+    await expect(panel.getByText(`已跳过 ${skippedCount} 款`, { exact: true })).toHaveCount(0);
+  });
+}
 
 for (const [module, path] of [["商品档案", "/products"], ["选款登记", "/style-selections"], ["项目协作表格", "/project-tables/7"]]) {
   test(`${module}选中已有长标题自动补全至30字符，先对照原文再确认`, async ({ page }) => {

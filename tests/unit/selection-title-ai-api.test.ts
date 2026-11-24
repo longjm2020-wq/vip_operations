@@ -43,11 +43,11 @@ async function style(no: string, extraFields: Row = {}, material: string | null 
 }
 let providerPayload: Row, providerCalls: number;
 let providerHandler: (products: Row[]) => unknown;
-function installProvider() {
+function installProvider(receipt?: { id: string; usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; cost: number } }) {
   vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
     providerCalls++; providerPayload = JSON.parse(init.body as string);
     const data = JSON.parse(providerPayload.messages[1].content[0].text), result = providerHandler(data.products);
-    return new Response(JSON.stringify({ id: "test-response", model: "openai/gpt-6.1-sol", choices: [{ finish_reason: "stop", message: { content: JSON.stringify(result) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ id: "test-response", ...receipt, model: "openai/gpt-6.1-sol", choices: [{ finish_reason: "stop", message: { content: JSON.stringify(result) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
 }
 beforeAll(async () => {
@@ -133,7 +133,9 @@ describe("AI alias uniqueness and explicit coordinated series", () => {
   it.each(["", "不同系列"])("does not infer shared series from identical material/category when series is %s", async series => {
     await distinct("EXISTING", { [shortKey]: "花序女式皮衣", [seriesKey]: "丝缎花枝配套" });
     const row = await distinct("NEW", { [seriesKey]: series }); providerNames("花序");
-    await expect(generateTitles(actor(), input([String(row.id)], [shortKey]))).rejects.toMatchObject({ status: 502 });
+    const preview = await generateTitles(actor(), input([String(row.id)], [shortKey]));
+    expect(preview.rows).toEqual([]);
+    expect(preview.skippedRows).toEqual([{ id: String(row.id), reason: expect.stringContaining("与其他款式重名") }]);
     expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
   });
   it("rechecks a name saved by someone else after preview and prevents partial writes", async () => {
@@ -158,10 +160,13 @@ describe("AI alias uniqueness and explicit coordinated series", () => {
     await fixture.database!.query("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,8,'PRIVATE',$2)", [hiddenKey, JSON.stringify({ key: hiddenKey, label: "短标题", type: "text", custom: true, width: 120 })]);
     await distinct("SECRET-STYLE", { [hiddenKey]: "溪月吟女式皮衣" });
     const row = await distinct("NEW"); providerNames("溪月吟");
-    await expect(generateTitles(actor(), input([String(row.id)], [shortKey]))).rejects.toMatchObject({ status: 502 });
+    const preview = await generateTitles(actor(), input([String(row.id)], [shortKey]));
+    expect(preview.rows).toEqual([]);
+    expect(preview.skippedRows).toEqual([{ id: String(row.id), reason: expect.stringContaining("与其他款式重名") }]);
     const source = JSON.parse(providerPayload.messages[1].content[0].text);
     expect(JSON.stringify(source.namingContext)).not.toContain("溪月吟");
     expect(JSON.stringify(source)).not.toContain("SECRET-STYLE");
+    expect(JSON.stringify(preview.skippedRows)).not.toContain("SECRET-STYLE");
   });
   it("invalidates series changes even when updated_at was not changed", async () => {
     const row = await distinct("ONE", { [seriesKey]: "丝缎花枝配套" }); providerNames("花序");
@@ -172,6 +177,41 @@ describe("AI alias uniqueness and explicit coordinated series", () => {
 });
 
 describe("server-authoritative AI product titles", () => {
+  it("keeps the other styles when a material claim fails and signs only qualified rows", async () => {
+    const bad = await style("BAD-TRIM", { [seriesKey]: "" });
+    const good = await style("GOOD-TRIM", { [seriesKey]: "" });
+    const unavailable = await style("NO-CANDIDATE");
+    const badId = String(bad.id), goodId = String(good.id), unavailableId = String(unavailable.id);
+    const ordinary = providerHandler;
+    providerHandler = products => {
+      const generated = ordinary(products) as { rows: Row[] };
+      const rejected = generated.rows.find(row => row.id === badId)!;
+      rejected.titles.find((title: Row) => title.key === longKey).value = "【水貂毛100桑蚕丝】锦纨春女式皮衣皮草女士外套穿搭单品";
+      const missing = generated.rows.find(row => row.id === unavailableId)!;
+      missing.titles = [];
+      missing.warnings = ["资料不足以生成合格标题"];
+      return generated;
+    };
+    installProvider({ id: "mixed-title-preview", usage: { prompt_tokens: 15, completion_tokens: 9, total_tokens: 24, cost: 0.003 } });
+    const meterBefore = (await read("SELECT count(*)::int AS count FROM ai_model_usage WHERE feature_id='product_titles'"))[0].count;
+    const preview = await generateTitles(actor(), input([badId, goodId, unavailableId]));
+    expect(providerCalls).toBe(1);
+    expect((await read("SELECT count(*)::int AS count FROM ai_model_usage WHERE feature_id='product_titles'"))[0].count).toBe(meterBefore + 1);
+    expect(await read("SELECT total_tokens::int AS tokens,amount::float AS amount,amount_unit FROM ai_model_usage WHERE feature_id='product_titles' AND provider_request_id='mixed-title-preview'"))
+      .toEqual([{ tokens: 24, amount: 0.003, amount_unit: "OpenRouter credits" }]);
+    expect(preview.rows).toMatchObject([{ id: goodId, poeticName: "锦纨春", titles: [{ key: longKey }, { key: shortKey }] }]);
+    expect(preview.skippedRows).toEqual(expect.arrayContaining([
+      { id: badId, reason: expect.stringContaining("里料、填充物或配料材质须注明对应部位或拼接用途") },
+      { id: unavailableId, reason: "资料不足以生成合格标题" },
+    ]));
+    expect(preview.skippedRows).toHaveLength(2);
+    expect(readTitlePlan(preview.planToken, actor()).rows).toMatchObject([{ id: goodId }]);
+    const goodChanges = preview.rows.map(row => ({ id: row.id, titles: row.titles.map(({ key, value }) => ({ key, value })) }));
+    await expect(applyTitles(actor("rejected"), { planToken: preview.planToken, rows: [{ ...goodChanges[0], id: badId }] })).rejects.toMatchObject({ status: 403 });
+    expect(await applyTitles(actor(), { planToken: preview.planToken, rows: goodChanges })).toEqual({ updatedCount: 1, ids: [goodId] });
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [bad.id]))[0].extra_fields[longKey]).toBeUndefined();
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [bad.id]))[0].extra_fields[shortKey]).toBeUndefined();
+  });
   it("completes only long titles below 30 characters, preserves other cells and signs the operation", async () => {
     const completedTitle = "【水貂毛拼接100桑蚕丝】锦纨春女式皮衣皮草女士外套穿搭单品";
     const partial = await style("PARTIAL", { [longKey]: "【100桑蚕丝】女式皮衣", [shortKey]: "原有短标题" });
@@ -236,7 +276,9 @@ describe("server-authoritative AI product titles", () => {
       await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: longKey, value }] }] })).rejects.toMatchObject({ status: 400 });
     }
     providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: valid.slice(0, -1) }], evidence: [], warnings: [] })) });
-    await expect(generateTitles(actor(), { ...input([String(row.id)], [longKey]), mode: "complete" })).rejects.toMatchObject({ status: 502 });
+    const invalid = await generateTitles(actor(), { ...input([String(row.id)], [longKey]), mode: "complete" });
+    expect(invalid.rows).toEqual([]);
+    expect(invalid.skippedRows).toEqual([{ id: String(row.id), reason: expect.stringContaining("30个字符") }]);
     await fixture.database!.query("UPDATE selection_field_registry SET definition=jsonb_set(definition,'{textConfig,maxLength}','29') WHERE field_key=$1", [longKey]);
     const calls = providerCalls;
     await expect(generateTitles(actor(), { ...input([String(row.id)], [longKey]), mode: "complete" })).rejects.toMatchObject({ status: 400, response: { error: { code: "AI_TITLE_LIMIT" } } });
@@ -264,7 +306,9 @@ describe("server-authoritative AI product titles", () => {
     for (const value of ["暖橙女式皮衣", "庭春漾面料皮衣", "庭春漾96.8山羊绒", "庭春漾聚酯纤维皮衣"]) {
       await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: shortKey, value }] }] })).rejects.toMatchObject({ status: 400 });
       providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: shortKey, value }], evidence: ["本款资料"], warnings: [] })) });
-      await expect(generateTitles(actor(), input([String(row.id)], [shortKey]))).rejects.toMatchObject({ status: 502 });
+      const invalid = await generateTitles(actor(), input([String(row.id)], [shortKey]));
+      expect(invalid.rows).toEqual([]);
+      expect(invalid.skippedRows).toEqual([{ id: String(row.id), reason: expect.stringContaining("短标题") }]);
     }
     expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
     await applyTitles(actor(), { planToken: preview.planToken, rows: preview.rows.map(candidate => ({ id: candidate.id, titles: candidate.titles.map(({ key, value }) => ({ key, value })) })) });
@@ -380,7 +424,9 @@ describe("server-authoritative AI product titles", () => {
   it("rejects short AI long titles during generation and edited application without writing cells", async () => {
     const row = await style("TARGET"), ordinary = providerHandler;
     providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: "【水貂毛拼接100桑蚕丝】锦纨春女式皮衣" }], evidence: ["本款成分及类目"], warnings: [] })) });
-    await expect(generateTitles(actor(), input([String(row.id)], [longKey]))).rejects.toMatchObject({ status: 502, response: { error: { message: expect.stringContaining("至少需要29个字符") } } });
+    const invalid = await generateTitles(actor(), input([String(row.id)], [longKey]));
+    expect(invalid.rows).toEqual([]);
+    expect(invalid.skippedRows).toEqual([{ id: String(row.id), reason: expect.stringContaining("至少需要29个字符") }]);
     providerHandler = ordinary;
     const preview = await generateTitles(actor(), input([String(row.id)]));
     await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: longKey, value: "【水貂毛拼接100桑蚕丝】锦纨春女式皮衣" }] }] })).rejects.toMatchObject({ status: 400, response: { error: { message: expect.stringContaining("至少需要29个字符") } } });
@@ -404,6 +450,7 @@ describe("server-authoritative AI product titles", () => {
     const row = await style("EMPTY", { [categoryKey]: "" }, null);
     const preview = await generateTitles(actor(), input([String(row.id)]));
     expect(preview.rows).toEqual([]); expect(providerCalls).toBe(0);
+    expect(preview.skippedRows).toEqual([{ id: String(row.id), reason: "缺少可用于生成的商品资料或图片" }]);
   });
   it("never sends private category values or private example titles to the provider", async () => {
     await fixture.database!.query("UPDATE selection_field_registry SET owner_id=8,visibility='PRIVATE' WHERE field_key=$1", [categoryKey]);
@@ -469,7 +516,9 @@ describe("server-authoritative AI product titles", () => {
   it("rejects visually unverified design claims from a text-only AI result", async () => {
     const row = await style("TARGET");
     providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: "【水貂毛拼接100桑蚕丝】锦纨春圆领盘扣马甲" }], evidence: ["主面料及配料"], warnings: [] })) });
-    await expect(generateTitles(actor(), input([String(row.id)], [longKey]))).rejects.toMatchObject({ status: 502 });
+    const invalid = await generateTitles(actor(), input([String(row.id)], [longKey]));
+    expect(invalid.rows).toEqual([]);
+    expect(invalid.skippedRows).toEqual([{ id: String(row.id), reason: expect.stringContaining("长标题") }]);
     expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields[longKey]).toBeUndefined();
   });
   it("replays an applied idempotency key as safe identifiers without rerevealing revoked title fields", async () => {
@@ -496,10 +545,21 @@ describe("server-authoritative AI product titles", () => {
     await fixture.database!.query("UPDATE compass_ai_settings SET verified_at=NULL");
     expect(await titleAIStatus(actor())).toEqual({ ready: false, message: expect.any(String) });
   });
-  it("rejects missing, duplicate or unrequested model outputs", () => {
-    const expected = [{ id: "1", keys: [longKey] }], valid = { id: "1", titles: [{ key: longKey, value: "【盘扣】马甲" }], evidence: [], warnings: [] };
-    expect(() => parseTitleAIResponse({ rows: [] }, expected)).toThrow();
-    expect(() => parseTitleAIResponse({ rows: [valid, valid] }, expected)).toThrow();
-    expect(() => parseTitleAIResponse({ rows: [{ ...valid, titles: [{ key: shortKey, value: "马甲" }] }] }, expected)).toThrow();
+  it("accepts only uniquely matched and properly shaped requested model outputs", () => {
+    const expected = ["1", "2", "3", "4", "5"].map(id => ({ id, keys: [longKey] }));
+    const valid = { id: "1", titles: [{ key: longKey, value: "【盘扣】马甲" }], evidence: [], warnings: [] };
+    const duplicate = { ...valid, id: "2" };
+    const result = parseTitleAIResponse({ rows: [duplicate, valid, duplicate,
+      { ...valid, id: "4", titles: [{ key: shortKey, value: "马甲" }] },
+      { ...valid, id: "5", titles: "invalid" }, { ...valid, id: "6" }, null,
+    ] }, expected);
+    expect(result).toEqual({ candidates: [valid], skippedRows: [
+      { id: "2", reason: expect.stringContaining("重复") },
+      { id: "3", reason: expect.stringContaining("未返回") },
+      { id: "4", reason: expect.stringContaining("标题字段") },
+      { id: "5", reason: expect.stringContaining("格式") },
+    ] });
+    expect(parseTitleAIResponse({ rows: [] }, expected).skippedRows).toHaveLength(expected.length);
+    expect(() => parseTitleAIResponse({ rows: {} }, expected)).toThrow();
   });
 });

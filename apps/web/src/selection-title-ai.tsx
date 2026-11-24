@@ -17,6 +17,7 @@ export type SelectionTitleAiField = Pick<SelectionField, "key" | "label" | "text
 type CandidateTitle = SelectionTitleAICandidate & { checked: boolean };
 type CandidateRow = Omit<SelectionTitleAIRow, "titles"> & { titles: CandidateTitle[] };
 type CandidateBatch = { planToken: string; expiresAt: string; rows: CandidateRow[]; warnings: string[]; model: string };
+type SkippedRow = { id: string; xutiStyleNo: string; reason: string };
 export type SelectionTitleAiProps = {
   open: boolean;
   onClose: () => void;
@@ -58,10 +59,15 @@ function validPreview(value: unknown, rowIds: ReadonlySet<string>, targetKeys: R
   return typeof plan.planToken === "string" && plan.planToken.length >= 20 && typeof plan.expiresAt === "string" && Number.isFinite(Date.parse(plan.expiresAt)) && typeof plan.model === "string" && stringList(plan.warnings) &&
     Array.isArray(plan.rows) && plan.rows.every(row => row && rowIds.has(row.id) && typeof row.xutiStyleNo === "string" && typeof row.expectedUpdatedAt === "string" && stringList(row.evidence) && stringList(row.warnings) &&
       (row.poeticName === undefined || typeof row.poeticName === "string" && !titleNameIssue(row.poeticName)) && (row.series === undefined || typeof row.series === "string") &&
-      Array.isArray(row.titles) && row.titles.length <= 2 && row.titles.every(title => title && targetKeys.has(title.key) && typeof title.label === "string" && ["long", "short"].includes(title.kind) && typeof title.value === "string" && Number.isInteger(title.maxLength) && title.maxLength > 0 && ["characters", "han"].includes(title.countMode) &&
+      Array.isArray(row.titles) && (row.titles.length > 0 || plan.skippedRows === undefined) && row.titles.length <= 2 && row.titles.every(title => title && targetKeys.has(title.key) && typeof title.label === "string" && ["long", "short"].includes(title.kind) && typeof title.value === "string" && Number.isInteger(title.maxLength) && title.maxLength > 0 && ["characters", "han"].includes(title.countMode) &&
         (title.minCharacters === selectionTitleMinimumCharacters(title.kind, mode) || (mode === "blank" && title.minCharacters === undefined)) &&
         (mode === "complete" ? title.kind === "long" && title.maxCharacters === SELECTION_AI_TITLE_COMPLETION_CHARACTERS : title.maxCharacters === undefined) &&
-        (mode === "blank" ? title.previousValue === undefined || typeof title.previousValue === "string" : typeof title.previousValue === "string")) && new Set(row.titles.map(title => title.key)).size === row.titles.length) && new Set(plan.rows.map(row => row.id)).size === plan.rows.length;
+        (mode === "blank" ? title.previousValue === undefined || typeof title.previousValue === "string" : typeof title.previousValue === "string")) && new Set(row.titles.map(title => title.key)).size === row.titles.length) &&
+    new Set(plan.rows.map(row => row.id)).size === plan.rows.length &&
+    (plan.skippedRows === undefined || Array.isArray(plan.skippedRows) &&
+      plan.skippedRows.every(row => row && rowIds.has(row.id) && typeof row.reason === "string" && !!row.reason.trim()) &&
+      new Set([...plan.rows, ...plan.skippedRows].map(row => row.id)).size === rowIds.size &&
+      plan.rows.length + plan.skippedRows.length === rowIds.size);
 }
 
 /** Candidates are never sent through grid autosave. The signed apply endpoint
@@ -78,6 +84,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
   const [instruction, setInstruction] = useState("");
   const [batches, setBatches] = useState<CandidateBatch[]>([]);
   const [completedIds, setCompletedIds] = useState<string[]>([]);
+  const [skippedRows, setSkippedRows] = useState<SkippedRow[]>([]);
   const [busy, setBusy] = useState<"generate" | "apply" | null>(null);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState("");
@@ -85,6 +92,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
   const [resultPage, setResultPage] = useState(1);
   const [now, setNow] = useState(Date.now());
   const [applyProgress, setApplyProgress] = useState({ done: 0, total: 0 });
+  const [generateProgress, setGenerateProgress] = useState({ done: 0, total: 0 });
   const stopAfterBatch = useRef(false);
   const runId = useRef(0);
   const running = useRef(false);
@@ -113,6 +121,9 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
   const eligibleRows = savedRows.filter(row => fields.some(field => fieldKeys.includes(field.key) && Object.hasOwn(row.values, field.key) &&
     selectionTitleTargetEligible(mode, field.label === "长标题" ? "long" : "short", row.values[field.key])));
   const remaining = eligibleRows.filter(row => !generated.has(row.id));
+  const skippedIds = new Set(skippedRows.map(row => row.id));
+  const retryRows = eligibleRows.filter(row => skippedIds.has(row.id));
+  const generationReady = !statusLoading && status?.ready && !!fieldKeys.length && !invalidSelectedFields;
   const warnings = [...new Set(batches.flatMap(batch => batch.warnings))];
   useEffect(() => { setResultPage(current => Math.min(current, Math.max(1, Math.ceil(candidates.length / pageSize)))); }, [candidates.length]);
   useEffect(() => {
@@ -138,7 +149,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
     stopAfterBatch.current = false;
     setMode(initialMode);
     setFieldKeys(initialFieldKeys.filter(key => fields.some(field => field.key === key && (initialMode !== "complete" || field.label === "长标题"))));
-    setBatches([]); setCompletedIds([]); setError(""); setResult(""); setResultPage(1);
+    setBatches([]); setCompletedIds([]); setSkippedRows([]); setError(""); setResult(""); setResultPage(1);
     setBusy(null); setStopping(false); running.current = false; applyKeys.current.clear();
     setStatus(null);
     setNow(Date.now());
@@ -148,7 +159,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
 
   const clear = () => {
     if (running.current) return;
-    setBatches([]); setCompletedIds([]); setError(""); setResult(""); setResultPage(1); applyKeys.current.clear();
+    setBatches([]); setCompletedIds([]); setSkippedRows([]); setError(""); setResult(""); setResultPage(1); applyKeys.current.clear();
   };
   const stop = () => { stopAfterBatch.current = true; setStopping(true); };
   const removeExpired = () => {
@@ -160,12 +171,15 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
     for (const token of tokens) applyKeys.current.delete(token);
     setError(""); setResult("过期候选已移除，可继续生成这些款式。");
   };
-  const generate = async () => {
-    if (running.current || !status?.ready || !fieldKeys.length || invalidSelectedFields || !remaining.length) return;
+  const generate = async (retrySkipped = false) => {
+    const queue = retrySkipped ? retryRows : remaining;
+    if (running.current || !generationReady || !queue.length) return;
     running.current = true; stopAfterBatch.current = false;
     setBusy("generate"); setStopping(false); setError(""); setResult("");
     const currentRun = runId.current;
-    const queue = [...remaining];
+    const total = retrySkipped ? queue.length : eligibleRows.length;
+    const completedBefore = total - queue.length;
+    setGenerateProgress({ done: completedBefore, total });
     const activePlans = [...batches];
     try {
       for (let offset = 0; offset < queue.length && !stopAfterBatch.current; offset += batchSize) {
@@ -186,13 +200,23 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
         if (currentRun !== runId.current) return;
         const plan: unknown = response.data;
         if (!validPreview(plan, new Set(group.map(row => row.id)), new Set(fieldKeys), mode)) throw Error("标题服务返回格式已变化，请刷新页面后重试");
-        const next = { ...plan, rows: plan.rows.map(row => ({ ...row, titles: row.titles.map(title => ({ ...title, minCharacters: selectionTitleMinimumCharacters(title.kind, mode), checked: true })) })) };
+        const { skippedRows: skipped, ...preview } = plan;
+        const next = { ...preview, rows: preview.rows.filter(row => row.titles.length > 0).map(row => ({ ...row, titles: row.titles.map(title => ({ ...title, minCharacters: selectionTitleMinimumCharacters(title.kind, mode), checked: true })) })) };
+        const completed = new Set(group.map(row => row.id));
+        const accepted = new Set(next.rows.map(row => row.id));
+        const reasons = new Map(skipped?.map(row => [row.id, row.reason]) ??
+          preview.rows.filter(row => !row.titles.length).map(row => [row.id, row.warnings.filter(warning => warning.trim()).join("；")]));
+        const skippedGroup = group.filter(row => !accepted.has(row.id)).map(({ id, xutiStyleNo }) => ({
+          id, xutiStyleNo, reason: reasons.get(id) || "本次未返回可用候选",
+        }));
         activePlans.push(next);
         setBatches(current => [...current, next]);
-        setCompletedIds(current => [...current, ...group.map(row => row.id)]);
+        setCompletedIds(current => [...new Set([...current, ...completed])]);
+        setSkippedRows(current => [...current.filter(row => !completed.has(row.id)), ...skippedGroup]);
+        setGenerateProgress({ done: completedBefore + offset + group.length, total });
         setNow(Date.now());
       }
-    } catch (error) { if (currentRun === runId.current) setError(`${errorText(error)}。已生成的候选已保留，可继续生成剩余款式。`); }
+    } catch (error) { if (currentRun === runId.current) setError(`${errorText(error)}。已生成的候选已保留。${retrySkipped ? "可重试跳过款式。" : "可继续生成剩余款式。"}`); }
     finally {
       if (currentRun === runId.current) { running.current = false; setBusy(null); setStopping(false); }
     }
@@ -244,7 +268,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
     }
   };
   const settingsLocked = !!busy || completedIds.length > 0;
-  const progress = busy === "apply" ? applyProgress : { done: completedIds.length, total: eligibleRows.length };
+  const progress = busy === "apply" ? applyProgress : generateProgress;
   return <Modal className="selection-title-ai-modal" title={<Space><BulbOutlined aria-hidden />AI 商品标题生成</Space>} open={open} width={760}
     onCancel={() => { if (!running.current) onClose(); }} closable={!busy} maskClosable={!busy} keyboard={!busy}
     footer={<Space wrap>
@@ -252,7 +276,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
         <Button onClick={onClose}>关闭</Button>
         {!!expiredBatches.length && <Button onClick={removeExpired}>移除过期候选</Button>}
         {!!completedIds.length && <Button onClick={clear}>清空候选</Button>}
-        <Button disabled={statusLoading || !status?.ready || !fieldKeys.length || invalidSelectedFields || !remaining.length} onClick={() => void generate()}>{completedIds.length ? "继续生成剩余款式" : "生成候选标题"}</Button>
+        <Button disabled={!generationReady || !remaining.length} onClick={() => void generate()}>{completedIds.length ? "继续生成剩余款式" : "生成候选标题"}</Button>
         <Button type="primary" disabled={!checkedTitles.length || invalidChecked} onClick={() => void apply()}>{mode === "blank" ? `确认填补 ${checkedTitles.length} 个空白单元格` : `确认更新 ${checkedTitles.length} 个标题单元格`}</Button>
       </>}
     </Space>}>
@@ -275,6 +299,11 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
     {busy && <div role="status" className="selection-title-ai-progress"><span>{busy === "generate" ? "正在生成候选" : "正在保存标题"} · {progress.done} / {progress.total}{busy === "generate" ? " 款" : " 批"}</span><Progress percent={progress.total ? Math.round(progress.done / progress.total * 100) : 0} size="small" />{stopping && <span>当前请求完成后停止，已完成内容会保留。</span>}</div>}
     {error && <Alert className="selection-title-ai-alert" type="error" showIcon title={error} />}
     {result && <Alert className="selection-title-ai-alert" type="success" showIcon title={result} />}
+    {!!skippedRows.length && <Alert className="selection-title-ai-alert" type="warning" showIcon title={`已跳过 ${skippedRows.length} 款`}
+      description={<>
+        <ul className="selection-title-ai-skipped-list">{skippedRows.map(row => <li key={row.id}><strong>{row.xutiStyleNo}</strong> · {assistantPublicText(row.reason)}</li>)}</ul>
+        <Button size="small" disabled={!!busy || !generationReady || !retryRows.length} onClick={() => void generate(true)}>重试跳过款式</Button>
+      </>} />}
     {!!warnings.length && <Alert className="selection-title-ai-alert" type="warning" showIcon title={warnings.join("；")} />}
     {!!expiredBatches.length && <Alert className="selection-title-ai-alert" type="warning" showIcon title="部分候选已过期，不能保存" description="移除过期候选后，点击“继续生成剩余款式”重新生成；已保存的款式和其他有效候选保留。" />}
     {!expiredBatches.length && expiringSoon && <Alert className="selection-title-ai-alert" type="warning" showIcon title="候选即将过期，请先确认已生成内容，再继续剩余款式" />}
@@ -301,6 +330,5 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
       <Typography.Text type="secondary" className="selection-title-ai-footnote">AI 候选可能有误，请核对图片、成分与命名；保存时会再次检查资料、权限和长度。已保存批次不会因后续冲突撤销。</Typography.Text>
     </>}
     {!busy && !eligibleRows.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="此范围没有符合当前处理方式的标题，可切换处理方式或调整字段和选区。" />}
-    {!busy && completedIds.length > 0 && !candidates.length && !result && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="资料不足以生成候选，请补充本款资料后重试。" />}
   </Modal>;
 }

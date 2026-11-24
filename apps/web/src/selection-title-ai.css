@@ -8,6 +8,7 @@
 .selection-title-ai-options p,.selection-title-ai-footnote{font-size:12px;color:var(--app-secondary);line-height:1.6}
 .selection-title-ai-options p{margin:0}
 .selection-title-ai-alert{margin-top:10px}
+.selection-title-ai-skipped-list{max-height:144px;overflow:auto;margin:0 0 8px;padding-inline-start:20px;overflow-wrap:anywhere}
 .selection-title-ai-progress{margin:12px 0;font-size:12px}
 .selection-title-ai-review-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:14px 0 8px}
 .selection-title-ai-review-heading span{font-size:12px;color:var(--app-secondary)}
