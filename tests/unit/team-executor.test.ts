@@ -69,17 +69,11 @@ function fixture(steps: TeamPlanStep[] = [step("write")]) {
       const data =
         request.purpose === "plan"
           ? { summary: "实际协作计划", steps }
-          : request.purpose === "brief"
-            ? { brief: "根据已授权资料创作，引用来源，不编造事实" }
-            : request.purpose === "execute"
-              ? { status: "completed", content: "这是一份完整说明正文。" }
-              : request.purpose === "review"
-                ? { accepted: true, review: "正文满足全部验收项" }
-                : request.purpose === "archive"
-                  ? { summary: "使用说明已验收归档", tags: ["说明"] }
-                  : request.purpose === "summary"
-                    ? { summary: "全部已验收成果已汇总" }
-                    : { ids: [], summary: "无相关历史内容" };
+          : request.purpose === "execute"
+            ? { status: "completed", content: "这是一份完整说明正文。" }
+            : request.purpose === "review"
+              ? { accepted: true, review: "正文满足全部验收项" }
+              : { ids: [], summary: "无相关历史内容" };
       return {
         data,
         model: "actual/model",
@@ -203,9 +197,11 @@ describe("team orchestration", () => {
     expect(review.prompt).toContain(
       "其他内容、事实、来源和文件要求仍须逐项核实",
     );
-    expect(f.calls.findIndex((r) => r.purpose === "archive")).toBeGreaterThan(
-      f.calls.findIndex((r) => r.purpose === "review"),
-    );
+    expect(f.calls.map((r) => r.purpose)).toEqual([
+      "plan",
+      "execute",
+      "review",
+    ]);
   });
   it("executes ready steps concurrently, waits for acceptance before dependencies, and archives actual results", async () => {
     const f = fixture([
@@ -238,11 +234,7 @@ describe("team orchestration", () => {
         .filter((r) => r.purpose === "review")
         .every((r) => r.member.role === "coordinator"),
     ).toBe(true);
-    expect(
-      f.calls
-        .filter((r) => r.purpose === "archive")
-        .every((r) => r.member.role === "librarian"),
-    ).toBe(true);
+    expect(f.calls.filter((r) => r.purpose === "review")).toHaveLength(3);
     expect(result.state.steps[0].model).toBe("actual/model");
     expect(f.save.mock.calls.at(-1)?.[1]).toBe("DONE");
   });
@@ -348,70 +340,89 @@ describe("team orchestration", () => {
     expect(result.status).toBe("NEEDS_USER");
     expect(result.state.steps[0].attempts).toBe(2);
     expect(f.calls.filter((r) => r.purpose === "execute")).toHaveLength(2);
-    expect(f.calls.filter((r) => r.purpose === "archive")).toHaveLength(0);
     expect(f.artifacts.map((a) => a.status)).toEqual(["REJECTED", "REJECTED"]);
     expect(f.calls.filter((r) => r.purpose === "execute")[1].prompt).toContain(
       "缺少第二部分",
     );
   });
-  it("preserves the independent review before archive metadata and archives accepted originals if that model fails", async () => {
+  it("returns the accepted original and saves the review without another provider request", async () => {
     const f = fixture();
-    f.handle(async (request) => {
-      if (request.purpose === "archive") {
-        expect(f.artifacts[0]).toMatchObject({
-          status: "DRAFT",
-          review: "正文满足全部验收项",
-        });
-        throw Error("private-provider-payload");
-      }
-      return undefined;
-    });
     const result = await f.run();
     expect(result.status).toBe("DONE");
-    expect(result.state.steps[0].status).toBe("DONE");
+    expect(result.summary).toBe(f.artifacts[0].content);
     expect(f.artifacts[0]).toMatchObject({
       status: "ACCEPTED",
-      tags: [],
-      content: "这是一份完整说明正文。",
+      review: "正文满足全部验收项",
     });
-    expect(f.artifacts[0].review).toContain(
-      "知识摘要未生成，原始产物与验收意见已归档",
-    );
-    expect(f.artifacts[0].review).not.toContain("private-provider-payload");
-    expect(
-      f.calls.filter((request) => request.purpose === "archive"),
-    ).toHaveLength(1);
+    expect(f.calls.map((r) => r.purpose)).toEqual([
+      "plan",
+      "execute",
+      "review",
+    ]);
   });
-  it("does not archive after cancellation or a lost lease during metadata generation", async () => {
-    const canceled = fixture(),
-      controller = new AbortController();
-    canceled.handle(async (request) => {
-      if (request.purpose === "archive") {
-        controller.abort();
-        throw Error("metadata interrupted");
-      }
-      return undefined;
-    });
-    await expect(canceled.run(controller.signal)).rejects.toThrow();
-    expect(canceled.artifacts[0]).toMatchObject({
+  it("stops after independent review if the lease is lost before the archive write", async () => {
+    const f = fixture();
+    const persist = f.deps.artifact;
+    let live = true;
+    f.deps.artifact = async (a) => {
+      await persist(a);
+      if (a.status === "DRAFT" && a.review) live = false;
+    };
+    f.deps.check = async () => {
+      if (!live) throw Error("lease lost");
+    };
+    await expect(f.run()).rejects.toThrow("lease lost");
+    expect(f.artifacts[0]).toMatchObject({
       status: "DRAFT",
       review: "正文满足全部验收项",
     });
-    const lost = fixture();
-    let valid = true;
-    lost.deps.check = async () => {
-      if (!valid) throw Error("lease lost");
-    };
-    lost.handle(async (request) => {
-      if (request.purpose === "archive") {
-        valid = false;
-        throw Error("metadata interrupted");
-      }
-      return undefined;
-    });
-    await expect(lost.run()).rejects.toThrow("lease lost");
-    expect(lost.artifacts[0].status).toBe("DRAFT");
   });
+  it("asks once at intake when every deliverable lacks an essential input", async () => {
+    const f = fixture([]);
+    f.handle(async () => ({
+      data: { summary: "请上传商品原图。", steps: [] },
+    }));
+    const result = await f.run();
+    expect(result).toMatchObject({
+      status: "NEEDS_USER",
+      summary: "请上传商品原图。",
+      artifacts: [],
+      state: {
+        phase: "awaiting_input",
+        inputRequestId: expect.any(String),
+        steps: [],
+      },
+    });
+    expect(f.calls.map((r) => r.purpose)).toEqual(["plan"]);
+  });
+  it.each([false, true])(
+    "only offers a reply when blocked steps have no tool side effects (used tools: %s)",
+    async (usedTools) => {
+      const f = fixture([
+        step("done"),
+        step("missing"),
+        step("dependent", ["missing"]),
+      ]);
+      f.handle(async (r) =>
+        r.purpose === "execute" && r.step?.id === "missing"
+          ? {
+              data: { status: "needs_input", content: "请上传原图" },
+              usedTools,
+            }
+          : undefined,
+      );
+      const result = await f.run();
+      expect(result.status).toBe("NEEDS_USER");
+      expect(result.state.phase).toBe(
+        usedTools ? "finished" : "awaiting_input",
+      );
+      expect(result.summary).toContain("请上传原图");
+      expect(result.summary).not.toContain("前置步骤");
+      expect(result.artifacts).toHaveLength(1);
+      expect(result.artifacts[0].status).toBe("ACCEPTED");
+      expect(f.calls.filter((r) => r.purpose === "review")).toHaveLength(1);
+    },
+  );
   it("does not mark an artifact accepted when the actual archive database write fails", async () => {
     const f = fixture(),
       persist = f.deps.artifact;
@@ -482,7 +493,7 @@ describe("team orchestration", () => {
         : undefined,
     );
     await f.run();
-    expect(f.calls.find((r) => r.purpose === "brief")?.prompt).toContain(
+    expect(f.calls.find((r) => r.purpose === "execute")?.prompt).toContain(
       "核实后的旧内容",
     );
     const invalid = fixture();

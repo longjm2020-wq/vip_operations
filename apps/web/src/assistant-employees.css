@@ -412,6 +412,20 @@
 .employee-composer > .ant-select {
   width: 100%;
 }
+.employee-reply-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b9c8f0;
+  font-size: 12px;
+}
+.employee-reply-target span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .employee-composer textarea.ant-input {
   background: transparent;
   border: 0;

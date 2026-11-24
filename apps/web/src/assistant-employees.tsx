@@ -692,10 +692,14 @@ function TaskCard({
   task: summary,
   control,
   reuse,
+  onSupplement,
+  onCopyRequest,
 }: {
   task: EmployeeTask;
   control: (id: string, action: "pause" | "resume" | "stop") => Promise<void>;
   reuse: (files: AgentFile[]) => void;
+  onSupplement?: () => void;
+  onCopyRequest?: () => void;
 }) {
   const user = useUser(),
     [expanded, setExpanded] = useState(false);
@@ -726,11 +730,14 @@ function TaskCard({
     }
   };
   const active = teamActive(task.status),
-    files = task.artifacts
-      .filter((a) => a.status === "ACCEPTED")
-      .flatMap((a) => a.files);
-  const status =
-    task.paused && active
+    files =
+      summary.resultFiles ??
+      task.artifacts
+        .filter((a) => a.status === "ACCEPTED")
+        .flatMap((a) => a.files);
+  const status = summary.inputRequestId
+    ? "待补充资料"
+    : task.paused && active
       ? task.status === "QUEUED"
         ? "已暂停"
         : "当前步骤结束后暂停"
@@ -759,12 +766,17 @@ function TaskCard({
             {status}
           </Tag>
         </div>
-        <p className="employee-note" role="status">
-          {task.stage}
-        </p>
+        {task.stage !== status && (
+          <p className="employee-note" role="status">
+            {task.stage}
+          </p>
+        )}
         {task.summary && (
           <div className="employee-result-text">{task.summary}</div>
         )}
+        {files.slice(0, 3).map((file) => (
+          <AgentFileLink key={file.id} file={file} />
+        ))}
         {task.error && <Alert type="warning" title={task.error} />}
         {(task.steps.length > 0 ||
           task.artifacts.length > 0 ||
@@ -775,7 +787,10 @@ function TaskCard({
             items={[
               {
                 key: "details",
-                label: `进度与产物 · ${summary.completedSteps ?? task.steps.filter((s) => s.status === "DONE").length}/${summary.stepCount ?? task.steps.length}`,
+                label:
+                  (summary.stepCount ?? task.steps.length) > 0
+                    ? `进度与产物 · ${summary.completedSteps ?? task.steps.filter((s) => s.status === "DONE").length}/${summary.stepCount ?? task.steps.length}${files.length > 3 ? ` · 共 ${files.length} 份文件` : ""}`
+                    : "任务详情",
                 children: (
                   <>
                     {detail.isLoading && <Spin />}
@@ -826,6 +841,18 @@ function TaskCard({
           />
         )}
         <div className="employee-task-actions">
+          {summary.inputRequestId && onSupplement && (
+            <Button size="small" onClick={onSupplement}>
+              补充这项任务
+            </Button>
+          )}
+          {task.status === "NEEDS_USER" &&
+            !summary.inputRequestId &&
+            onCopyRequest && (
+              <Button size="small" onClick={onCopyRequest}>
+                沿用交办内容新建
+              </Button>
+            )}
           {active && (
             <>
               <Button
@@ -863,7 +890,14 @@ export type EmployeeDraft = {
   attachments: AgentOptions;
   employeeIds: string[];
   requestId?: string;
+  replyTo?: { taskId: string; requestId: string; title: string } | null;
 };
+
+function employeeReplyTarget(task?: EmployeeTask) {
+  return task?.inputRequestId
+    ? { taskId: task.id, requestId: task.inputRequestId, title: task.goal }
+    : null;
+}
 export function AssistantEmployeesPanel({
   selected,
   select,
@@ -902,16 +936,11 @@ export function AssistantEmployeesPanel({
   }, [selected]);
   const chatHistory = useRef<HTMLDivElement>(null);
   const scope = user.id + ":" + (selected || "dispatch"),
-    draft = drafts[scope] || {
+    draft: EmployeeDraft = drafts[scope] || {
       goal: "",
       attachments: { attachments: [] },
       employeeIds: [],
     };
-  const updateDraft = (change: Partial<EmployeeDraft>) =>
-    setDrafts((all) => ({
-      ...all,
-      [scope]: { ...draft, ...change, requestId: undefined },
-    }));
   const tasks = useQuery({
     queryKey: [...tasksKey(user.id), selected || "dispatch"],
     enabled: !creating && (!selected || !!employee),
@@ -924,6 +953,32 @@ export function AssistantEmployeesPanel({
     refetchInterval: 5000,
   });
   const history = Array.isArray(tasks.data) ? tasks.data : [];
+  const sameConversation = (task: EmployeeTask) =>
+    selected
+      ? task.origin === "direct" && task.employeeId === selected
+      : task.origin === "dispatch";
+  const emptyDraft = !draft.goal && !draft.attachments.attachments.length;
+  const replyTo =
+    draft.replyTo === undefined && emptyDraft
+      ? employeeReplyTarget(history.find(sameConversation))
+      : draft.replyTo;
+  const updateDraft = (change: Partial<EmployeeDraft>) =>
+    setDrafts((all) => ({
+      ...all,
+      [scope]: {
+        ...(all[scope] || draft),
+        replyTo,
+        ...change,
+        requestId: undefined,
+      },
+    }));
+  const composerInput = useRef<React.ComponentRef<typeof Input.TextArea>>(null);
+  const canSend = replyTo
+    ? !!draft.goal.trim() || draft.attachments.attachments.length > 0
+    : draft.goal.trim().length >= 2 &&
+      catalog.data?.ready &&
+      (employee ||
+        employees.some((e) => !e.archived && e.allowDispatch && e.accepting));
   useEffect(() => {
     chatHistory.current?.scrollTo({ top: chatHistory.current.scrollHeight });
   }, [scope, history.length]);
@@ -939,24 +994,41 @@ export function AssistantEmployeesPanel({
     setError("");
   };
   const send = async () => {
-    if (draft.goal.trim().length < 2 || uploading || sending) return;
+    if (!canSend || uploading || sending) return;
     const id = draft.requestId || crypto.randomUUID();
-    setDrafts((all) => ({ ...all, [scope]: { ...draft, requestId: id } }));
+    setDrafts((all) => ({
+      ...all,
+      [scope]: { ...draft, replyTo, requestId: id },
+    }));
     setSending(true);
     setError("");
     try {
-      await api(
-        `${root}/tasks`,
-        "POST",
-        {
+      const attachmentIds = draft.attachments.attachments.map((f) => f.id);
+      if (replyTo) {
+        await api(
+          `${root}/tasks/${replyTo.taskId}/supplement`,
+          "POST",
+          {
+            requestId: replyTo.requestId,
+            text: draft.goal.trim(),
+            attachmentIds,
+          },
           id,
-          employeeId: selected,
-          employeeIds: selected ? [] : draft.employeeIds,
-          goal: draft.goal.trim(),
-          attachmentIds: draft.attachments.attachments.map((f) => f.id),
-        },
-        id,
-      );
+        );
+      } else {
+        await api(
+          `${root}/tasks`,
+          "POST",
+          {
+            id,
+            employeeId: selected,
+            employeeIds: selected ? [] : draft.employeeIds,
+            goal: draft.goal.trim(),
+            attachmentIds,
+          },
+          id,
+        );
+      }
       setDrafts((all) => ({
         ...all,
         [scope]: {
@@ -982,6 +1054,7 @@ export function AssistantEmployeesPanel({
   };
   const reuse = (files: AgentFile[]) => {
     updateDraft({
+      replyTo: null,
       attachments: {
         attachments: [
           ...new Map(
@@ -1224,12 +1297,59 @@ export function AssistantEmployeesPanel({
                     task={task}
                     control={control}
                     reuse={reuse}
+                    onSupplement={
+                      !employee?.archived &&
+                      sameConversation(task) &&
+                      !sending &&
+                      !uploading &&
+                      task.inputRequestId !== replyTo?.requestId
+                        ? () => {
+                            updateDraft({ replyTo: employeeReplyTarget(task) });
+                            composerInput.current?.focus();
+                          }
+                        : undefined
+                    }
+                    onCopyRequest={
+                      !employee?.archived &&
+                      sameConversation(task) &&
+                      emptyDraft &&
+                      !sending &&
+                      !uploading
+                        ? () => {
+                            updateDraft({
+                              replyTo: null,
+                              goal: task.goal,
+                              attachments: { attachments: task.attachments },
+                              employeeIds:
+                                task.origin === "dispatch"
+                                  ? task.employeeIds
+                                  : [],
+                            });
+                            composerInput.current?.focus({ cursor: "end" });
+                          }
+                        : undefined
+                    }
                   />
                 ))}
               </div>
               {!employee?.archived && (
                 <div className="employee-composer">
-                  {!employee && (
+                  {replyTo && (
+                    <div className="employee-reply-target">
+                      <span title={replyTo.title}>
+                        补充原任务 · {replyTo.title}
+                      </span>
+                      <Button
+                        type="text"
+                        size="small"
+                        disabled={sending || uploading}
+                        onClick={() => updateDraft({ replyTo: null })}
+                      >
+                        另开任务
+                      </Button>
+                    </div>
+                  )}
+                  {!employee && !replyTo && (
                     <Select
                       mode="multiple"
                       aria-label="协作员工"
@@ -1260,11 +1380,14 @@ export function AssistantEmployeesPanel({
                       </button>
                     )}
                   <Input.TextArea
-                    aria-label="交办员工任务"
+                    ref={composerInput}
+                    aria-label={replyTo ? "补充员工任务" : "交办员工任务"}
                     placeholder={
-                      employee
-                        ? `交给${employee.name}的任务…`
-                        : "描述目标，小序会安排员工…"
+                      replyTo
+                        ? "填写补充说明，或用＋上传缺少的素材…"
+                        : employee
+                          ? `交给${employee.name}的任务…`
+                          : "描述目标，小序会安排员工…"
                     }
                     value={draft.goal}
                     maxLength={8000}
@@ -1287,19 +1410,10 @@ export function AssistantEmployeesPanel({
                       <Button
                         type="primary"
                         shape="circle"
-                        aria-label="发送员工任务"
+                        aria-label={replyTo ? "提交补充资料" : "发送员工任务"}
                         icon={<SendOutlined />}
                         loading={sending}
-                        disabled={
-                          uploading ||
-                          draft.goal.trim().length < 2 ||
-                          !catalog.data?.ready ||
-                          (!employee &&
-                            !employees.some(
-                              (e) =>
-                                !e.archived && e.allowDispatch && e.accepting,
-                            ))
-                        }
+                        disabled={uploading || !canSend}
                         onClick={() => void send()}
                       />
                     }

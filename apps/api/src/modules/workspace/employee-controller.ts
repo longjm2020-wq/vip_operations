@@ -22,6 +22,7 @@ import {
   createEmployeeTask,
   readEmployeeTask,
   controlEmployeeTask,
+  supplementEmployeeTask,
 } from "./assistant-employees.js";
 
 @Controller("api/v1/my-workspace/assistant/employees")
@@ -78,5 +79,13 @@ export class AssistantEmployeeController {
     @Body() body: unknown,
   ) {
     return controlEmployeeTask(context(request), id, body);
+  }
+  @Post("tasks/:id/supplement")
+  supplement(
+    @Req() request: AuthRequest,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return supplementEmployeeTask(context(request), id, body);
   }
 }

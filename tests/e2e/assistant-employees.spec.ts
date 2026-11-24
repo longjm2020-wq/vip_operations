@@ -248,6 +248,7 @@ async function setup(page: Page, count = 0, conflict = false) {
             summaryOnly: true,
             stepCount: t.steps.length,
             completedSteps: t.steps.filter((s) => s.status === "DONE").length,
+            resultFiles: t.artifacts.filter((a) => a.status === "ACCEPTED").flatMap((a) => a.files),
             steps: [],
             artifacts: [],
           }));
@@ -930,6 +931,84 @@ test("员工草稿相互隔离，切换工具保留草稿，独立交办可暂�
   ).not.toBeVisible();
   expect(f.controls).toHaveLength(2);
 });
+test("待补充的员工任务直接接收附件，保留原单并可切换新交办", async ({
+  page,
+}) => {
+  const f = await setup(page, 2);
+  const fileId = randomUUID(),
+    requestId = randomUUID();
+  await page.route("**/api/v1/my-workspace/assistant/files", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          id: fileId,
+          name: "原图.png",
+          mime: "image/png",
+          size: 24,
+          source: "upload",
+          createdAt: new Date().toISOString(),
+        },
+      },
+    }),
+  );
+  await page.goto("/my-workspace");
+  await openEmployee(page, "修图师");
+  await page
+    .getByRole("textbox", { name: "交办员工任务" })
+    .fill("制作商品详情图，其他由你决定");
+  await page.getByRole("button", { name: "发送员工任务", exact: true }).click();
+  await expect.poll(() => f.tasks.length).toBe(1);
+  const task = f.tasks[0];
+  Object.assign(task, {
+    status: "NEEDS_USER",
+    stage: "待补充资料",
+    summary: "请上传商品原图",
+    inputRequestId: requestId,
+  });
+  await expect(page.getByRole("textbox", { name: "补充员工任务" })).toBeVisible(
+    { timeout: 10000 },
+  );
+  await page.getByRole("button", { name: "另开任务" }).click();
+  await expect(
+    page.getByRole("textbox", { name: "交办员工任务" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "补充这项任务" }).click();
+  const send = page.getByRole("button", { name: "提交补充资料" });
+  await expect(send).toBeDisabled();
+  await page
+    .locator(".employee-composer input[type=file]")
+    .setInputFiles({
+      name: "原图.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("test attachment"),
+    });
+  await expect(send).toBeEnabled();
+  const replies: unknown[] = [];
+  await page.route(`**/tasks/${task.id}/supplement`, (route) => {
+    replies.push(route.request().postDataJSON());
+    Object.assign(task, {
+      status: "QUEUED",
+      stage: "已收到补充资料，等待员工",
+      summary: "",
+      inputRequestId: undefined,
+    });
+    return route.fulfill({ json: { data: task } });
+  });
+  await send.click();
+  await expect(page.getByText("已收到补充资料，等待员工")).toBeVisible();
+  expect(replies).toEqual([{ requestId, text: "", attachmentIds: [fileId] }]);
+  expect(f.submissions).toHaveLength(1);
+  expect(f.personal).toHaveLength(0);
+  // Older runs have no verified input checkpoint. Copying their request opens an editable draft.
+  Object.assign(task, { status: "NEEDS_USER", stage: "需要核对任务" });
+  await page
+    .getByRole("button", { name: "沿用交办内容新建" })
+    .click({ timeout: 10000 });
+  await expect(page.getByRole("textbox", { name: "交办员工任务" })).toHaveValue(
+    task.goal,
+  );
+  expect(f.submissions).toHaveLength(1);
+});
 test("小序派单独立提交，员工网格整齐展示，右栏不展示普通执行位置", async ({
   page,
 }) => {
@@ -1146,7 +1225,8 @@ test("任务详情读取真实产物与生成型号，复用文件需再次明�
   await expect(page.getByText("已验收并交付", { exact: true })).toBeVisible({
     timeout: 10000,
   });
-  await page.getByText("进度与产物 · 0/0", { exact: true }).click();
+  await expect(page.getByRole("link", { name: /商品说明\.txt/ })).toBeVisible();
+  await page.getByText("任务详情", { exact: true }).click();
   await expect(page.getByText(/生成型号：model\/image/)).toBeVisible();
   await expect(
     page.getByRole("article", { name: "交付：商品产物" }),

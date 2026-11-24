@@ -74,6 +74,11 @@ vi.mock(
 import { runTeamExecution } from "../../apps/api/src/modules/workspace/team-executor.js";
 import { saveKnowledge } from "../../apps/api/src/modules/workspace/assistant-knowledge.js";
 import { readTeamRun } from "../../apps/api/src/modules/workspace/assistant-team.js";
+import {
+  listEmployeeTasks,
+  supplementEmployeeTask,
+} from "../../apps/api/src/modules/workspace/assistant-employees.js";
+import { claimAssistantRun } from "../../apps/api/src/modules/workspace/employee-runtime.js";
 
 const c: Context = {
   actor: {
@@ -108,7 +113,7 @@ beforeAll(async () => {
     CREATE TABLE role_permissions(role_id bigint,permission_id bigint);INSERT INTO role_permissions VALUES(1,1),(1,2);
     CREATE TABLE compass_ai_settings(id int,enabled bool,verified_at timestamptz,api_key_encrypted text);INSERT INTO compass_ai_settings VALUES(1,true,now(),'test');
     CREATE TABLE personal_assistant_files(id uuid PRIMARY KEY,user_id bigint,name text,mime text,size int,source text,metadata jsonb,created_at timestamptz,content bytea,extracted_text text);
-    CREATE TABLE personal_assistant_jobs(id uuid PRIMARY KEY,user_id bigint,request_id uuid,status text,output_ids jsonb,error_note text,stage text,updated_at timestamptz);`);
+    CREATE TABLE personal_assistant_jobs(id uuid PRIMARY KEY,user_id bigint,request_id uuid,status text,output_ids jsonb,error_note text,stage text,updated_at timestamptz,title text,kind text,model text,created_at timestamptz DEFAULT now());`);
   await installAiManagementSchema(f.db);
   await f.db.exec(
     await readFile(
@@ -194,25 +199,23 @@ async function runRow(engine: "native" | false = "native") {
   return { run: { id, user_id: "1", input }, lease };
 }
 function startDocumentScenario(kind = "document", memberId = "writing") {
-  f.fetch
-    .mockResolvedValueOnce(
-      response({
-        summary: "交付实际产物",
-        steps: [
-          {
-            id: "write",
-            title: "实际产物",
-            memberId,
-            instruction: "交付完整内容和文件",
-            dependencies: [],
-            difficulty: "simple",
-            deliverable: kind,
-            acceptance: ["实际产物完整且可使用"],
-          },
-        ],
-      }),
-    )
-    .mockResolvedValueOnce(response({ brief: "按工具真实结果交付" }));
+  f.fetch.mockResolvedValueOnce(
+    response({
+      summary: "交付实际产物",
+      steps: [
+        {
+          id: "write",
+          title: "实际产物",
+          memberId,
+          instruction: "交付完整内容和文件",
+          dependencies: [],
+          difficulty: "simple",
+          deliverable: kind,
+          acceptance: ["实际产物完整且可使用"],
+        },
+      ],
+    }),
+  );
 }
 function toolResponse(name = "create_document") {
   return Response.json({
@@ -248,12 +251,9 @@ function toolResponse(name = "create_document") {
   });
 }
 function finishDocumentScenario() {
-  f.fetch
-    .mockResolvedValueOnce(
-      response({ accepted: true, review: "实际文件已核对" }),
-    )
-    .mockResolvedValueOnce(response({ summary: "已验收文件", tags: ["说明"] }))
-    .mockResolvedValueOnce(response({ summary: "真实文件已完成并验收" }));
+  f.fetch.mockResolvedValueOnce(
+    response({ accepted: true, review: "实际文件已核对" }),
+  );
 }
 function successfulFileJob(runId: string) {
   const fileId = randomUUID(),
@@ -280,6 +280,124 @@ async function configureAgentAiRuntime() {
   f.route.mockResolvedValue({ ...model, provider: "agentai" });
 }
 describe("production team adapter", () => {
+  it("accepts attachment-only replies once and resumes the original task with its budget and owner", async () => {
+    const { run, lease } = await runRow();
+    const signal = new AbortController().signal;
+    f.fetch.mockResolvedValueOnce(
+      response({ summary: "请上传商品说明。", steps: [] }),
+    );
+    await runTeamExecution(c, run, lease, signal);
+    const waiting = (
+      await listEmployeeTasks(c, run.input.employeeContext.employeeId)
+    )[0];
+    expect(waiting).toMatchObject({
+      id: run.id,
+      modelCalls: 1,
+      inputRequestId: expect.any(String),
+    });
+    const fileId = randomUUID();
+    const reply = {
+      requestId: waiting.inputRequestId!,
+      text: "",
+      attachmentIds: [fileId],
+    };
+    await expect(
+      supplementEmployeeTask(c, run.id, reply),
+    ).rejects.toMatchObject({ status: 404 });
+    await f.db!.query(
+      "INSERT INTO personal_assistant_files VALUES($1,1,'商品.txt','text/plain',12,'upload','{}',now(),$2,'面料为棉')",
+      [fileId, Buffer.from("面料为棉")],
+    );
+    await expect(
+      supplementEmployeeTask(
+        { ...c, actor: { ...c.actor, id: "2" } },
+        run.id,
+        reply,
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    const queued = await supplementEmployeeTask(c, run.id, reply);
+    expect(queued).toMatchObject({
+      id: run.id,
+      status: "QUEUED",
+      goal: run.input.goal,
+      modelCalls: 1,
+      attachments: [{ id: fileId }],
+    });
+    await expect(
+      supplementEmployeeTask(c, run.id, { ...reply, text: "不同补充" }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect((await supplementEmployeeTask(c, run.id, reply)).id).toBe(run.id);
+    expect(await listEmployeeTasks(c)).toHaveLength(1);
+    const nextLease = randomUUID();
+    const claimed = await claimAssistantRun(nextLease);
+    expect(claimed?.id).toBe(run.id);
+    startDocumentScenario("text");
+    f.fetch.mockResolvedValueOnce(
+      response({ status: "completed", content: "棉质商品。" }),
+    );
+    finishDocumentScenario();
+    const completed = await runTeamExecution(c, claimed!, nextLease, signal);
+    expect(completed.status).toBe("DONE");
+    expect(completed.summary).toBe("棉质商品。");
+    expect(f.fetch).toHaveBeenCalledTimes(4);
+    expect(JSON.stringify(f.fetch.mock.calls[2])).toContain("面料为棉");
+    expect((await supplementEmployeeTask(c, run.id, reply)).modelCalls).toBe(4);
+    expect(await claimAssistantRun(randomUUID())).toBeUndefined();
+  });
+  it("continues only the missing step and its dependencies, preserving accepted work", async () => {
+    const { run, lease } = await runRow();
+    const signal = new AbortController().signal;
+    const planned = ["first", "second", "last"].map((id, i) => ({
+      id,
+      title: id,
+      memberId: "writing",
+      instruction: "按当前交办完成段落",
+      dependencies: i ? [i === 1 ? "first" : "second"] : [],
+      difficulty: "simple",
+      deliverable: "text",
+      acceptance: ["符合交办目标"],
+    }));
+    f.fetch
+      .mockResolvedValueOnce(
+        response({ summary: "完成三份依次交付的内容", steps: planned }),
+      )
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "已交付第一稿" }),
+      );
+    finishDocumentScenario();
+    f.fetch.mockResolvedValueOnce(
+      response({ status: "needs_input", content: "请提供款号" }),
+    );
+    const waiting = await runTeamExecution(c, run, lease, signal);
+    expect(waiting.state.steps.map((s) => s.status)).toEqual([
+      "DONE",
+      "NEEDS_USER",
+      "NEEDS_USER",
+    ]);
+    expect(waiting.summary).toContain("请提供款号");
+    const acceptedId = waiting.artifacts[0].id;
+    await supplementEmployeeTask(c, run.id, {
+      requestId: waiting.state.inputRequestId,
+      text: "款号 X1",
+      attachmentIds: [],
+    });
+    const nextLease = randomUUID();
+    const claimed = await claimAssistantRun(nextLease);
+    expect(claimed?.input.goal).toContain("款号 X1");
+    for (const content of ["第二稿", "第三稿"]) {
+      f.fetch.mockResolvedValueOnce(response({ status: "completed", content }));
+      finishDocumentScenario();
+    }
+    const done = await runTeamExecution(c, claimed!, nextLease, signal);
+    expect(done.status).toBe("DONE");
+    expect(done.artifacts.map((a) => a.stepId)).toEqual([
+      "first",
+      "second",
+      "last",
+    ]);
+    expect(done.artifacts[0].id).toBe(acceptedId);
+    expect(f.fetch).toHaveBeenCalledTimes(8);
+  });
   it("keeps shared planning and public search free of retrieved passages and records each employee's versioned evidence", async () => {
     const { run, lease } = await runRow();
     const author = run.input.employeeContext.employees[0];
@@ -343,9 +461,7 @@ describe("production team adapter", () => {
       )
       .mockResolvedValueOnce(
         response({ accepted: true, review: "颜色已核对。[K1]" }),
-      )
-      .mockResolvedValueOnce(response({ summary: "验收通过", tags: [] }))
-      .mockResolvedValueOnce(response({ summary: "完成" }));
+      );
     const result = await runTeamExecution(
       c,
       { ...run, input },
@@ -356,19 +472,19 @@ describe("production team adapter", () => {
     const requests = f.fetch.mock.calls.map(([, init]) =>
       JSON.parse(init.body),
     );
-    expect(requests).toHaveLength(7);
+    expect(requests).toHaveLength(4);
     const prompts = requests.map((body) => JSON.stringify(body.messages));
     expect(prompts.filter((text) => text.includes("ALPHA"))).toEqual([
-      prompts[3],
+      prompts[2],
     ]);
     expect(prompts.filter((text) => text.includes("BRAVO"))).toEqual([
-      prompts[4],
+      prompts[3],
     ]);
-    expect(requests[2].tools.map((t: any) => t.function.name)).toEqual([
+    expect(requests[1].tools.map((t: any) => t.function.name)).toEqual([
       "search_web",
     ]);
     expect(
-      requests[3].tools.some((t: any) => t.function.name === "search_web"),
+      requests[2].tools.some((t: any) => t.function.name === "search_web"),
     ).toBe(false);
     const saved = (await readTeamRun(c, run.id, "employee")).artifacts[0];
     expect(saved.content).toContain("产品文案规范（v1）");
@@ -411,18 +527,16 @@ describe("production team adapter", () => {
       },
     };
     startDocumentScenario("document", memberId);
-    f.fetch
-      .mockImplementationOnce(async () => {
-        await saveKnowledge(owner, {
-          employeeIds: [],
-          id: note.id,
-          title: note.title,
-          content: note.content,
-          version: note.version,
-        });
-        return toolResponse();
-      })
-      .mockResolvedValueOnce(response({ summary: "需要用户确认。" }));
+    f.fetch.mockImplementationOnce(async () => {
+      await saveKnowledge(owner, {
+        employeeIds: [],
+        id: note.id,
+        title: note.title,
+        content: note.content,
+        version: note.version,
+      });
+      return toolResponse();
+    });
     const result = await runTeamExecution(
       c,
       { ...run, input },
@@ -484,7 +598,7 @@ describe("production team adapter", () => {
         new AbortController().signal,
       );
       expect(result.status).toBe("DONE");
-      expect(f.fetch).toHaveBeenCalledTimes(6);
+      expect(f.fetch).toHaveBeenCalledTimes(3);
       expect(
         f.fetch.mock.calls.every(([url]) =>
           String(url).startsWith(
@@ -512,7 +626,7 @@ describe("production team adapter", () => {
             [run.id],
           )
         ).rows[0].model_calls,
-      ).toBe(6);
+      ).toBe(3);
       await vi.waitFor(async () =>
         expect(
           (
@@ -520,7 +634,7 @@ describe("production team adapter", () => {
               "SELECT count(*)::int AS n FROM ai_model_usage WHERE feature_id='assistant_employee'",
             )
           ).rows[0].n,
-        ).toBe(6),
+        ).toBe(3),
       );
     },
   );
@@ -544,7 +658,7 @@ describe("production team adapter", () => {
         status: "ACCEPTED",
         content: "连接检查测试正文。",
       });
-      expect(f.fetch).toHaveBeenCalledTimes(6);
+      expect(f.fetch).toHaveBeenCalledTimes(3);
       expect(f.queue).not.toHaveBeenCalled();
     },
   );
@@ -587,7 +701,7 @@ describe("production team adapter", () => {
       expect(f.queue).not.toHaveBeenCalled();
     },
   );
-  it("durably archives an accepted file when optional archive output ends at its reasoning/token limit", async () => {
+  it("durably archives an independently accepted file with no metadata or summary provider request", async () => {
     const { run, lease } = await runRow(),
       { fileId } = successfulFileJob(run.id);
     startDocumentScenario();
@@ -598,29 +712,6 @@ describe("production team adapter", () => {
       )
       .mockResolvedValueOnce(
         response({ accepted: true, review: "原始文件与内容已逐项核验通过" }),
-      )
-      .mockImplementationOnce(async () => {
-        const saved = (
-          await f.db!.query<{ status: string; review: string }>(
-            "SELECT status,review FROM personal_assistant_team_artifacts WHERE run_id=$1",
-            [run.id],
-          )
-        ).rows[0];
-        expect(saved).toMatchObject({
-          status: "DRAFT",
-          review: "原始文件与内容已逐项核验通过",
-        });
-        return Response.json({
-          model: "gpt-6.1-sol",
-          choices: [{ finish_reason: "length", message: { content: null } }],
-          usage: {
-            completion_tokens: 2500,
-            completion_tokens_details: { reasoning_tokens: 2490 },
-          },
-        });
-      })
-      .mockResolvedValueOnce(
-        response({ summary: "已验收原始文件完成归档，知识摘要未生成。" }),
       );
     const result = await runTeamExecution(
       c,
@@ -634,13 +725,9 @@ describe("production team adapter", () => {
       fileIds: [fileId],
       tags: [],
     });
-    expect(result.artifacts[0].review).toContain(
-      "知识摘要未生成，原始产物与验收意见已归档",
-    );
-    expect(result.artifacts[0].review).toContain(
-      "finish_reason=length，completion_tokens=2500，reasoning_tokens=2490",
-    );
-    expect(f.fetch).toHaveBeenCalledTimes(7);
+    expect(result.artifacts[0].review).toBe("原始文件与内容已逐项核验通过");
+    expect(result.summary).toBe("实际文件已生成。");
+    expect(f.fetch).toHaveBeenCalledTimes(4);
     expect(f.queue).toHaveBeenCalledTimes(1);
     const stored = (
       await f.db!.query<{ status: string; review: string }>(
@@ -650,6 +737,14 @@ describe("production team adapter", () => {
     ).rows[0];
     expect(stored.status).toBe("ACCEPTED");
     expect(stored.review).toContain("逐项核验通过");
+    expect(
+      (await listEmployeeTasks(c))[0].resultFiles?.map((f) => f.id),
+    ).toEqual([fileId]);
+    await f.db!.query(
+      "UPDATE personal_assistant_team_artifacts SET status='REJECTED' WHERE run_id=$1",
+      [run.id],
+    );
+    expect((await listEmployeeTasks(c))[0].resultFiles).toEqual([]);
   });
   it("does not execute a potentially truncated tool call when finish_reason is length", async () => {
     const { run, lease } = await runRow();
@@ -660,11 +755,7 @@ describe("production team adapter", () => {
       completion_tokens: 7500,
       completion_tokens_details: { reasoning_tokens: 7400 },
     };
-    f.fetch
-      .mockResolvedValueOnce(Response.json(truncated))
-      .mockResolvedValueOnce(
-        response({ summary: "执行输出达到额度，未提交不完整工具调用。" }),
-      );
+    f.fetch.mockResolvedValueOnce(Response.json(truncated));
     const result = await runTeamExecution(
       c,
       run,
@@ -674,7 +765,7 @@ describe("production team adapter", () => {
     expect(result.status).toBe("NEEDS_USER");
     expect(result.state.steps[0].error).toContain("finish_reason=length");
     expect(f.queue).not.toHaveBeenCalled();
-    expect(f.fetch).toHaveBeenCalledTimes(4);
+    expect(f.fetch).toHaveBeenCalledTimes(2);
   });
   it("reports empty output accurately and accepts only ordinary text content arrays", async () => {
     const empty = await runRow();
@@ -787,16 +878,12 @@ describe("production team adapter", () => {
   it("honors explicit missing-input needs_user without forcing file creation", async () => {
     const { run, lease } = await runRow();
     startDocumentScenario();
-    f.fetch
-      .mockResolvedValueOnce(
-        response({
-          status: "needs_user",
-          content: "缺少应作为依据的原始商品数据。",
-        }),
-      )
-      .mockResolvedValueOnce(
-        response({ summary: "缺少原始商品数据，未创建文件。" }),
-      );
+    f.fetch.mockResolvedValueOnce(
+      response({
+        status: "needs_user",
+        content: "缺少应作为依据的原始商品数据。",
+      }),
+    );
     const result = await runTeamExecution(
       c,
       run,
@@ -805,7 +892,7 @@ describe("production team adapter", () => {
     );
     expect(result.status).toBe("NEEDS_USER");
     expect(f.queue).not.toHaveBeenCalled();
-    expect(f.fetch).toHaveBeenCalledTimes(4);
+    expect(f.fetch).toHaveBeenCalledTimes(2);
   });
   it("does not retry a failed file tool after the one-time correction", async () => {
     const { run, lease } = await runRow();
@@ -814,10 +901,7 @@ describe("production team adapter", () => {
       .mockResolvedValueOnce(
         response({ status: "completed", content: "完整正文。" }),
       )
-      .mockResolvedValueOnce(toolResponse())
-      .mockResolvedValueOnce(
-        response({ summary: "文件工具失败，未完成交付。" }),
-      );
+      .mockResolvedValueOnce(toolResponse());
     f.queue.mockRejectedValueOnce(Error("任务文件生成失败"));
     const result = await runTeamExecution(
       c,
@@ -827,7 +911,7 @@ describe("production team adapter", () => {
     );
     expect(result.status).toBe("NEEDS_USER");
     expect(f.queue).toHaveBeenCalledTimes(1);
-    expect(f.fetch).toHaveBeenCalledTimes(5);
+    expect(f.fetch).toHaveBeenCalledTimes(3);
   });
   it("does not keep correcting repeated completed claims without tool evidence", async () => {
     const { run, lease } = await runRow();
@@ -838,9 +922,6 @@ describe("production team adapter", () => {
       )
       .mockResolvedValueOnce(
         response({ status: "completed", content: "仍然只有正文。" }),
-      )
-      .mockResolvedValueOnce(
-        response({ summary: "执行成员没有完成真实文件交付。" }),
       );
     const result = await runTeamExecution(
       c,
@@ -850,7 +931,7 @@ describe("production team adapter", () => {
     );
     expect(result.status).toBe("NEEDS_USER");
     expect(f.queue).not.toHaveBeenCalled();
-    expect(f.fetch).toHaveBeenCalledTimes(5);
+    expect(f.fetch).toHaveBeenCalledTimes(3);
     expect(result.state.steps[0].error).toContain("不表示系统缺少该能力");
   });
   it("does not force another image generation after a successful tool receipt lacks the required file type", async () => {
@@ -861,9 +942,6 @@ describe("production team adapter", () => {
       .mockResolvedValueOnce(toolResponse("generate_image"))
       .mockResolvedValueOnce(
         response({ status: "completed", content: "已完成。" }),
-      )
-      .mockResolvedValueOnce(
-        response({ summary: "执行成员没有交付要求的图片文件。" }),
       );
     const result = await runTeamExecution(
       c,
@@ -873,7 +951,7 @@ describe("production team adapter", () => {
     );
     expect(result.status).toBe("NEEDS_USER");
     expect(f.queue).toHaveBeenCalledTimes(1);
-    expect(f.fetch).toHaveBeenCalledTimes(5);
+    expect(f.fetch).toHaveBeenCalledTimes(3);
     const execution = f.fetch.mock.calls
       .map((call) => JSON.parse(call[1].body))
       .filter((body) => body.tools?.length);
@@ -917,9 +995,6 @@ describe("production team adapter", () => {
         }),
       )
       .mockResolvedValueOnce(
-        response({ brief: "创建实际可下载文件并按正文验收" }),
-      )
-      .mockResolvedValueOnce(
         Response.json({
           model: "gpt-6.1-sol",
           choices: [
@@ -955,11 +1030,7 @@ describe("production team adapter", () => {
       )
       .mockResolvedValueOnce(
         response({ accepted: true, review: "已对照实际文件内容验收" }),
-      )
-      .mockResolvedValueOnce(
-        response({ summary: "可下载说明", tags: ["说明"] }),
-      )
-      .mockResolvedValueOnce(response({ summary: "真实文件已完成并验收" }));
+      );
     const result = await runTeamExecution(
       c,
       run,
@@ -1059,8 +1130,6 @@ describe("production team adapter", () => {
               },
             ],
           });
-        case "team_brief":
-          return response({ brief: "创作正文" });
         case "team_execute": {
           const stored = (
             await f.db!.query<{
@@ -1084,8 +1153,6 @@ describe("production team adapter", () => {
             { status: 404 },
           );
         }
-        case "team_summary":
-          return response({ summary: "写作模型端点不可用，尚未完成" });
         default:
           throw Error("Unexpected request");
       }
@@ -1106,6 +1173,6 @@ describe("production team adapter", () => {
       "HTTP 404，code=404，type=not_found",
     );
     expect(JSON.stringify(result)).not.toContain("private-key-or-request");
-    expect(f.fetch).toHaveBeenCalledTimes(4);
+    expect(f.fetch).toHaveBeenCalledTimes(2);
   });
 });

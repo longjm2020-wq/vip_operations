@@ -196,7 +196,10 @@ export function PersonalAssistantProvider({
   const [employeeDrafts, setEmployeeDrafts] = useState<
     Record<string, EmployeeDraft>
   >({});
+  const draftOwner = useRef(user.id);
   useEffect(() => {
+    if (draftOwner.current === user.id) return;
+    draftOwner.current = user.id;
     setSelectedEmployee(undefined);
     setEmployeeDrafts({});
     setWorkspaceToolsOpen(false);

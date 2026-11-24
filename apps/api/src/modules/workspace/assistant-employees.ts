@@ -4,6 +4,7 @@ import {
   one,
   rows,
   type Row,
+  type Tx,
 } from "../../../../../packages/database/src/index.js";
 import { canonical, fail, hash, parse, type Context } from "../../core.js";
 import {
@@ -11,6 +12,7 @@ import {
   employeeProfileSchema,
   employeeSaveSchema,
   employeeTaskCreateSchema,
+  employeeTaskSupplementSchema,
   type Employee,
   type EmployeeCatalog,
   type EmployeeDirectory,
@@ -22,6 +24,7 @@ import {
   defaultTeamSettings,
   type TeamMember,
   type TeamSettings,
+  type TeamStep,
 } from "../../../../../packages/contracts/src/assistant-team.js";
 import { requireAssistant } from "./assistant-memory.js";
 import { agentFileView, ownedAgentFiles } from "./agent-files.js";
@@ -36,6 +39,32 @@ import { publicTeamVideoCatalog } from "./team-video.js";
 
 const uuid = z.string().uuid();
 const active = "('QUEUED','PLANNING','RUNNING','REVIEWING')";
+function employeeInputStatus(row: Row) {
+  if (
+    row.status !== "NEEDS_USER" ||
+    row.state?.phase !== "awaiting_input" ||
+    !row.state.inputRequestId
+  )
+    return {};
+  return row.model_calls < row.max_model_calls
+    ? { inputRequestId: row.state.inputRequestId as string }
+    : { stage: "本单调用次数已达上限，核对结果后可另行交办" };
+}
+
+async function requireQueueSpace(tx: Tx, userId: string) {
+  const count = await one(
+    tx,
+    `SELECT count(*)::int AS n FROM public.personal_assistant_employee_tasks t JOIN public.personal_assistant_team_runs r ON r.id=t.run_id
+    WHERE t.user_id=$1::bigint AND r.status IN ${active}`,
+    userId,
+  );
+  if (count!.n >= 30)
+    fail(
+      "EMPLOYEE_QUEUE_FULL",
+      "已有30个未结束员工任务，请先完成或停止部分任务",
+      409,
+    );
+}
 export const maxEmployees = 18;
 const profileView = (row: Row): Employee => ({
   ...employeeProfileSchema.parse(row.profile),
@@ -288,7 +317,7 @@ export async function readEmployeeTask(
   );
   const stored = await one(
     db,
-    "SELECT input FROM public.personal_assistant_team_runs WHERE id=$1::uuid AND user_id=$2::bigint",
+    "SELECT input,state,status FROM public.personal_assistant_team_runs WHERE id=$1::uuid AND user_id=$2::bigint",
     id,
     c.actor.id,
   );
@@ -300,6 +329,7 @@ export async function readEmployeeTask(
   );
   return {
     ...run,
+    ...employeeInputStatus({ ...meta, ...stored }),
     mediaJobs: mediaJobs.map((job) => ({
       id: job.id,
       title: job.title,
@@ -326,14 +356,21 @@ export async function listEmployeeTasks(
   if (employeeId) parse(uuid, employeeId);
   const list = await rows(
     db,
-    `SELECT r.*,t.employee_id,t.employee_ids,t.origin,t.paused,t.model_calls,t.max_model_calls
+    `SELECT r.*,t.employee_id,t.employee_ids,t.origin,t.paused,t.model_calls,t.max_model_calls,
+      ARRAY(SELECT DISTINCT jsonb_array_elements_text(a.file_ids) FROM public.personal_assistant_team_artifacts a
+        WHERE a.run_id=r.id AND a.user_id=t.user_id AND a.status='ACCEPTED') AS result_file_ids
     FROM public.personal_assistant_employee_tasks t JOIN public.personal_assistant_team_runs r ON r.id=t.run_id AND r.user_id=t.user_id
     WHERE t.user_id=$1::bigint AND ($2::uuid IS NULL OR $2::uuid=ANY(t.employee_ids)) ORDER BY r.created_at DESC LIMIT 30`,
     c.actor.id,
     employeeId || null,
   );
   const ids = [
-    ...new Set(list.flatMap((row) => row.input.attachmentIds as string[])),
+    ...new Set(
+      list.flatMap(
+        (row) =>
+          [...row.input.attachmentIds, ...row.result_file_ids] as string[],
+      ),
+    ),
   ];
   const files = ids.length
     ? await rows(
@@ -345,6 +382,7 @@ export async function listEmployeeTasks(
     : [];
   return list.map((row) => ({
     ...runView(row, []),
+    ...employeeInputStatus(row),
     members: [],
     steps: [],
     summaryOnly: true,
@@ -360,6 +398,9 @@ export async function listEmployeeTasks(
     maxModelCalls: row.max_model_calls,
     attachments: files
       .filter((f) => row.input.attachmentIds.includes(f.id))
+      .map(agentFileView),
+    resultFiles: files
+      .filter((f) => row.result_file_ids.includes(f.id))
       .map(agentFileView),
     profiles: (row.input.employeeContext as EmployeeTaskContext).employees.map(
       (e) => ({
@@ -441,18 +482,7 @@ export async function createEmployeeTask(
       );
     if (!selected.length)
       fail("EMPLOYEE_MISSING", "请先新建员工，并启用允许主控调度与接单", 409);
-    const count = await one(
-      tx,
-      `SELECT count(*)::int AS n FROM public.personal_assistant_employee_tasks t JOIN public.personal_assistant_team_runs r ON r.id=t.run_id
-      WHERE t.user_id=$1::bigint AND r.status IN ${active}`,
-      c.actor.id,
-    );
-    if (count!.n >= 30)
-      fail(
-        "EMPLOYEE_QUEUE_FULL",
-        "已有30个未结束员工任务，请先完成或停止部分任务",
-        409,
-      );
+    await requireQueueSpace(tx, c.actor.id);
     const snapshots = selected.map((row) => ({
       id: row.id,
       version: row.version,
@@ -536,6 +566,126 @@ export async function createEmployeeTask(
   });
   return readEmployeeTask(c, body.id);
 }
+export async function supplementEmployeeTask(
+  c: Context,
+  id: string,
+  input: unknown,
+) {
+  requireAssistant(c);
+  parse(uuid, id);
+  const body = parse(employeeTaskSupplementSchema, input);
+  const receipt = hash(canonical(body));
+  await db.$transaction(async (tx) => {
+    // Serialize with new assignments and employee archival as this run re-enters the queue.
+    await tx.$executeRawUnsafe(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+      "assistant-employees:" + c.actor.id,
+    );
+    const run = await one(
+      tx,
+      `SELECT r.input,r.state,r.status,t.employee_ids,t.model_calls,t.max_model_calls
+      FROM public.personal_assistant_team_runs r JOIN public.personal_assistant_employee_tasks t ON t.run_id=r.id AND t.user_id=r.user_id
+      WHERE r.id=$1::uuid AND r.user_id=$2::bigint FOR UPDATE OF r,t`,
+      id,
+      c.actor.id,
+    );
+    if (!run) fail("NOT_FOUND", "员工任务不存在", 404);
+    const receipts = run.input.supplementReceipts || {};
+    if (receipts[body.requestId] === receipt) return;
+    if (employeeInputStatus(run).inputRequestId !== body.requestId)
+      fail(
+        "EMPLOYEE_INPUT_CHANGED",
+        "这次补充请求已结束，请刷新查看任务的最新进度",
+        409,
+      );
+    const steps: TeamStep[] = run.state.steps;
+    if (
+      steps.some(
+        (s) =>
+          s.status !== "DONE" &&
+          (s.status !== "NEEDS_USER" ||
+            !s.needsInput ||
+            s.jobIds.length ||
+            s.artifactIds.length),
+      )
+    )
+      fail(
+        "EMPLOYEE_TASK_ENDED",
+        "任务已有需要核对的执行记录，请先查看进度与产物",
+        409,
+      );
+    const archived = await one(
+      tx,
+      "SELECT id FROM public.personal_assistant_employees WHERE user_id=$1::bigint AND id=ANY($2::uuid[]) AND archived LIMIT 1",
+      c.actor.id,
+      run.employee_ids,
+    );
+    if (archived)
+      fail("EMPLOYEE_ARCHIVED", "参与任务的员工已归档，请先恢复员工", 409);
+    await requireQueueSpace(tx, c.actor.id);
+    const originalIds: string[] = run.input.attachmentIds;
+    const attachmentIds = [...new Set([...originalIds, ...body.attachmentIds])];
+    if (!body.text && attachmentIds.length === originalIds.length)
+      fail("EMPLOYEE_INPUT_EMPTY", "请添加新的素材或填写补充说明", 400);
+    if (attachmentIds.length > 6)
+      fail("EMPLOYEE_FILES_LIMIT", "原任务与新素材合计最多六份", 400);
+    const files = await rows(
+      tx,
+      "SELECT id FROM public.personal_assistant_files WHERE user_id=$1::bigint AND id=ANY($2::uuid[])",
+      c.actor.id,
+      attachmentIds,
+    );
+    if (files.length !== attachmentIds.length)
+      fail("FILE_NOT_FOUND", "附件不存在或不属于当前账号", 404);
+    const goal = body.text
+      ? run.input.goal + "\n\n补充说明：" + body.text
+      : run.input.goal;
+    if (goal.length > 8000)
+      fail(
+        "EMPLOYEE_GOAL_LIMIT",
+        "原任务与补充说明合计最多8000字，请缩短补充说明",
+        400,
+      );
+    const state = {
+      ...run.state,
+      inputRequestId: undefined,
+      phase: steps.length ? "execute" : "plan",
+      employeePaused: steps.length > 0,
+      steps: steps.map((s) =>
+        s.status === "DONE"
+          ? s
+          : {
+              ...s,
+              status: "PENDING",
+              needsInput: undefined,
+              error: undefined,
+              attempts: 0,
+            },
+      ),
+    };
+    await tx.$executeRawUnsafe(
+      `UPDATE public.personal_assistant_team_runs SET input=$3::jsonb,state=$4::jsonb,
+      status='QUEUED',stage='已收到补充资料，等待员工',summary='',error_note='',lease_id=NULL,heartbeat_at=NULL,updated_at=now()
+      WHERE id=$1::uuid AND user_id=$2::bigint`,
+      id,
+      c.actor.id,
+      JSON.stringify({
+        ...run.input,
+        goal,
+        attachmentIds,
+        supplementReceipts: { ...receipts, [body.requestId]: receipt },
+      }),
+      JSON.stringify(state),
+    );
+    await tx.$executeRawUnsafe(
+      "UPDATE public.personal_assistant_employee_tasks SET paused=false WHERE run_id=$1::uuid AND user_id=$2::bigint",
+      id,
+      c.actor.id,
+    );
+  });
+  return readEmployeeTask(c, id);
+}
+
 export async function controlEmployeeTask(
   c: Context,
   id: string,

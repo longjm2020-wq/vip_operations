@@ -448,6 +448,7 @@ export type TeamArtifact = {
 };
 export type TeamStep = TeamPlanStep & {
   status: TeamStepStatus;
+  needsInput?: boolean;
   attempts: number;
   model?: string;
   modelId?: string;

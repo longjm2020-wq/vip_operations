@@ -114,6 +114,17 @@ export const employeeTaskCreateSchema = z
       });
   });
 export type EmployeeTaskCreate = z.infer<typeof employeeTaskCreateSchema>;
+export const employeeTaskSupplementSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    text: z.string().trim().max(8000),
+    attachmentIds: z.array(z.string().uuid()).max(6),
+  })
+  .strict()
+  .refine(
+    (v) => v.text.length > 0 || v.attachmentIds.length > 0,
+    "请填写补充说明或上传素材",
+  );
 export const employeeTaskContextSchema = z
   .object({
     origin: z.enum(["direct", "dispatch"]),
@@ -135,6 +146,7 @@ export const employeeTaskContextSchema = z
   .strict();
 export type EmployeeTaskContext = z.infer<typeof employeeTaskContextSchema>;
 export type EmployeeTask = TeamRun & {
+  inputRequestId?: string;
   origin: "direct" | "dispatch";
   employeeId?: string;
   employeeIds: string[];
@@ -142,6 +154,7 @@ export type EmployeeTask = TeamRun & {
   modelCalls: number;
   maxModelCalls: number;
   attachments: import("./assistant-agent.js").AgentFile[];
+  resultFiles?: import("./assistant-agent.js").AgentFile[];
   profiles: {
     id: string;
     version: number;
