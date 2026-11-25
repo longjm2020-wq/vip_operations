@@ -50,6 +50,7 @@ services:
     command: pnpm start:worker
     environment:
       REDIS_URL: redis://redis:6379
+      ASSISTANT_EMPLOYEE_WORKER_CONCURRENCY: ${ASSISTANT_EMPLOYEE_WORKER_CONCURRENCY:-6}
       VIP_MODE: disabled
       NODE_ENV: production
     depends_on:

@@ -15,10 +15,18 @@ import { randomUUID } from "node:crypto";
 import type { Context } from "../../apps/api/src/core.js";
 import type { Tx } from "../../packages/database/src/index.js";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
-import { pollAssistantTeamJobs } from "../../apps/worker/src/assistant-team-jobs.js";
+import {
+  employeeWorkerConcurrency,
+  pollAssistantTeamJobs,
+  startAssistantTeamJobs,
+} from "../../apps/worker/src/assistant-team-jobs.js";
 import {
   employeeTemplate,
   employeeMemberId,
+  maxEmployees,
+  maxEmployeesPerTask,
+  maxOpenEmployeeTasks,
+  recentClosedEmployeeTasks,
   type Employee,
 } from "../../packages/contracts/src/assistant-employees.js";
 import {
@@ -28,6 +36,7 @@ import {
   createEmployeeTask,
   controlEmployeeTask,
   readEmployeeTask,
+  listEmployeeTasks,
   employeeTeamSettings,
 } from "../../apps/api/src/modules/workspace/assistant-employees.js";
 import {
@@ -131,6 +140,10 @@ const body = () => ({
   attachmentIds: [],
   useKnowledge: true,
 });
+const employeeRequest = () => ({
+  id: randomUUID(),
+  goal: "整理资料并制作宣传文案",
+});
 async function seedHistoricalRun(
   user: Context,
   request: ReturnType<typeof body>,
@@ -178,6 +191,106 @@ afterAll(async () => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant team storage and owner boundaries", () => {
+  it("supports a 120-employee directory and finds available employees across it for auto dispatch", async () => {
+    const profile = employeeTemplate("writing");
+    const ids = Array.from({ length: maxEmployees }, () => randomUUID());
+    await f.db!.query(
+      `INSERT INTO personal_assistant_employees(id,user_id,profile,created_at)
+      SELECT employee,7,($1::jsonb || jsonb_build_object('name','员工' || idx)),now()+idx*interval '1 millisecond'
+      FROM unnest($2::uuid[]) WITH ORDINALITY AS staff(employee,idx)`,
+      [JSON.stringify(profile), ids],
+    );
+    await f.db!.query(
+      "UPDATE personal_assistant_employees SET profile=$2::jsonb WHERE id=$1",
+      [ids.at(-1), JSON.stringify(employeeTemplate("review"))],
+    );
+    const directory = await listEmployees(actor());
+    expect(directory.maxEmployees).toBe(120);
+    expect(directory.employees.map((e) => e.id)).toEqual(ids);
+    await expect(
+      saveEmployee(actor(), { id: randomUUID(), version: 0, profile }),
+    ).rejects.toMatchObject(errorCode("EMPLOYEE_LIMIT"));
+    const first = await createEmployeeTask(actor(), employeeRequest());
+    const next = await createEmployeeTask(actor(), employeeRequest());
+    expect(first.employeeIds).toHaveLength(maxEmployeesPerTask);
+    expect(first.employeeIds).toContain(ids.at(-1));
+    expect(next.employeeIds).toHaveLength(maxEmployeesPerTask);
+    expect(
+      next.employeeIds.filter((id) => first.employeeIds.includes(id)),
+    ).toEqual([ids.at(-1)]);
+    const direct = await createEmployeeTask(actor(), {
+      ...employeeRequest(),
+      employeeId: ids.at(-2),
+    });
+    expect(direct.employeeId).toBe(ids.at(-2));
+    const refreshed = await listEmployees(actor());
+    expect(
+      refreshed.employees.find((e) => e.id === ids.at(-1))?.queuedTasks,
+    ).toBe(2);
+    expect(
+      refreshed.employees.find((e) => e.id === ids.at(-2))?.queuedTasks,
+    ).toBe(1);
+  });
+  it("lists all 150 unfinished tasks and limits closed history without exposing snapshots", async () => {
+    const employee = await saveEmployee(actor(), {
+      id: randomUUID(),
+      version: 0,
+      profile: {
+        ...employeeTemplate("writing"),
+        knowledge: "仅用于执行的资料",
+      },
+    });
+    const sample = await createEmployeeTask(actor(), {
+      ...employeeRequest(),
+      employeeId: employee.id,
+    });
+    const plan = `INSERT INTO personal_assistant_team_runs(id,user_id,request_hash,input,state,stage,status,created_at)
+      SELECT gen_random_uuid(),base.user_id,'fixture',base.input,$4::jsonb,base.stage,$2,
+        base.created_at+idx*interval '1 second'
+      FROM personal_assistant_team_runs base CROSS JOIN generate_series(1,$3::int) AS series(idx)
+      WHERE base.id=$1 RETURNING id`;
+    const register = async (status: string, count: number) => {
+      const slots = (
+        await f.db!.query<{ id: string }>(plan, [
+          sample.id,
+          status,
+          count,
+          JSON.stringify({
+            steps: [{ status: "DONE" }, { status: "PENDING" }],
+            plan: "仅详情有完整计划",
+          }),
+        ])
+      ).rows.map((r) => r.id);
+      await f.db!.query(
+        `INSERT INTO personal_assistant_employee_tasks(run_id,user_id,employee_id,employee_ids,origin,max_model_calls)
+        SELECT id,7,$2::uuid,ARRAY[$2::uuid],'direct',40 FROM unnest($1::uuid[]) AS task(id)`,
+        [slots, employee.id],
+      );
+      return slots;
+    };
+    const queued = await register("QUEUED", maxOpenEmployeeTasks - 1);
+    const finished = await register("DONE", recentClosedEmployeeTasks + 5);
+    const list = await listEmployeeTasks(actor(), employee.id);
+    expect(list.filter((task) => task.status === "QUEUED")).toHaveLength(150);
+    expect(list.some((task) => task.id === sample.id)).toBe(true);
+    expect(list.filter((task) => task.status === "DONE")).toHaveLength(30);
+    expect(list.some((task) => task.id === finished[0])).toBe(false);
+    expect(list.find((task) => task.id === queued[0])).toMatchObject({
+      summaryOnly: true,
+      stepCount: 2,
+      completedSteps: 1,
+      members: [],
+      steps: [],
+    });
+    expect(JSON.stringify(list)).not.toContain("仅用于执行的资料");
+    expect(await listEmployeeTasks(actor("8"), employee.id)).toEqual([]);
+    await expect(
+      createEmployeeTask(actor(), {
+        ...employeeRequest(),
+        employeeId: employee.id,
+      }),
+    ).rejects.toMatchObject(errorCode("EMPLOYEE_QUEUE_FULL"));
+  });
   it("fills matched empty skills without changing existing instructions or policies, and new tasks snapshot them", async () => {
     const docs = await readEmployeeSkillDocuments(actor());
     expect(docs).toHaveLength(10);
@@ -583,6 +696,59 @@ describe("assistant team storage and owner boundaries", () => {
       lease_id: null,
     });
     expect(f.execute).not.toHaveBeenCalled();
+  });
+  it("fills the configured employee slots in one poll and observes each member's capacity", async () => {
+    expect(employeeWorkerConcurrency("")).toBe(6);
+    expect(employeeWorkerConcurrency("24")).toBe(24);
+    expect(employeeWorkerConcurrency("25")).toBe(6);
+    vi.stubEnv("ASSISTANT_EMPLOYEE_WORKER_CONCURRENCY", "6");
+    const queued: string[] = [];
+    for (let index = 0; index < 7; index += 1) {
+      const employeeId = randomUUID();
+      await saveEmployee(actor(), {
+        id: employeeId,
+        version: 0,
+        profile: { ...employeeTemplate("writing"), priority: 9 - index },
+      });
+      const task = await createEmployeeTask(actor(), {
+        id: randomUUID(),
+        employeeId,
+        goal: "准备文案",
+      });
+      queued.push(task.id);
+      if (index === 0) {
+        const duplicate = await createEmployeeTask(actor(), {
+          id: randomUUID(),
+          employeeId,
+          goal: "准备下一份文案",
+        });
+        queued.push(duplicate.id);
+      }
+    }
+    f.execute.mockImplementation(
+      async (_actor, _run, _lease, signal: AbortSignal) => {
+        if (!signal.aborted)
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true }),
+          );
+      },
+    );
+    const stop = startAssistantTeamJobs();
+    try {
+      await vi.waitFor(() => expect(f.execute).toHaveBeenCalledTimes(6), {
+        timeout: 2_500,
+      });
+      const claimed = f.execute.mock.calls.map(([, run]) => run.id);
+      expect(claimed).toEqual([queued[0], ...queued.slice(2, 7)]);
+      const waiting = (
+        await f.db!.query<{ id: string }>(
+          "SELECT id FROM personal_assistant_team_runs WHERE status='QUEUED' ORDER BY created_at",
+        )
+      ).rows.map((row) => row.id);
+      expect(waiting).toEqual([queued[1], queued[7]]);
+    } finally {
+      await stop();
+    }
   });
   it("keeps child jobs owned by a newer employee lease if the old execution fails late", async () => {
     const employeeId = randomUUID(),

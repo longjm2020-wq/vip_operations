@@ -1,23 +1,37 @@
 import { randomUUID } from "node:crypto";
-import { db, one, rows } from "../../../packages/database/src/index.js";
+import {
+  db,
+  one,
+  rows,
+  type Row,
+} from "../../../packages/database/src/index.js";
 import {
   runAgentJob,
   safeAgentError,
 } from "../../api/src/modules/workspace/agent-jobs.js";
 import type { Context } from "../../api/src/core.js";
 
-export async function pollAssistantJobs(signal: AbortSignal) {
+const jobKinds = ["document", "image", "video"] as const;
+type JobKind = (typeof jobKinds)[number];
+
+async function sweepInterruptedJobs() {
   // Interrupted external work is never automatically retried or charged again.
   await db.$executeRawUnsafe(
     "UPDATE public.personal_assistant_jobs SET status='FAILED',stage='处理中断',error_note='任务心跳中断，结果尚未确认；未自动重试，请检查任务后重新发起',updated_at=now() WHERE status='RUNNING' AND heartbeat_at<now()-interval '3 minutes'",
   );
-  const lease = randomUUID();
-  const job = await one(
+}
+
+async function claimAssistantJob(lease: string, kind?: JobKind) {
+  const kindFilter = kind ? " AND kind=$2" : "";
+  return one(
     db,
-    "UPDATE public.personal_assistant_jobs SET status='RUNNING',stage='开始处理',lease_id=$1::uuid,heartbeat_at=now(),updated_at=now() WHERE id=(SELECT id FROM public.personal_assistant_jobs WHERE status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *",
+    `UPDATE public.personal_assistant_jobs SET status='RUNNING',stage='开始处理',lease_id=$1::uuid,heartbeat_at=now(),updated_at=now() WHERE id=(SELECT id FROM public.personal_assistant_jobs WHERE status='QUEUED'${kindFilter} ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`,
     lease,
+    ...(kind ? [kind] : []),
   );
-  if (!job) return;
+}
+
+async function runAssistantJob(job: Row, lease: string, signal: AbortSignal) {
   const canceled = new AbortController();
   const jobSignal = AbortSignal.any([signal, canceled.signal]);
   const heartbeat = setInterval(() => {
@@ -33,6 +47,7 @@ export async function pollAssistantJobs(signal: AbortSignal) {
       .catch(() => {});
   }, 15000);
   try {
+    jobSignal.throwIfAborted();
     const user = await one(
       db,
       "SELECT id::text,username,display_name FROM public.users WHERE id=$1::bigint AND status='ACTIVE'",
@@ -88,24 +103,54 @@ export async function pollAssistantJobs(signal: AbortSignal) {
     clearInterval(heartbeat);
   }
 }
+
+async function processQueuedJob(signal: AbortSignal, kind?: JobKind) {
+  signal.throwIfAborted();
+  const lease = randomUUID();
+  const job = await claimAssistantJob(lease, kind);
+  if (job) await runAssistantJob(job, lease, signal);
+}
+
+export async function pollAssistantJobs(signal: AbortSignal, kind?: JobKind) {
+  await sweepInterruptedJobs();
+  await processQueuedJob(signal, kind);
+}
+
 export function startAssistantJobs() {
   const controller = new AbortController();
-  let stopped = false,
-    active: Promise<void> | undefined;
+  const active = new Map<JobKind, Promise<void>>();
+  let filling: Promise<void> | undefined;
+  let nextSweepAt = 0;
+  const fill = async () => {
+    if (Date.now() >= nextSweepAt) {
+      await sweepInterruptedJobs();
+      nextSweepAt = Date.now() + 30_000;
+    }
+    if (controller.signal.aborted) return;
+    for (const kind of jobKinds) {
+      if (active.has(kind)) continue;
+      // A long provider video wait leaves the image and document slots free.
+      const task = processQueuedJob(controller.signal, kind)
+        .catch(() => console.warn("Assistant file job state unavailable"))
+        .finally(() => active.delete(kind));
+      active.set(kind, task);
+    }
+  };
   const tick = () => {
-    if (stopped || active) return;
-    active = pollAssistantJobs(controller.signal)
+    if (controller.signal.aborted || filling) return;
+    if (active.size === jobKinds.length && Date.now() < nextSweepAt) return;
+    filling = fill()
       .catch(() => console.warn("Assistant task polling unavailable"))
       .finally(() => {
-        active = undefined;
+        filling = undefined;
       });
   };
   const timer = setInterval(tick, 3000);
   tick();
   return async () => {
-    stopped = true;
     clearInterval(timer);
     controller.abort();
-    await active;
+    await filling;
+    await Promise.allSettled(active.values());
   };
 }

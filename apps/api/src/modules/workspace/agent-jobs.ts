@@ -247,8 +247,12 @@ export async function queueAgentJob(
       "SELECT count(*)::int AS n FROM public.personal_assistant_jobs WHERE user_id=$1::bigint AND status IN ('QUEUED','RUNNING')",
       c.actor.id,
     );
-    if (active!.n >= 5)
-      fail("JOBS_BUSY", "已有5个任务在处理中，请等待完成后继续", 409);
+    if (active!.n >= 24)
+      fail(
+        "JOBS_BUSY",
+        "已有24个文件任务在排队或处理中，请等待完成后继续",
+        409,
+      );
     const id = randomUUID();
     await tx.$executeRawUnsafe(
       "INSERT INTO public.personal_assistant_jobs(id,user_id,request_id,call_id,kind,title,input,model) VALUES($1::uuid,$2::bigint,$3::uuid,$4,$5,$6,$7::jsonb,$8)",

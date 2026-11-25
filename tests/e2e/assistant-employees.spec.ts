@@ -197,7 +197,7 @@ async function setup(page: Page, count = 0, conflict = false) {
         if (old) Object.assign(old, saved);
         else employees.push(saved);
         data = saved;
-      } else data = { employees, maxEmployees: 18 };
+      } else data = { employees, maxEmployees: 120 };
     } else if (path === `${root}/tasks`) {
       if (req.method() === "POST") {
         const body = req.postDataJSON() as EmployeeTaskCreate;
@@ -1137,6 +1137,129 @@ test("小序派单独立提交，员工网格整齐展示，右栏不展示普�
   ).toBeVisible();
   await page.screenshot({ path: ".local/employees-dispatch.png" });
 });
+test("120 位在职员工可分页查找和派单，工作台场景保留 18 个头像", async ({
+  page,
+}) => {
+  const f = await setup(page, 121);
+  f.employees[120].name = "已离岗资料专员";
+  f.employees[120].archived = true;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/my-workspace");
+  const shelf = page.getByRole("region", { name: "AI 员工列表" });
+  const panel = page.getByRole("region", { name: "AI 员工工作台" });
+  await expect(shelf.getByRole("button", { name: /打开员工：/ })).toHaveCount(
+    18,
+  );
+  await shelf.getByRole("button", { name: "全部员工", exact: true }).click();
+  await expect(panel).toContainText("在职 120 / 120");
+  const directory = panel.locator(".employee-directory");
+  const pages = panel.getByRole("group", { name: "员工列表分页" });
+  await pages.getByRole("button", { name: "下一页" }).click();
+  await expect(
+    directory.getByRole("button", { name: /员工16\b/ }),
+  ).toBeVisible();
+  const search = panel.getByRole("textbox", { name: "搜索员工" });
+  await search.fill("已离岗资料专员");
+  await expect(
+    directory.getByRole("button", { name: /已离岗资料专员.*已归档/ }),
+  ).toBeVisible();
+  await search.fill("员工120");
+  await directory.getByRole("button", { name: /员工120\b/ }).click();
+  await expect(
+    panel.getByRole("textbox", { name: "交办员工任务" }),
+  ).toHaveAttribute("placeholder", "交给员工120的任务…");
+  const switcher = panel.getByRole("combobox", { name: "选择员工" });
+  const popup = page.locator(".ant-select-dropdown:visible");
+  await switcher.click();
+  await switcher.fill("员工119");
+  await popup.getByText("员工119", { exact: true }).click();
+  await expect(
+    panel.getByRole("textbox", { name: "交办员工任务" }),
+  ).toHaveAttribute("placeholder", "交给员工119的任务…");
+  await switcher.click();
+  await switcher.fill("小序派单");
+  await popup.getByText("小序派单", { exact: true }).click();
+  const dispatch = panel.getByRole("combobox", { name: "协作员工" });
+  await dispatch.click();
+  await dispatch.fill("员工120");
+  await popup.getByText("员工120", { exact: true }).click();
+  await dispatch.press("Escape");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth + 1,
+      ),
+    )
+    .toBe(true);
+  await panel
+    .getByRole("textbox", { name: "交办员工任务" })
+    .fill("请指定员工处理商品图片");
+  await panel.getByRole("button", { name: "发送员工任务" }).click();
+  await expect
+    .poll(() => f.submissions[0]?.employeeIds)
+    .toEqual([f.employees[119].id]);
+});
+
+test("150 个未结束任务可筛选分页定位并停止最早的一项", async ({ page }) => {
+  const f = await setup(page);
+  const now = new Date().toISOString();
+  f.tasks.push(
+    ...Array.from({ length: 180 }, (_, index): EmployeeTask => ({
+      id: randomUUID(),
+      goal:
+        index < 30 ? `已结束任务 ${30 - index}` : `未结束任务 ${180 - index}`,
+      status: index < 30 ? "DONE" : "QUEUED",
+      stage: index < 30 ? "已完成" : "等待员工调度",
+      plan: "",
+      steps: [],
+      artifacts: [],
+      summary: "",
+      error: "",
+      members: [],
+      createdAt: now,
+      updatedAt: now,
+      origin: "dispatch",
+      employeeIds: [],
+      profiles: [],
+      paused: false,
+      modelCalls: 0,
+      maxModelCalls: 40,
+      attachments: [],
+    })),
+  );
+  await page.goto("/my-workspace");
+  await page.getByRole("button", { name: "小序派单", exact: true }).click();
+  const panel = page.getByRole("region", { name: "AI 员工工作台" });
+  await expect(panel.getByRole("article", { name: /员工任务：/ })).toHaveCount(
+    30,
+  );
+  await expect(
+    panel.getByRole("article", {
+      name: "员工任务：已结束任务 30",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await panel.getByRole("checkbox", { name: "仅未结束（150）" }).check();
+  await expect(
+    panel.getByRole("article", { name: /员工任务：已结束任务/ }),
+  ).toHaveCount(0);
+  const pager = panel.getByRole("group", { name: "员工任务分页" });
+  await expect(pager).toContainText("1 / 5");
+  const next = pager.getByRole("button", { name: "下一页" });
+  for (let pageNumber = 2; pageNumber <= 5; pageNumber++) {
+    await next.click();
+    await expect(pager).toContainText(`${pageNumber} / 5`);
+  }
+  const oldest = panel.getByRole("article", {
+    name: "员工任务：未结束任务 1",
+    exact: true,
+  });
+  await oldest.getByRole("button", { name: "停止任务" }).click();
+  await expect(oldest).toHaveCount(0);
+  expect(f.controls).toEqual(["stop"]);
+  expect(f.tasks.at(-1)?.status).toBe("CANCELED");
+});
+
 test("配置冲突保留输入；手机右栏可收起且不横向溢出", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await setup(page, 1, true);

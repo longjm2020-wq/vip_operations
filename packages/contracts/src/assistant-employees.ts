@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { TeamModel, TeamVideoModel, TeamRun } from "./assistant-team.js";
 
+export const maxEmployees = 120;
+export const maxEmployeesPerTask = 18;
+export const maxOpenEmployeeTasks = 150;
+export const recentClosedEmployeeTasks = 30;
+
 export const employeeKinds = [
   "image",
   "video",
@@ -98,7 +103,10 @@ export const employeeTaskCreateSchema = z
   .object({
     id: z.string().uuid(),
     employeeId: z.string().uuid().optional(),
-    employeeIds: z.array(z.string().uuid()).max(18).default([]),
+    employeeIds: z
+      .array(z.string().uuid())
+      .max(maxEmployeesPerTask)
+      .default([]),
     goal: z.string().trim().min(2).max(8000),
     attachmentIds: z.array(z.string().uuid()).max(6).default([]),
   })
@@ -140,7 +148,7 @@ export const employeeTaskContextSchema = z
           .strict(),
       )
       .min(1)
-      .max(18),
+      .max(maxEmployeesPerTask),
     maxModelCalls: z.number().int().min(6).max(120),
   })
   .strict();

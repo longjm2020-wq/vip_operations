@@ -921,6 +921,7 @@ export async function runTeamExecution(
   };
   const waitJob = async (id: string) => {
     const deadline = Date.now() + 65 * 60 * 1000;
+    let pollDelay = 1200;
     while (Date.now() < deadline) {
       await check();
       const job = await one(
@@ -941,7 +942,11 @@ export async function runTeamExecution(
         throw new TeamNeedsUser(
           "文件任务未完成，请在任务与文件中检查结果；未自动重新调用生成服务",
         );
-      await teamDelay(1200, signal);
+      await teamDelay(
+        Math.min(pollDelay, Math.max(0, deadline - Date.now())),
+        signal,
+      );
+      pollDelay = Math.min(pollDelay * 2, 5000);
     }
     throw new TeamNeedsUser(
       "等待文件超过65分钟，未自动重跑；请在任务与文件中检查最终结果",

@@ -436,6 +436,7 @@ function KnowledgeEditor({
         <Select
           id="knowledge-note-grants"
           mode="multiple"
+          maxTagCount="responsive"
           optionFilterProp="label"
           placeholder="选择员工，留空则仅自己可读"
           value={employeeIds}

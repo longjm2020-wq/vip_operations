@@ -1,4 +1,8 @@
-import { db, one } from "../../../../../packages/database/src/index.js";
+import {
+  db,
+  one,
+  type Row,
+} from "../../../../../packages/database/src/index.js";
 import type { EmployeeModelPolicy } from "../../../../../packages/contracts/src/assistant-employees.js";
 
 /** A fixed policy cannot be expanded by an LLM-supplied tool argument. */
@@ -57,11 +61,24 @@ UPDATE public.personal_assistant_team_runs SET status='PLANNING',stage='准备�
       )
     ORDER BY t.priority DESC,r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED) RETURNING *`;
 
-export async function claimAssistantRun(lease: string) {
+export async function claimAssistantRuns(leases: readonly string[]) {
+  if (!leases.length) return [];
   return db.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(
       "SELECT pg_advisory_xact_lock(hashtextextended('assistant-run-capacity',0))",
     );
-    return one(tx, employeeClaimSql, lease);
+    const claimed: Row[] = [];
+    // Each claim sees the reservations made earlier in this transaction.
+    for (const lease of leases) {
+      const run = await one(tx, employeeClaimSql, lease);
+      if (!run) break;
+      claimed.push(run);
+    }
+    return claimed;
   });
+}
+
+export async function claimAssistantRun(lease: string) {
+  const [run] = await claimAssistantRuns([lease]);
+  return run;
 }

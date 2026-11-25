@@ -81,6 +81,7 @@
   color: #c9d2e5;
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
 }
 .employee-strip-title small {
   color: #8391aa;
@@ -100,6 +101,7 @@
 .employee-strip-heading > button {
   min-height: 26px;
   border-radius: 7px;
+  white-space: nowrap;
   transition:
     background 160ms ease,
     color 160ms ease;
@@ -280,6 +282,26 @@
 }
 .employee-panel > * {
   flex-shrink: 0;
+}
+.employee-list-navigation,
+.employee-list-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+.employee-list-navigation {
+  flex-wrap: wrap;
+}
+.employee-list-pager {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.employee-list-navigation .employee-note {
+  margin: 0;
+  white-space: nowrap;
 }
 .employee-panel-heading {
   display: flex;
@@ -535,6 +557,10 @@
   min-height: 0;
   overflow: auto;
 }
+.employee-directory-search {
+  flex: 1 1 150px;
+  min-width: 0;
+}
 .employee-directory > button:not(.ant-btn) {
   border: 0;
   background: rgba(128, 138, 169, 0.06);
@@ -546,6 +572,10 @@
   color: inherit;
   cursor: pointer;
   text-align: left;
+}
+.employee-directory > button:not(.ant-btn) > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .employee-directory small {
   display: block;

@@ -13,6 +13,10 @@ import {
   employeeSaveSchema,
   employeeTaskCreateSchema,
   employeeTaskSupplementSchema,
+  maxEmployees,
+  maxEmployeesPerTask,
+  maxOpenEmployeeTasks,
+  recentClosedEmployeeTasks,
   type Employee,
   type EmployeeCatalog,
   type EmployeeDirectory,
@@ -58,14 +62,13 @@ async function requireQueueSpace(tx: Tx, userId: string) {
     WHERE t.user_id=$1::bigint AND r.status IN ${active}`,
     userId,
   );
-  if (count!.n >= 30)
+  if (count!.n >= maxOpenEmployeeTasks)
     fail(
       "EMPLOYEE_QUEUE_FULL",
-      "已有30个未结束员工任务，请先完成或停止部分任务",
+      `已有${maxOpenEmployeeTasks}个未结束员工任务，请先完成或停止部分任务`,
       409,
     );
 }
-export const maxEmployees = 18;
 const profileView = (row: Row): Employee => ({
   ...employeeProfileSchema.parse(row.profile),
   id: row.id,
@@ -76,19 +79,67 @@ const profileView = (row: Row): Employee => ({
   activeTasks: Number(row.active_tasks || 0),
   queuedTasks: Number(row.queued_tasks || 0),
 });
+async function employeeTaskCounts(tx: Tx, userId: string) {
+  const counts = await rows(
+    tx,
+    `SELECT member.id,
+      count(*) FILTER (WHERE r.status<>'QUEUED')::int AS active_tasks,
+      count(*) FILTER (WHERE r.status='QUEUED')::int AS queued_tasks
+    FROM public.personal_assistant_employee_tasks t
+    JOIN public.personal_assistant_team_runs r ON r.id=t.run_id AND r.user_id=t.user_id
+    CROSS JOIN LATERAL unnest(t.employee_ids) AS member(id)
+    WHERE t.user_id=$1::bigint AND r.status IN ${active}
+    GROUP BY member.id`,
+    userId,
+  );
+  return new Map(counts.map((row) => [row.id as string, row]));
+}
+
 export async function listEmployees(c: Context): Promise<EmployeeDirectory> {
   requireAssistant(c);
-  const found = await rows(
-    db,
-    `SELECT e.*,
-    (SELECT count(*) FROM public.personal_assistant_employee_tasks t JOIN public.personal_assistant_team_runs r ON r.id=t.run_id
-      WHERE t.user_id=e.user_id AND e.id=ANY(t.employee_ids) AND r.status IN ('PLANNING','RUNNING','REVIEWING')) AS active_tasks,
-    (SELECT count(*) FROM public.personal_assistant_employee_tasks t JOIN public.personal_assistant_team_runs r ON r.id=t.run_id
-      WHERE t.user_id=e.user_id AND e.id=ANY(t.employee_ids) AND r.status='QUEUED') AS queued_tasks
-    FROM public.personal_assistant_employees e WHERE e.user_id=$1::bigint ORDER BY e.created_at,e.id`,
-    c.actor.id,
+  const [found, counts] = await Promise.all([
+    rows(
+      db,
+      "SELECT * FROM public.personal_assistant_employees WHERE user_id=$1::bigint ORDER BY created_at,id",
+      c.actor.id,
+    ),
+    employeeTaskCounts(db, c.actor.id),
+  ]);
+  return {
+    employees: found.map((row) =>
+      profileView({ ...row, ...counts.get(row.id) }),
+    ),
+    maxEmployees,
+  };
+}
+
+async function automaticDispatchCandidates(
+  tx: Tx,
+  userId: string,
+  eligible: Row[],
+) {
+  if (eligible.length <= maxEmployeesPerTask) return eligible;
+  const counts = await employeeTaskCounts(tx, userId);
+  const load = (id: string) => {
+    const count = counts.get(id);
+    return count ? count.active_tasks + count.queued_tasks : 0;
+  };
+  const byKind = new Map<EmployeeProfile["kind"], Row[]>();
+  for (const row of eligible) {
+    const kind = row.profile.kind as EmployeeProfile["kind"];
+    const group = byKind.get(kind) ?? [];
+    group.push(row);
+    byKind.set(kind, group);
+  }
+  const candidates = [...byKind.values()].flatMap((group) =>
+    group
+      .sort((a, b) => load(a.id) - load(b.id))
+      .map((row, rank) => ({ row, rank })),
   );
-  return { employees: found.map(profileView), maxEmployees };
+  return candidates
+    .sort((a, b) => a.rank - b.rank || load(a.row.id) - load(b.row.id))
+    .slice(0, maxEmployeesPerTask)
+    .map(({ row }) => row);
 }
 export async function employeeCatalog(c: Context): Promise<EmployeeCatalog> {
   requireAssistant(c);
@@ -356,11 +407,34 @@ export async function listEmployeeTasks(
   if (employeeId) parse(uuid, employeeId);
   const list = await rows(
     db,
-    `SELECT r.*,t.employee_id,t.employee_ids,t.origin,t.paused,t.model_calls,t.max_model_calls,
+    `WITH owned AS NOT MATERIALIZED (
+      SELECT r.id,r.status,r.created_at
+      FROM public.personal_assistant_employee_tasks t
+      JOIN public.personal_assistant_team_runs r ON r.id=t.run_id AND r.user_id=t.user_id
+      WHERE t.user_id=$1::bigint AND ($2::uuid IS NULL OR $2::uuid=ANY(t.employee_ids))
+    ), visible AS (
+      SELECT id FROM owned WHERE status IN ${active}
+      UNION ALL
+      (SELECT id FROM owned WHERE status NOT IN ${active} ORDER BY created_at DESC,id DESC LIMIT ${recentClosedEmployeeTasks})
+    )
+    SELECT r.id,r.status,r.stage,r.summary,r.error_note,r.created_at,r.updated_at,
+      jsonb_build_object('engine',r.input->'engine','goal',r.input->'goal','attachmentIds',r.input->'attachmentIds',
+        'settings',jsonb_build_object('members','[]'::jsonb)) AS input,
+      jsonb_build_object('phase',r.state->'phase','inputRequestId',r.state->'inputRequestId') AS state,
+      step_counts.total AS step_count,step_counts.completed AS completed_steps,
+      t.employee_id,t.employee_ids,t.origin,t.paused,t.model_calls,t.max_model_calls,
+      (SELECT jsonb_agg(jsonb_build_object('id',snapshot->'id','version',snapshot->'version',
+          'profile',jsonb_build_object('name',snapshot->'profile'->'name','kind',snapshot->'profile'->'kind')) ORDER BY position)
+        FROM jsonb_array_elements(r.input->'employeeContext'->'employees') WITH ORDINALITY AS employees(snapshot,position)) AS profiles,
       ARRAY(SELECT DISTINCT jsonb_array_elements_text(a.file_ids) FROM public.personal_assistant_team_artifacts a
         WHERE a.run_id=r.id AND a.user_id=t.user_id AND a.status='ACCEPTED') AS result_file_ids
-    FROM public.personal_assistant_employee_tasks t JOIN public.personal_assistant_team_runs r ON r.id=t.run_id AND r.user_id=t.user_id
-    WHERE t.user_id=$1::bigint AND ($2::uuid IS NULL OR $2::uuid=ANY(t.employee_ids)) ORDER BY r.created_at DESC LIMIT 30`,
+    FROM visible v JOIN public.personal_assistant_team_runs r ON r.id=v.id
+    JOIN public.personal_assistant_employee_tasks t ON t.run_id=r.id AND t.user_id=r.user_id
+    CROSS JOIN LATERAL (
+      SELECT count(*)::int AS total,count(*) FILTER (WHERE step->>'status'='DONE')::int AS completed
+      FROM jsonb_array_elements(COALESCE(r.state->'steps','[]'::jsonb)) AS steps(step)
+    ) AS step_counts
+    ORDER BY r.created_at DESC,r.id DESC`,
     c.actor.id,
     employeeId || null,
   );
@@ -380,35 +454,27 @@ export async function listEmployeeTasks(
         ids,
       )
     : [];
+  const fileById = new Map(files.map((file) => [file.id, agentFileView(file)]));
+  const selectFiles = (ids: string[]) =>
+    ids.flatMap((id) => {
+      const file = fileById.get(id);
+      return file ? [file] : [];
+    });
   return list.map((row) => ({
     ...runView(row, []),
     ...employeeInputStatus(row),
-    members: [],
-    steps: [],
     summaryOnly: true,
-    stepCount: row.state.steps?.length || 0,
-    completedSteps:
-      row.state.steps?.filter((s: { status: string }) => s.status === "DONE")
-        .length || 0,
+    stepCount: row.step_count,
+    completedSteps: row.completed_steps,
     origin: row.origin,
     employeeId: row.employee_id || undefined,
     employeeIds: row.employee_ids,
     paused: row.paused,
     modelCalls: row.model_calls,
     maxModelCalls: row.max_model_calls,
-    attachments: files
-      .filter((f) => row.input.attachmentIds.includes(f.id))
-      .map(agentFileView),
-    resultFiles: files
-      .filter((f) => row.result_file_ids.includes(f.id))
-      .map(agentFileView),
-    profiles: (row.input.employeeContext as EmployeeTaskContext).employees.map(
-      (e) => ({
-        id: e.id,
-        version: e.version,
-        profile: { name: e.profile.name, kind: e.profile.kind },
-      }),
-    ),
+    attachments: selectFiles(row.input.attachmentIds),
+    resultFiles: selectFiles(row.result_file_ids),
+    profiles: row.profiles,
   }));
 }
 export async function createEmployeeTask(
@@ -483,7 +549,10 @@ export async function createEmployeeTask(
     if (!selected.length)
       fail("EMPLOYEE_MISSING", "请先新建员工，并启用允许主控调度与接单", 409);
     await requireQueueSpace(tx, c.actor.id);
-    const snapshots = selected.map((row) => ({
+    const candidates = requested.length
+      ? selected
+      : await automaticDispatchCandidates(tx, c.actor.id, selected);
+    const snapshots = candidates.map((row) => ({
       id: row.id,
       version: row.version,
       profile: employeeProfileSchema.parse(row.profile),

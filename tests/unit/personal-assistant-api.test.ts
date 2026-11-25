@@ -30,7 +30,8 @@ import {
   runAgentJob,
 } from "../../apps/api/src/modules/workspace/agent-jobs.js";
 import { assistantPublicText } from "../../packages/contracts/src/ai-presentation.js";
-import { pollAssistantJobs } from "../../apps/worker/src/assistant-jobs.js";
+import { pollAssistantJobs, startAssistantJobs } from "../../apps/worker/src/assistant-jobs.js";
+import * as teamVideo from "../../apps/api/src/modules/workspace/team-video.js";
 import sharp from "sharp";
 import type { Row, Tx } from "../../packages/database/src/index.js";
 import type { AuthRequest } from "../../apps/api/src/http.js";
@@ -517,6 +518,34 @@ describe("multimodal agent ownership and jobs", () => {
       (await fixture.database!.query("SELECT id FROM personal_assistant_files"))
         .rows,
     ).toHaveLength(1);
+  });
+  it("keeps the document lane available while one video is running and another waits", async () => {
+    const videos = [randomUUID(), randomUUID()];
+    for (const [index, id] of videos.entries())
+      await fixture.database!.query(
+        "INSERT INTO personal_assistant_jobs(id,user_id,request_id,call_id,kind,title,input,created_at) VALUES($1,7,$2,$3,'video','测试视频',$4::jsonb,now()-($5::text || ' minutes')::interval)",
+        [id, randomUUID(), randomUUID(), JSON.stringify({ generation: true, title: "测试视频" }), 2 - index],
+      );
+    const document = await queueAgentJob(actor(), "create_document", JSON.stringify({
+      title: "可并行的文档", format: "txt", sections: [{ heading: "测试", text: "文档处理独立执行", rows: [] }],
+    }), randomUUID(), "parallel-document", []);
+    const generate = vi.spyOn(teamVideo, "generateTeamVideo").mockImplementation(async (_c, _job, _progress, signal) => {
+      signal.throwIfAborted();
+      return new Promise<Buffer>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    });
+    const stop = startAssistantJobs();
+    try {
+      await vi.waitFor(async () => {
+        const jobs = await listAgentJobs(actor());
+        expect(jobs.find(job => job.id === document.id)).toMatchObject({ status: "DONE" });
+        expect(jobs.find(job => job.id === videos[0])).toMatchObject({ status: "RUNNING" });
+        expect(jobs.find(job => job.id === videos[1])).toMatchObject({ status: "QUEUED" });
+        expect(generate).toHaveBeenCalledTimes(1);
+      }, { timeout: 2_500 });
+    } finally {
+      await stop();
+      generate.mockRestore();
+    }
   });
   it("rechecks the job owner before executing and never treats failed image requests as success", async () => {
     await queueAgentJob(

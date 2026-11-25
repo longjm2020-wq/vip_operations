@@ -6,6 +6,7 @@ import { fail, parse, type Context } from "../../core.js";
 import { requireAssistant } from "./assistant-memory.js";
 import {
   employeeProfileSchema,
+  maxEmployees,
   type EmployeeProfile,
   type EmployeeSkillDocument,
   type EmployeeSkillsApplied,
@@ -116,7 +117,7 @@ const applySchema = z
           .strict(),
       )
       .min(1)
-      .max(18),
+      .max(maxEmployees),
   })
   .strict()
   .refine(

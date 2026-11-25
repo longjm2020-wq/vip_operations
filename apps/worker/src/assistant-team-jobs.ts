@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { db, one, rows } from "../../../packages/database/src/index.js";
+import {
+  db,
+  one,
+  rows,
+  type Row,
+} from "../../../packages/database/src/index.js";
 import type { Context } from "../../api/src/core.js";
 import {
   runTeamExecution,
   safeTeamError,
 } from "../../api/src/modules/workspace/team-executor.js";
-import { claimAssistantRun } from "../../api/src/modules/workspace/employee-runtime.js";
+import { claimAssistantRuns } from "../../api/src/modules/workspace/employee-runtime.js";
 
-/** Separate from the media worker, so waiting for a file never consumes its slot. */
-export async function pollAssistantTeamJobs(signal: AbortSignal) {
+async function sweepInterruptedTeamJobs() {
   await db.$executeRawUnsafe(
     "UPDATE public.personal_assistant_team_runs SET status='NEEDS_USER',stage='执行中断，等待核对',error_note='任务心跳中断，已保留现有结果与请求记录。请核对已有文件和步骤，需要时可在 AI 员工另行交办。',lease_id=NULL,updated_at=now() WHERE status IN ('PLANNING','RUNNING','REVIEWING') AND COALESCE(heartbeat_at,updated_at)<now()-interval '3 minutes'",
   );
@@ -16,10 +20,11 @@ export async function pollAssistantTeamJobs(signal: AbortSignal) {
   await db.$executeRawUnsafe(
     "UPDATE public.personal_assistant_jobs j SET status='CANCELED',stage='团队任务已停止',updated_at=now() WHERE j.status IN ('QUEUED','RUNNING') AND EXISTS(SELECT 1 FROM public.personal_assistant_team_runs r WHERE r.id=j.request_id AND r.user_id=j.user_id AND r.status IN ('CANCELED','NEEDS_USER','FAILED'))",
   );
-  signal.throwIfAborted();
-  const lease = randomUUID();
-  const run = await claimAssistantRun(lease);
-  if (!run) return;
+}
+
+/** Separate from the file worker so waiting for a file never consumes a file slot. */
+async function runAssistantTeamJob(run: Row, signal: AbortSignal) {
+  const lease = String(run.lease_id);
   const controller = new AbortController();
   const combined = AbortSignal.any([signal, controller.signal]);
   let checking = false;
@@ -41,6 +46,7 @@ export async function pollAssistantTeamJobs(signal: AbortSignal) {
       });
   }, 3000);
   try {
+    combined.throwIfAborted();
     const user = await one(
       db,
       "SELECT id::text,username,display_name FROM public.users WHERE id=$1::bigint AND status='ACTIVE'",
@@ -86,23 +92,57 @@ export async function pollAssistantTeamJobs(signal: AbortSignal) {
   }
 }
 
+export async function pollAssistantTeamJobs(signal: AbortSignal) {
+  await sweepInterruptedTeamJobs();
+  signal.throwIfAborted();
+  const [run] = await claimAssistantRuns([randomUUID()]);
+  if (run) await runAssistantTeamJob(run, signal);
+}
+
+export function employeeWorkerConcurrency(
+  value = process.env.ASSISTANT_EMPLOYEE_WORKER_CONCURRENCY,
+) {
+  const limit = Number(value);
+  return Number.isInteger(limit) && limit >= 1 && limit <= 24 ? limit : 6;
+}
+
 export function startAssistantTeamJobs() {
   const controller = new AbortController();
+  const concurrency = employeeWorkerConcurrency();
   const active = new Set<Promise<void>>();
+  let filling: Promise<void> | undefined;
+  let nextSweepAt = 0;
+  const fill = async () => {
+    if (Date.now() >= nextSweepAt) {
+      await sweepInterruptedTeamJobs();
+      nextSweepAt = Date.now() + 30_000;
+    }
+    if (controller.signal.aborted) return;
+    const leases = Array.from({ length: concurrency - active.size }, () =>
+      randomUUID(),
+    );
+    for (const run of await claimAssistantRuns(leases)) {
+      const task = runAssistantTeamJob(run, controller.signal)
+        .catch(() => console.warn("Assistant team job state unavailable"))
+        .finally(() => active.delete(task));
+      active.add(task);
+    }
+  };
   const tick = () => {
-    if (controller.signal.aborted || active.size >= 3) return;
-    const task = pollAssistantTeamJobs(controller.signal)
+    if (controller.signal.aborted || filling) return;
+    if (active.size >= concurrency && Date.now() < nextSweepAt) return;
+    filling = fill()
       .catch(() => console.warn("Assistant team polling unavailable"))
       .finally(() => {
-        active.delete(task);
+        filling = undefined;
       });
-    active.add(task);
   };
   const timer = setInterval(tick, 3000);
   tick();
   return async () => {
     clearInterval(timer);
     controller.abort();
+    await filling;
     await Promise.allSettled(active);
   };
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { maxEmployees } from "./assistant-employees.js";
 
 export const knowledgeTitleLimit = 160;
 export const knowledgeContentLimit = 1_000_000;
@@ -16,7 +17,7 @@ export const knowledgeSaveSchema = z
       .max(knowledgeContentLimit)
       .pipe(textValue)
       .refine((value) => value.trim().length > 0, "正文不能为空"),
-    employeeIds: z.array(z.string().uuid()).max(18),
+    employeeIds: z.array(z.string().uuid()).max(maxEmployees),
   })
   .strict();
 

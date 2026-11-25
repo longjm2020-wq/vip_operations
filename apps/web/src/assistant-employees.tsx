@@ -9,6 +9,7 @@ import {
   Alert,
   App,
   Button,
+  Checkbox,
   Collapse,
   Empty,
   Input,
@@ -28,6 +29,7 @@ import {
   LoadingOutlined,
   LeftOutlined,
   PlusOutlined,
+  RightOutlined,
   SearchOutlined,
   SendOutlined,
   SettingOutlined,
@@ -52,6 +54,7 @@ import {
   employeeKinds,
   employeeTemplate,
   employeeProfileSchema,
+  maxEmployeesPerTask,
   type Employee,
   type EmployeeDirectory,
   type EmployeeCatalog,
@@ -65,6 +68,10 @@ import type { AgentFile } from "../../../packages/contracts/src/assistant-agent"
 import "./assistant-employees.css";
 
 const root = "/my-workspace/assistant/employees";
+const directoryEntry = "directory";
+const sceneAvatarLimit = 18;
+const directoryPageSize = 15;
+const taskPageSize = 30;
 const directoryKey = (id: string) => ["assistant-employees", id];
 const tasksKey = (id: string) => ["employee-tasks", id];
 const icons: Record<EmployeeProfile["kind"], ReactNode> = {
@@ -105,7 +112,13 @@ export function useEmployeeDirectory(
     enabled,
     queryFn: async () => (await api(root)).data as EmployeeDirectory,
     staleTime: 10000,
-    refetchInterval: enabled ? refetchInterval : false,
+    refetchInterval:
+      enabled && refetchInterval !== false
+        ? (query) =>
+            (query.state.data?.employees?.length || 0) > sceneAvatarLimit
+              ? Math.max(refetchInterval, 45000)
+              : refetchInterval
+        : false,
   });
 }
 function EmployeeAvatar({
@@ -122,6 +135,55 @@ function EmployeeAvatar({
     </span>
   );
 }
+
+function matchesEmployee(query: string, name: string, kindLabel = "") {
+  return `${name} ${kindLabel}`
+    .toLowerCase()
+    .includes(query.trim().toLowerCase());
+}
+
+const employeeOptionSearch = {
+  filterOption: (
+    query: string,
+    option?: { label: string; kindLabel?: string },
+  ) => !!option && matchesEmployee(query, option.label, option.kindLabel),
+};
+
+function EmployeeListPager({
+  label,
+  page,
+  pages,
+  onChange,
+}: {
+  label: string;
+  page: number;
+  pages: number;
+  onChange: (page: number) => void;
+}) {
+  if (pages <= 1) return null;
+  return (
+    <div className="employee-list-pager" role="group" aria-label={label}>
+      <Button
+        size="small"
+        icon={<LeftOutlined />}
+        aria-label="上一页"
+        disabled={page === 1}
+        onClick={() => onChange(page - 1)}
+      />
+      <span>
+        {page} / {pages}
+      </span>
+      <Button
+        size="small"
+        icon={<RightOutlined />}
+        aria-label="下一页"
+        disabled={page === pages}
+        onClick={() => onChange(page + 1)}
+      />
+    </div>
+  );
+}
+
 export function EmployeeStrip() {
   const hub = useAssistantHub();
   const query = useEmployeeDirectory(hub.allowed);
@@ -137,6 +199,15 @@ export function EmployeeStrip() {
         <span className="employee-strip-title">
           AI 员工 <small>{employees.length || ""}</small>
         </span>
+        {employees.length > sceneAvatarLimit && (
+          <button
+            className="employee-strip-dispatch"
+            type="button"
+            onClick={() => hub.workbench?.openEmployee(directoryEntry)}
+          >
+            全部员工
+          </button>
+        )}
         <button
           className="employee-strip-dispatch"
           type="button"
@@ -163,7 +234,7 @@ export function EmployeeStrip() {
         </button>
       ) : (
         <div className="employee-avatar-grid">
-          {employees.map((e) => (
+          {employees.slice(0, sceneAvatarLimit).map((e) => (
             <Tooltip
               key={e.id}
               title={`${e.name} · ${e.activeTasks ? `执行中 ${e.activeTasks}` : !e.accepting ? "暂停接单" : "空闲"}${e.queuedTasks ? ` · 排队 ${e.queuedTasks}` : ""}`}
@@ -899,7 +970,7 @@ function employeeReplyTarget(task?: EmployeeTask) {
     : null;
 }
 export function AssistantEmployeesPanel({
-  selected,
+  selected: selection,
   select,
   drafts,
   setDrafts,
@@ -921,19 +992,42 @@ export function AssistantEmployeesPanel({
     queryFn: async () => (await api(`${root}/catalog`)).data as EmployeeCatalog,
     staleTime: 30000,
   });
+  const inDirectory = selection === directoryEntry;
+  const selected = inDirectory ? undefined : selection;
   const employees = directory.data?.employees || [],
     employee = employees.find((e) => e.id === selected),
     creating = selected === "new";
-  const [tab, setTab] = useState("chat"),
+  const [editingEmployee, setEditingEmployee] = useState(false),
     [sending, setSending] = useState(false),
     [uploading, setUploading] = useState(false),
     [error, setError] = useState("");
   const [applyingSkills, setApplyingSkills] = useState(false),
     [skillResult, setSkillResult] = useState<EmployeeSkillsApplied>();
+  const [employeeSearch, setEmployeeSearch] = useState("");
+  const [directoryPage, setDirectoryPage] = useState(1);
+  const [taskPage, setTaskPage] = useState(1);
+  const [onlyUnfinished, setOnlyUnfinished] = useState(false);
   useEffect(() => {
-    setTab("chat");
+    setEditingEmployee(false);
+    setEmployeeSearch("");
+    setDirectoryPage(1);
+    setTaskPage(1);
+    setOnlyUnfinished(false);
     setError("");
-  }, [selected]);
+  }, [selection]);
+  const activeEmployees = employees.filter((e) => !e.archived);
+  const directoryMatches = employees.filter((e) =>
+    matchesEmployee(employeeSearch, e.name, employeeKindLabels[e.kind]),
+  );
+  const directoryPages = Math.max(
+    1,
+    Math.ceil(directoryMatches.length / directoryPageSize),
+  );
+  const visibleDirectoryPage = Math.min(directoryPage, directoryPages);
+  const visibleEmployees = directoryMatches.slice(
+    (visibleDirectoryPage - 1) * directoryPageSize,
+    visibleDirectoryPage * directoryPageSize,
+  );
   const chatHistory = useRef<HTMLDivElement>(null);
   const scope = user.id + ":" + (selected || "dispatch"),
     draft: EmployeeDraft = drafts[scope] || {
@@ -943,16 +1037,25 @@ export function AssistantEmployeesPanel({
     };
   const tasks = useQuery({
     queryKey: [...tasksKey(user.id), selected || "dispatch"],
-    enabled: !creating && (!selected || !!employee),
+    enabled: !inDirectory && !creating && (!selected || !!employee),
     queryFn: async () =>
       (
         await api(
           `${root}/tasks${selected ? `?employeeId=${encodeURIComponent(selected)}` : ""}`,
         )
       ).data as EmployeeTask[],
-    refetchInterval: 5000,
+    refetchInterval: (query) =>
+      query.state.data?.some((task) => teamActive(task.status)) ? 5000 : 15000,
   });
   const history = Array.isArray(tasks.data) ? tasks.data : [];
+  const unfinished = history.filter((task) => teamActive(task.status));
+  const filteredTasks = onlyUnfinished ? unfinished : history;
+  const taskPages = Math.max(1, Math.ceil(filteredTasks.length / taskPageSize));
+  const visibleTaskPage = Math.min(taskPage, taskPages);
+  const visibleTasks = filteredTasks.slice(
+    (visibleTaskPage - 1) * taskPageSize,
+    visibleTaskPage * taskPageSize,
+  );
   const sameConversation = (task: EmployeeTask) =>
     selected
       ? task.origin === "direct" && task.employeeId === selected
@@ -980,8 +1083,10 @@ export function AssistantEmployeesPanel({
       (employee ||
         employees.some((e) => !e.archived && e.allowDispatch && e.accepting));
   useEffect(() => {
-    chatHistory.current?.scrollTo({ top: chatHistory.current.scrollHeight });
-  }, [scope, history.length]);
+    const scroll = chatHistory.current;
+    if (scroll)
+      scroll.scrollTo({ top: visibleTaskPage === 1 ? scroll.scrollHeight : 0 });
+  }, [selection, visibleTaskPage, onlyUnfinished, history.length]);
   const refresh = async () => {
     await Promise.all([
       client.invalidateQueries({ queryKey: tasksKey(user.id) }),
@@ -990,7 +1095,7 @@ export function AssistantEmployeesPanel({
   };
   const changeEmployee = (id?: string) => {
     select(id || undefined);
-    setTab("chat");
+    setEditingEmployee(false);
     setError("");
   };
   const send = async () => {
@@ -1037,6 +1142,7 @@ export function AssistantEmployeesPanel({
           employeeIds: draft.employeeIds,
         },
       }));
+      setTaskPage(1);
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -1076,7 +1182,7 @@ export function AssistantEmployeesPanel({
             ? `排队 ${employee.queuedTasks}`
             : "空闲"
     : "";
-  const editing = creating || tab !== "chat";
+  const editing = creating || inDirectory || editingEmployee;
   const settingsLabel = editing
     ? employee
       ? "返回员工聊天"
@@ -1106,6 +1212,7 @@ export function AssistantEmployeesPanel({
           variant="borderless"
           size="small"
           aria-label="选择员工"
+          showSearch={employeeOptionSearch}
           value={selected || "dispatch"}
           disabled={sending || uploading}
           onChange={(v) => changeEmployee(v === "dispatch" ? undefined : v)}
@@ -1116,6 +1223,7 @@ export function AssistantEmployeesPanel({
               .map((e) => ({
                 value: e.id,
                 label: e.name + (e.archived ? " · 已归档" : ""),
+                kindLabel: employeeKindLabels[e.kind],
               })),
             ...(creating ? [{ value: "new", label: "新建员工" }] : []),
           ]}
@@ -1137,8 +1245,9 @@ export function AssistantEmployeesPanel({
           title={settingsLabel}
           disabled={sending || uploading}
           onClick={() => {
-            if (creating) changeEmployee();
-            else setTab(editing ? "chat" : employee ? "settings" : "directory");
+            if (creating || inDirectory) changeEmployee();
+            else if (employee) setEditingEmployee(!editingEmployee);
+            else changeEmployee(directoryEntry);
           }}
         />
         <Button
@@ -1189,30 +1298,56 @@ export function AssistantEmployeesPanel({
         <Spin />
       ) : (
         <>
-          {tab === "settings" && employee ? (
+          {editingEmployee && employee && !inDirectory ? (
             <EmployeeEditor
               key={employee.id}
               employee={employee}
               catalog={catalog.data}
               saved={() => void refresh()}
             />
-          ) : tab === "directory" ? (
+          ) : inDirectory ? (
             <div className="employee-directory">
+              <div className="employee-list-navigation">
+                <Input
+                  className="employee-directory-search"
+                  aria-label="搜索员工"
+                  placeholder="按称呼或岗位搜索"
+                  prefix={<SearchOutlined />}
+                  allowClear
+                  size="small"
+                  value={employeeSearch}
+                  onChange={(event) => {
+                    setEmployeeSearch(event.target.value);
+                    setDirectoryPage(1);
+                  }}
+                />
+                {directory.data && (
+                  <span className="employee-note">
+                    在职 {activeEmployees.length} /{" "}
+                    {directory.data.maxEmployees}
+                  </span>
+                )}
+                <EmployeeListPager
+                  label="员工列表分页"
+                  page={visibleDirectoryPage}
+                  pages={directoryPages}
+                  onChange={setDirectoryPage}
+                />
+              </div>
               <div>
                 <Button
                   size="small"
                   loading={applyingSkills}
-                  disabled={
-                    !employees.some((e) => !e.archived) || directory.isFetching
-                  }
+                  disabled={!activeEmployees.length || directory.isFetching}
                   onClick={async () => {
                     setApplyingSkills(true);
                     try {
                       const result = (
                         await api(`${root}/skills/apply`, "POST", {
-                          employees: employees
-                            .filter((e) => !e.archived)
-                            .map((e) => ({ id: e.id, version: e.version })),
+                          employees: activeEmployees.map((e) => ({
+                            id: e.id,
+                            version: e.version,
+                          })),
                         })
                       ).data as EmployeeSkillsApplied;
                       setSkillResult(result);
@@ -1244,7 +1379,10 @@ export function AssistantEmployeesPanel({
                   />
                 )}
               </div>
-              {employees.map((e) => (
+              {employeeSearch.trim() && !visibleEmployees.length && (
+                <p className="employee-note">没有匹配的员工</p>
+              )}
+              {visibleEmployees.map((e) => (
                 <button key={e.id} onClick={() => changeEmployee(e.id)}>
                   <EmployeeAvatar employee={e} />
                   <span>
@@ -1265,6 +1403,25 @@ export function AssistantEmployeesPanel({
             </div>
           ) : (
             <>
+              {(history.length > taskPageSize || onlyUnfinished) && (
+                <div className="employee-list-navigation">
+                  <Checkbox
+                    checked={onlyUnfinished}
+                    onChange={(event) => {
+                      setOnlyUnfinished(event.target.checked);
+                      setTaskPage(1);
+                    }}
+                  >
+                    仅未结束（{unfinished.length}）
+                  </Checkbox>
+                  <EmployeeListPager
+                    label="员工任务分页"
+                    page={visibleTaskPage}
+                    pages={taskPages}
+                    onChange={setTaskPage}
+                  />
+                </div>
+              )}
               <div className="employee-chat-history" ref={chatHistory}>
                 {tasks.isLoading && <Spin />}
                 {tasks.error && (
@@ -1278,59 +1435,63 @@ export function AssistantEmployeesPanel({
                     }
                   />
                 )}
-                {!history.length && !tasks.isLoading && (
+                {!visibleTasks.length && !tasks.isLoading && (
                   <Empty
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                     description={
-                      employee
-                        ? `把任务交给${employee.name}`
-                        : "让小序组织员工一起完成任务"
+                      onlyUnfinished
+                        ? "暂无未结束任务"
+                        : employee
+                          ? `把任务交给${employee.name}`
+                          : "让小序组织员工一起完成任务"
                     }
                   />
                 )}{" "}
-                {history.length >= 30 && (
-                  <p className="employee-note">显示最近 30 个任务</p>
-                )}
-                {[...history].reverse().map((task) => (
-                  <TaskCard
-                    key={task.id}
-                    task={task}
-                    control={control}
-                    reuse={reuse}
-                    onSupplement={
-                      !employee?.archived &&
-                      sameConversation(task) &&
-                      !sending &&
-                      !uploading &&
-                      task.inputRequestId !== replyTo?.requestId
-                        ? () => {
-                            updateDraft({ replyTo: employeeReplyTarget(task) });
-                            composerInput.current?.focus();
-                          }
-                        : undefined
-                    }
-                    onCopyRequest={
-                      !employee?.archived &&
-                      sameConversation(task) &&
-                      emptyDraft &&
-                      !sending &&
-                      !uploading
-                        ? () => {
-                            updateDraft({
-                              replyTo: null,
-                              goal: task.goal,
-                              attachments: { attachments: task.attachments },
-                              employeeIds:
-                                task.origin === "dispatch"
-                                  ? task.employeeIds
-                                  : [],
-                            });
-                            composerInput.current?.focus({ cursor: "end" });
-                          }
-                        : undefined
-                    }
-                  />
-                ))}
+                {visibleTasks
+                  .slice()
+                  .reverse()
+                  .map((task) => (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      control={control}
+                      reuse={reuse}
+                      onSupplement={
+                        !employee?.archived &&
+                        sameConversation(task) &&
+                        !sending &&
+                        !uploading &&
+                        task.inputRequestId !== replyTo?.requestId
+                          ? () => {
+                              updateDraft({
+                                replyTo: employeeReplyTarget(task),
+                              });
+                              composerInput.current?.focus();
+                            }
+                          : undefined
+                      }
+                      onCopyRequest={
+                        !employee?.archived &&
+                        sameConversation(task) &&
+                        emptyDraft &&
+                        !sending &&
+                        !uploading
+                          ? () => {
+                              updateDraft({
+                                replyTo: null,
+                                goal: task.goal,
+                                attachments: { attachments: task.attachments },
+                                employeeIds:
+                                  task.origin === "dispatch"
+                                    ? task.employeeIds
+                                    : [],
+                              });
+                              composerInput.current?.focus({ cursor: "end" });
+                            }
+                          : undefined
+                      }
+                    />
+                  ))}
               </div>
               {!employee?.archived && (
                 <div className="employee-composer">
@@ -1356,14 +1517,26 @@ export function AssistantEmployeesPanel({
                       placeholder="自动从允许派单的员工中安排"
                       value={draft.employeeIds}
                       disabled={sending}
-                      options={employees
-                        .filter(
-                          (e) => !e.archived && e.allowDispatch && e.accepting,
-                        )
-                        .map((e) => ({ value: e.id, label: e.name }))}
+                      showSearch={employeeOptionSearch}
+                      maxCount={maxEmployeesPerTask}
+                      maxTagCount="responsive"
+                      options={activeEmployees
+                        .filter((e) => e.allowDispatch && e.accepting)
+                        .map((e) => ({
+                          value: e.id,
+                          label: e.name,
+                          kindLabel: employeeKindLabels[e.kind],
+                        }))}
                       onChange={(employeeIds) => updateDraft({ employeeIds })}
                     />
                   )}
+                  {!employee &&
+                    !replyTo &&
+                    draft.employeeIds.length >= maxEmployeesPerTask && (
+                      <p className="employee-note">
+                        每次派单最多选择 {maxEmployeesPerTask} 位员工。
+                      </p>
+                    )}
                   {!employee &&
                     !history.length &&
                     employees.some((e) => e.kind === "image") &&
