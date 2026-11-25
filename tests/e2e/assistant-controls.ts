@@ -168,6 +168,9 @@ export async function selectAssistantExecution(page: Page, name: string) {
     if (name === "小序独立浏览器") {
       await selectAssistantPanel(page, "独立浏览器");
       await page
+        .getByRole("button", { name: "云端独立浏览器", exact: true })
+        .click();
+      await page
         .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
         .click();
       await page

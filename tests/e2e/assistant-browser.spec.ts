@@ -319,14 +319,74 @@ async function fixture(
   });
   return { state, freshFrame };
 }
+async function selectCloudBrowser(page: Page) {
+  await page
+    .getByRole("button", { name: "云端独立浏览器", exact: true })
+    .click();
+}
 async function chooseBrowser(page: Page) {
   await selectAssistantPanel(page, "独立浏览器");
+  await selectCloudBrowser(page);
   await page
     .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
     .click();
   await page
     .getByRole("menuitem", { name: "让小序操作当前网页", exact: true })
     .click();
+}
+
+for (const width of [1440, 390]) {
+  test(`普通浏览器在 ${width}px 默认本地导航，拦截时可用独立链接打开`, async ({ page }) => {
+    const { state } = await fixture(page);
+    state.ready = false;
+    const localUrl = "https://example.com/local-browser-fixture";
+    await page.context().route(localUrl, (route) =>
+      route.fulfill({ contentType: "text/html; charset=utf-8", body: "<h1>本机网页测试</h1>" }),
+    );
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/my-workspace?assistant=browser");
+    const panel = page.locator(".assistant-browser-panel");
+    const local = panel.getByRole("button", { name: "本地浏览器", exact: true });
+    const address = panel.getByRole("textbox", { name: "网页地址", exact: true });
+    const submit = panel.getByRole("button", { name: "打开网址", exact: true });
+    await expect(local).toHaveAttribute("aria-pressed", "true");
+    await expect(panel.getByRole("status")).toHaveText("网页在本机浏览器的新标签页显示");
+    await address.fill("https://user:password@example.com");
+    await submit.click();
+    await expect(panel.getByRole("alert")).toHaveText("请输入不含账号和密码的 HTTPS 网址");
+    expect(page.context().pages()).toHaveLength(1);
+    await address.fill("example.com/local-browser-fixture");
+    const opened = page.context().waitForEvent("page");
+    if (width === 390) await submit.click();
+    else await address.press("Enter");
+    const tab = await opened;
+    await expect(tab.getByRole("heading", { name: "本机网页测试" })).toBeVisible();
+    await expect(tab).toHaveURL(localUrl);
+    expect(await tab.evaluate(() => window.opener)).toBeNull();
+    await tab.close();
+    await expect(panel.getByRole("status")).toHaveText("已在本机浏览器打开新标签页");
+
+    await page.evaluate(() => { window.open = () => null; });
+    await submit.click();
+    await expect(panel.getByRole("alert")).toHaveText("浏览器拦截了新标签页");
+    const fallback = panel.getByRole("link", { name: "在新标签页打开" });
+    await expect(fallback).toHaveAttribute("href", localUrl);
+    const pendingFallback = page.context().waitForEvent("page");
+    await fallback.click();
+    const fallbackTab = await pendingFallback;
+    await expect(fallbackTab).toHaveURL(localUrl);
+    await fallbackTab.close();
+    expect(state.requests).toEqual([]);
+    expect(state.browserRequests).toEqual([]);
+    expect(state.frameRequests).toEqual([]);
+    expect(state.navigations).toEqual([]);
+
+    await selectCloudBrowser(page);
+    await expect(panel.getByRole("button", { name: "云端独立浏览器", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(panel.getByText("独立浏览器执行服务尚未连接")).toBeVisible();
+    await local.click();
+    await expect(panel.getByRole("textbox", { name: "网页地址", exact: true })).toBeEnabled();
+  });
 }
 
 for (const viewport of [
@@ -372,6 +432,7 @@ for (const viewport of [
       height: viewport.height,
     });
     await page.goto("/my-workspace?assistant=browser");
+    await selectCloudBrowser(page);
     const panel = page.locator(".assistant-browser-panel");
     const image = panel.getByRole("img", { name: "小序独立浏览器当前截图" });
     await expect(image).toBeVisible();
@@ -589,7 +650,8 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   const { state } = await fixture(page);
   state.chatReady = false;
   await page.goto("/my-workspace");
-  await chooseBrowser(page);
+  await selectAssistantPanel(page, "独立浏览器");
+  await expect(page.getByRole("button", { name: "本地浏览器", exact: true })).toHaveAttribute("aria-pressed", "true");
   const composer = page.locator(".assistant-compose:visible");
   const message = "在小序独立浏览器中操作当前网页：打开百度";
   await composer.locator("textarea").fill(message);
@@ -622,6 +684,7 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   await expect(
     page.getByRole("img", { name: "小序独立浏览器当前截图", exact: true }),
   ).toBeVisible();
+  await expect(page.getByRole("button", { name: "云端独立浏览器", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(
     page.getByRole("region", { name: `浏览器任务：${message}` }),
   ).toContainText("等待独立浏览器");
@@ -689,6 +752,7 @@ test("观察器未回调时历史标签新建与全屏仍同步真实视口，�
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/my-workspace?assistant=browser");
+  await selectCloudBrowser(page);
   const panel = page.locator(".assistant-browser-panel");
   await expect(panel.getByLabel("最终画面只读", { exact: true })).toBeVisible();
   const bounds = (await panel
@@ -775,6 +839,7 @@ test("两个客户端查看同一网页，窄栏轮询不覆盖全屏尺寸，�
   state.tasks = [{ ...makeTask(), mode: "BROWSE", status: "PAUSED" }];
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/my-workspace?assistant=browser");
+  await selectCloudBrowser(page);
   const narrow = page.locator(".assistant-browser-panel");
   await expect(narrow.locator(".assistant-browser-screen img")).toBeVisible();
   await page.waitForTimeout(1100);
@@ -796,6 +861,7 @@ test("两个客户端查看同一网页，窄栏轮询不覆盖全屏尺寸，�
   });
   try {
     await other.goto("/my-workspace?assistant=browser");
+    await selectCloudBrowser(other);
     const wide = other.locator(".assistant-browser-panel");
     await expect(wide.locator(".assistant-browser-screen img")).toBeVisible();
     await other.waitForTimeout(1100);
@@ -820,6 +886,8 @@ test("两个客户端查看同一网页，窄栏轮询不覆盖全屏尺寸，�
     expect(narrowRequests).toEqual([]);
     // Reopening a narrow viewer must not claim an already running full-screen session.
     await page.reload();
+    await selectAssistantPanel(page, "独立浏览器");
+    await selectCloudBrowser(page);
     await expect(narrow.locator("img")).toHaveAttribute("width", "1920");
     await page.waitForTimeout(1400);
     expect(narrowRequests).toEqual([]);
@@ -868,6 +936,7 @@ test("网页内键盘、中文与粘贴串行等待执行回执，旧画面不�
   const { state, freshFrame } = await fixture(page);
   state.tasks = [makeTask()];
   await page.goto("/my-workspace?assistant=browser");
+  await selectCloudBrowser(page);
   const panel = page.locator(".assistant-browser-panel");
   const screen = panel.getByRole("button", { name: "点击独立浏览器画面" });
   await expect(screen).toBeDisabled();
@@ -1150,6 +1219,7 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
     },
   ];
   await page.goto("/my-workspace?assistant=browser");
+  await selectCloudBrowser(page);
   await expect(panel.locator(".assistant-browser-tab")).toContainText(
     "示例网站",
   );
@@ -1182,6 +1252,7 @@ for (const width of [1440, 390]) {
     const { state } = await fixture(page);
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/my-workspace?assistant=browser");
+    await selectCloudBrowser(page);
     const panel = page.locator(".assistant-browser-panel");
     const input = panel.getByRole("textbox", { name: "网页地址" });
     const submit = panel.getByRole("button", { name: "打开网址" });
@@ -1268,6 +1339,7 @@ test("直接浏览首帧到达后立即核对状态，切出排队时保留画�
       statusReads++;
   });
   await page.goto("/my-workspace?assistant=browser");
+  await selectCloudBrowser(page);
   const screen = page.getByRole("button", {
     name: "点击独立浏览器画面",
     exact: true,
@@ -1318,6 +1390,7 @@ test("直接浏览不依赖模型，真实导航和视口随面板变化，地�
     },
   ];
   await page.goto("/my-workspace?assistant=browser");
+  await selectCloudBrowser(page);
   const panel = page.locator(".assistant-browser-panel");
   const address = panel.getByRole("textbox", { name: "网页地址" });
   const screen = panel.getByRole("button", { name: "点击独立浏览器画面" });

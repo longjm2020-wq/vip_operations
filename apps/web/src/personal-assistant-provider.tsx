@@ -477,7 +477,10 @@ export function PersonalAssistantProvider({
     refetchOnReconnect: "always",
   });
   const revealBrowserAfter = useRef<Set<string> | null>(null);
-  const [browserSelection, setBrowserSelection] = useState<{ id?: string }>({});
+  const [browserSelection, setBrowserSelection] = useState<{
+    id?: string;
+    cloud?: true;
+  }>({});
   const setSelectedBrowserTaskId = useCallback(
     (id?: string) => setBrowserSelection({ id }),
     [],
@@ -807,6 +810,7 @@ export function PersonalAssistantProvider({
     }
     if (executionBusy.current || desktopSetupRunning.current) return;
     rememberDesktopChoice({ mode: "browser" });
+    if (!browser.data?.ready) setBrowserSelection({ cloud: true });
     setSection(browser.data?.ready ? "chat" : "browser");
     setOpen(true);
   };
@@ -1317,6 +1321,7 @@ export function PersonalAssistantProvider({
   };
   const selectSection = (next: AssistantSection) => {
     if (next === "desktop" && busy) return;
+    if (next === "browser" && !docked) setSelectedBrowserTaskId();
     playbackAllowed.current = false;
     closeVoice();
     voice.stop();
@@ -1408,7 +1413,7 @@ export function PersonalAssistantProvider({
               { key: "chat", label: "聊天" },
               { key: "employees", label: "AI 员工" },
               { key: "desktop", label: "我的电脑" },
-              { key: "browser", label: "独立浏览器" },
+              { key: "browser", label: "浏览器" },
             ]
           : []),
         ...workspaceMoreTools,
@@ -1539,9 +1544,9 @@ export function PersonalAssistantProvider({
             size="small"
             icon={<GlobalOutlined aria-hidden />}
             disabled={busy || voice.listening}
-            onClick={() => (browserMode ? inspectBrowser() : chooseBrowser())}
+            onClick={() => selectSection("browser")}
           >
-            独立浏览器
+            浏览器
           </Button>
           <Button
             size="small"
@@ -1973,12 +1978,7 @@ export function PersonalAssistantProvider({
           expanded={browserExpanded}
           toggleExpanded={() => setBrowserExpanded((value) => !value)}
           onSubmitting={setBrowserStarting}
-          onStarted={(task) => {
-            if (!docked) {
-              rememberDesktopChoice({ mode: "browser" });
-            }
-            setSelectedBrowserTaskId(task.id);
-          }}
+          onStarted={(task) => setSelectedBrowserTaskId(task.id)}
         />
       )}
       {!allowed && panelSection === "activity" && activityPanel}

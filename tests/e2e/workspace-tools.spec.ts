@@ -222,12 +222,21 @@ test("业务页独立助理保留员工和浏览器入口，助理设置可打�
     "聊天",
     "AI 员工",
     "我的电脑",
-    "独立浏览器",
+    "浏览器",
     "公司知识库",
     "任务与文件",
     "助理设置",
     "清空对话",
   ]);
+  await entries.getByText("浏览器", { exact: true }).click();
+  const browser = dialog.locator(".assistant-browser-panel");
+  const local = browser.getByRole("button", { name: "本地浏览器", exact: true });
+  const cloud = browser.getByRole("button", { name: "云端独立浏览器", exact: true });
+  await expect(local).toHaveAttribute("aria-pressed", "true");
+  await expect(browser.getByRole("textbox", { name: "网页地址" })).toBeEnabled();
+  await cloud.click();
+  await expect(cloud).toHaveAttribute("aria-pressed", "true");
+  await dialog.getByRole("button", { name: "更多助理操作" }).click();
   await entries.filter({ hasText: "助理设置" }).click();
   await dialog.getByRole("tab", { name: "个人记忆", exact: true }).click();
   await expect(
@@ -412,18 +421,12 @@ for (const width of [1440, 390]) {
     ).toHaveCount(0);
     if (width === 390) await expect(attachment).toBeHidden();
     else await expect(attachment).toBeVisible();
-    await browser
-      .getByRole("button", { name: "本地浏览器", exact: true })
-      .click();
-    const localHelp = page.getByRole("dialog", {
-      name: "在桌面端打开本地浏览器",
-    });
     await expect(
-      localHelp.getByRole("link", { name: "下载 Windows 桌面端" }),
-    ).toHaveAttribute("href", "/downloads/xuti-desktop.zip");
-    await localHelp
-      .getByRole("button", { name: "关闭提示", exact: true })
-      .click();
+      browser.getByRole("button", { name: "本地浏览器", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      browser.getByRole("textbox", { name: "网页地址", exact: true }),
+    ).toBeEnabled();
 
     await page
       .getByRole("button", { name: "关闭浏览器面板", exact: true })
@@ -466,6 +469,9 @@ for (const width of [1440, 390]) {
       page.getByRole("menuitem", { name: "网站内", exact: true }),
     ).toHaveCount(0);
     await selectAssistantPanel(page, "独立浏览器");
+    await browser
+      .getByRole("button", { name: "云端独立浏览器", exact: true })
+      .click();
     await browser
       .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
       .click();
