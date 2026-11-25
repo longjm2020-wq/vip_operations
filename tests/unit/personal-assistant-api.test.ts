@@ -1052,6 +1052,144 @@ describe("assistant business tools and private memory", () => {
       fallback.messages.at(-1),
     );
   });
+  it("searches public questions once with citations, independent of the chat model and private context", async () => {
+    const c = actor();
+    const initial = await sendAssistant(c, {
+      ...input(),
+      message: "fixture-only private history",
+    });
+    const citations = [
+      { title: "公开项目", url: "https://github.com/example/public" },
+    ];
+    const providerRequestId = randomUUID();
+    const search = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
+      Response.json({
+        id: providerRequestId,
+        model: "openai/gpt-6.1-sol",
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: "找到一项公开项目。",
+              annotations: citations.map((item) => ({
+                type: "url_citation",
+                url_citation: item,
+              })),
+            },
+          },
+        ],
+        usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+      }),
+    );
+    vi.stubGlobal("fetch", search);
+    const body = {
+      ...input(initial.version),
+      message: "搜索 GitHub 开源项目",
+      autoExecution: true,
+      model: "unavailable/chat-model",
+      includePersonalContext: true,
+      includeMemory: true,
+    };
+    const result = await sendAssistant(c, body);
+    expect(result.state).toBe("IDLE");
+    expect(result.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      text: "找到一项公开项目。",
+      citations,
+    });
+    expect(result.messages.at(-1)?.browserTaskId).toBeUndefined();
+    expect((await sendAssistant(c, body)).messages).toEqual(result.messages);
+    expect(search).toHaveBeenCalledTimes(1);
+    const [url, init] = search.mock.calls[0]!;
+    expect(String(url)).toBe("https://openrouter.ai/api/v1/chat/completions");
+    const request = JSON.parse(String(init?.body));
+    expect(request).toMatchObject({
+      model: "openai/gpt-6.1-sol",
+      tools: [
+        {
+          type: "openrouter:web_search",
+          parameters: { engine: "exa", max_uses: 1 },
+        },
+      ],
+    });
+    expect(request.messages).toEqual([
+      { role: "system", content: expect.any(String) },
+      { role: "user", content: body.message },
+    ]);
+    await vi.waitFor(async () => {
+      const { rows } = await fixture.database!.query(
+        "SELECT feature_id,model,total_tokens::text AS total FROM ai_model_usage WHERE provider_request_id=$1",
+        [providerRequestId],
+      );
+      expect(rows).toEqual([
+        {
+          feature_id: "assistant_search",
+          model: "openai/gpt-6.1-sol",
+          total: "15",
+        },
+      ]);
+    });
+  });
+  it("reports missing public sources and unverified search connections without a chat fallback", async () => {
+    const c = actor();
+    const hiddenResult = vi.fn(async () =>
+      Response.json({
+        id: randomUUID(),
+        model: "openai/gpt-6.1-sol",
+        choices: [{ message: { content: "未核实的回答", annotations: [] } }],
+      }),
+    );
+    vi.stubGlobal("fetch", hiddenResult);
+    const body = { ...input(), message: "查一下今天北京的天气" };
+    const noSources = await sendAssistant(c, body);
+    expect(noSources.state).toBe("FAILED");
+    expect(noSources.error).toContain("没有返回可核验来源");
+    expect(noSources.messages.at(-1)?.role).toBe("user");
+    expect(hiddenResult).toHaveBeenCalledTimes(1);
+
+    await fixture.database!.exec(
+      "UPDATE compass_ai_settings SET verified_at=NULL",
+    );
+    const unavailable = await sendAssistant(c, {
+      ...input(noSources.version),
+      message: "请给我一些公开天气资料",
+      webSearch: true,
+    });
+    expect(unavailable.state).toBe("FAILED");
+    expect(unavailable.error).toContain("检查并验证搜索连接");
+    expect(unavailable.messages.at(-1)?.role).toBe("user");
+    expect(hiddenResult).toHaveBeenCalledTimes(1);
+  });
+  it("keeps attachment and continuous voice requests on the ordinary chat flow", async () => {
+    const c = actor();
+    const file = await saveAgentFile(
+      c,
+      "private.txt",
+      "text/plain",
+      Buffer.from("fixture attachment"),
+      "upload",
+      "fixture attachment",
+    );
+    const message = "查一下今天北京的天气";
+    const attachment = await sendAssistant(c, {
+      ...input(),
+      message,
+      attachmentIds: [file.id],
+    });
+    const voice = await sendAssistant(
+      c,
+      { ...input(attachment.version), message },
+      { signal: new AbortController().signal },
+    );
+    expect(attachment.state).toBe("IDLE");
+    expect(voice.state).toBe("IDLE");
+    expect(calls).toHaveLength(2);
+    expect(
+      calls.every((call) =>
+        call.tools.every((tool: Row) => tool.type !== "openrouter:web_search"),
+      ),
+    ).toBe(true);
+  });
   it("resolves an unfamiliar website name once and persists its navigation for the waiting window", async () => {
     const fetch = vi.fn(
       async () =>

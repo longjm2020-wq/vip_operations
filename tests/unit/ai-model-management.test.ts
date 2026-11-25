@@ -811,6 +811,18 @@ describe("AI model administration and real routing", () => {
     expect(await query("SELECT * FROM audit_logs")).toHaveLength(2);
   });
   it("uses the managed search model in the outgoing API body and keeps team defaults independent", async () => {
+    const initial = (await aiModelManagement(admin())).features;
+    expect(
+      initial.find((feature) => feature.id === "assistant_search"),
+    ).toMatchObject({
+      model: "openai/gpt-6.1-sol",
+      choices: expect.arrayContaining([
+        expect.objectContaining({ value: "", label: "系统默认" }),
+      ]),
+    });
+    expect(
+      initial.find((feature) => feature.id === "assistant_website")?.model,
+    ).toBe("跟随本次对话模型");
     await saveAiFeatureModel(admin(), {
       feature: "assistant_search",
       model: modelRef(vision),

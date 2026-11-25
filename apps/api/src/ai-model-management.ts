@@ -478,8 +478,7 @@ export async function aiModelManagement(
           };
         });
       const automatic = feature.kind === "team";
-      const followsChat =
-        feature.id === "assistant_search" || feature.id === "assistant_website";
+      const followsChat = feature.id === "assistant_website";
       const selected = catalog.models.find(
         (model) => model.id === (row.selection || catalog.defaultModel),
       );
@@ -586,9 +585,7 @@ export async function aiModelManagement(
       feature.id === "assistant_chat" && row.model === bailianChatModel;
     const automatic =
       !row.selection &&
-      (feature.kind === "team" ||
-        feature.id === "assistant_search" ||
-        feature.id === "assistant_website");
+      (feature.kind === "team" || feature.id === "assistant_website");
     const selectedModel = catalog.models.find(
       (model) => model.id === (row.selection || catalog.defaultModel),
     );

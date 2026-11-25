@@ -31,6 +31,23 @@ const unquotedDesktopName =
 const hostnameAfterComputer =
   /^(?:在|用|使用)(?:我的)?(?:电脑|设备)\s+([A-Za-z0-9][A-Za-z0-9._-]{0,62})\s*(?:上|中|里|[,，:：])\s*/u;
 
+const publicSearchAction =
+  /^(?:(?:(?:能(?:不能)?|可以|可不可以)\s*(?:帮我\s*)?)?(?:(?:上网|联网|(?:在)?(?:网上|公开网页上))\s*(?:搜索|搜一搜|搜一下|查|找|检索)|搜索(?!引擎|框|功能|算法|按钮|栏)|搜一搜|搜一下|搜\s+|检索(?!算法|原理)|查找公开|查找网上)\s*\S|(?:(?:can you|could you|would you)\s+)?(?:search(?:\s+(?:for|the web for))?|look up)\s+\S)/iu;
+const currentInformation =
+  /(?:现在|目前|当前|今日|今天|明天|后天|昨天|近期|最近|最新|实时|本周|本月|今年|\b(?:current|today|tomorrow|yesterday|latest|recent|right now|this week|this month|this year)\b)/iu;
+const publicInformation =
+  /(?:天气|气温|降雨|下雨|台风|空气质量|新闻|头条|汇率|股价|金价|油价|比特币|比分|赛程|赛事结果|开奖结果|票房|公开报告|行业趋势|法律法规|政策|公告|航班|地震|版本(?:号|更新|发布)?|\b(?:weather|forecast|rain|temperature|news|exchange rate|stock price|gold price|oil price|bitcoin|score|flight status|earthquake|release|version)\b)/iu;
+const sourceRequest =
+  /(?:查(?:一下|找|证)|核实|核查|找(?:一下)?)\s*\S.*(?:公开(?:来源|资料|报道)|官方(?:来源|报道|文档))|^(?:查(?:一下|找)?|找(?:一下)?)\s*(?:公开|网上的|官方)\s*\S/u;
+const privateSearchContext =
+  /(?:附件|上传的|上文|上一条|刚才(?:说|提|发|传)|上次(?:说|提|发|传)|这(?:份文件|条消息|段对话)|我(?:们)?(?:的)?(?:公司|团队|店铺|账号|订单|数据|销售额|库存|客户|日程|待办|记忆|文件)|本地(?:文件|文档)|公司内部|公司知识库|内部(?:数据|资料|文档|邮件|知识库)|私有(?:仓库|资料|项目)|经营分析|商品档案|选款登记|库存(?:表|明细|快照)|进货(?:单|明细|数据)|销售额|销售明细|(?:店铺|平台)订单|\b(?:my|our)\s+(?:files?|docs?|calendar|sales|orders|inventory|emails?|account|company|team)\b|\bprivate\s+(?:repo(?:sitory)?|files?|docs?)\b)/iu;
+const searchCredentials =
+  /(?:(?:[?&]|\b)(?:access[_-]?token|api[_ -]?key|password)\s*[:=]|(?:密码|密钥|令牌)\s*[:=]|\bhttps?:\/\/[^/\s]+@)/iu;
+const browserAction =
+  /^(?:用|使用|打开|操作|控制|切换到|切换至|进入|启动|访问|通过|在)\s*(?:当前|这个|我的|本机|云端|服务端)?\s*浏览器|\b(?:open|use|control|switch to)\s+(?:the\s+|my\s+)?browser\b/iu;
+const followupOperation =
+  /(?:然后|再|并且?|接着|同时|[,;，；\n])\s*(?:打开|点击|登录|登陆|填写|输入|下载|上传|保存|发送|生成(?:文件|表格|文档)|(?:and|then)\s+(?:open|click|save|send|sign in)\b)/iu;
+
 function normalize(text: string) {
   return text
     .normalize("NFKC")
@@ -48,6 +65,46 @@ function requestsAction(text: string) {
     /^(?:把|将)[^,；;\n]{1,80}(?:打开|关闭|输入|复制|保存|设置|整理|填写|移动)/u.test(
       text,
     )
+  );
+}
+
+/** Recognize public lookup intent from the current ordinary text alone. */
+export function shouldSearchAssistantPublicWeb(
+  text: string,
+  options?: { explicitSearch?: boolean },
+): boolean {
+  const instruction = normalize(text);
+  if (
+    /^(?:不要|别|不用|不必|无需|禁止|取消|停止|暂停|假如|假设|如果|要是|“|「|"|do not\b|don't\b)/iu.test(
+      instruction,
+    ) ||
+    /(?:不要|无需|禁止|不必|不用)\s*(?:上网|联网|搜索|查网|查网页)/u.test(
+      instruction,
+    ) ||
+    privateSearchContext.test(instruction) ||
+    searchCredentials.test(instruction) ||
+    followupOperation.test(instruction) ||
+    currentPagePrefix.test(instruction) ||
+    desktopScope.test(instruction) ||
+    browserScope.test(instruction) ||
+    browserAction.test(instruction) ||
+    localBrowserScope.test(instruction) ||
+    siteScope.test(instruction) ||
+    parseVoiceCommand(instruction)
+  )
+    return false;
+
+  if (publicSearchAction.test(instruction)) return true;
+  if (
+    /^(?:在|到|去|访问|前往|打开|进入|写|创作|生成|润色|翻译|改写|go to\b|visit\b|open\b|write\b|translate\b)/iu.test(
+      instruction,
+    )
+  )
+    return false;
+  return (
+    options?.explicitSearch === true ||
+    sourceRequest.test(instruction) ||
+    (currentInformation.test(text) && publicInformation.test(instruction))
   );
 }
 
@@ -79,7 +136,10 @@ export function isNativeDesktopAppCommand(text: string): boolean {
 }
 
 /** Evaluate only the current user utterance, before any model or page text is available. */
-export function classifyAssistantExecution(text: string): AssistantExecution {
+export function classifyAssistantExecution(
+  text: string,
+  options?: { inferExternalTargets?: boolean },
+): AssistantExecution {
   const instruction = normalize(text);
   const currentPage = currentPagePrefix.exec(instruction);
   const command = currentPage
@@ -210,6 +270,7 @@ export function classifyAssistantExecution(text: string): AssistantExecution {
 
   const startsWithAction = requestsAction(instruction);
   if (
+    options?.inferExternalTargets !== false &&
     (startsWithAction || /^(?:在|到|去)\s*\S+/u.test(firstClause)) &&
     (namedWebsite.test(firstClause) || namedPageTarget.test(firstClause))
   ) {
@@ -220,7 +281,11 @@ export function classifyAssistantExecution(text: string): AssistantExecution {
       return { kind: "browser" };
     return { kind: "site" };
   }
-  if (startsWithAction && desktopHint.test(firstClause))
+  if (
+    options?.inferExternalTargets !== false &&
+    startsWithAction &&
+    desktopHint.test(firstClause)
+  )
     return { kind: "clarify" };
   return { kind: "site" };
 }

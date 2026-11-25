@@ -13,7 +13,8 @@ export const aiFeatures = [
     name: "小序公开网页检索",
     group: "小序",
     href: "/my-workspace?assistant=chat",
-    boundary: "检索公开网页并返回来源，不访问登录后的内容。",
+    boundary:
+      "在工作台普通对话直接提出独立的公开资料或时效信息查询，小序按文字识别后检索公开网页并返回来源。只向搜索服务提交当条文字，使用本项 OpenRouter 型号或系统默认型号，按调用回执单独统计。AI 员工沿用其已经授权的公开检索流程，未设置本项时可使用员工任务的 OpenRouter 型号。",
     kind: "chat",
   },
   {

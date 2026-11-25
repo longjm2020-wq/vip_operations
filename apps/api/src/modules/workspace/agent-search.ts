@@ -139,12 +139,20 @@ export async function searchAgentWeb(
       "联网查询返回了非指定型号，未采用该结果或自动切换模型",
       502,
     );
-  const citations = publicCitations(msg?.annotations);
-  if (!citations.length || typeof msg?.content !== "string")
+  const citations = [
+    ...new Map(
+      publicCitations(msg?.annotations).map((item) => [item.url, item]),
+    ).values(),
+  ];
+  const text =
+    typeof msg?.content === "string"
+      ? assistantPublicText(msg.content.slice(0, 10000)).trim()
+      : "";
+  if (!citations.length || !text)
     fail(
       "SEARCH_FAILED",
       "联网查询没有返回可核验来源，请调整搜索词后重试",
       502,
     );
-  return { text: assistantPublicText(msg.content.slice(0, 10000)), citations };
+  return { text, citations };
 }

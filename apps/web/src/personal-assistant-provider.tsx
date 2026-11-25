@@ -46,6 +46,7 @@ import { assistantNavigationTools } from "../../../packages/contracts/src/assist
 import {
   classifyAssistantExecution,
   isNativeDesktopAppCommand,
+  shouldSearchAssistantPublicWeb,
 } from "../../../packages/contracts/src/assistant-execution";
 import {
   AssistantHubContext,
@@ -664,18 +665,26 @@ export function PersonalAssistantProvider({
         ? "所选模型当前不可用，请重新选择或验证连接。"
         : "暂无已接通的聊天模型，请管理员检查连接。"
       : "";
+  const shouldSearch = (value: string) =>
+    !externalMode &&
+    !agent.attachments.length &&
+    shouldSearchAssistantPublicWeb(value);
+  const draftIsPublicSearch = shouldSearch(text);
   const draftIsSite =
-    !docked ||
-    (!isNativeAppRequest(text) &&
-      classifyAssistantExecution(text).kind === "site");
-  const composerReady = docked
-    ? !!data &&
-      !browserPagePrefixes.includes(text.trim()) &&
-      (!draftIsSite || (data.ready && !modelProblem))
-    : browserMode
-      ? !!data && browser.data?.ready && !browserProblem
-      : data?.ready && !modelProblem && !desktopProblem;
-  const canEditComposer = docked ? !!data : composerReady;
+    !draftIsPublicSearch &&
+    (!docked ||
+      (!isNativeAppRequest(text) &&
+        classifyAssistantExecution(text).kind === "site"));
+  const composerReady = draftIsPublicSearch
+    ? !!data
+    : docked
+      ? !!data &&
+        !browserPagePrefixes.includes(text.trim()) &&
+        (!draftIsSite || (data.ready && !modelProblem))
+      : browserMode
+        ? !!data && browser.data?.ready && !browserProblem
+        : data?.ready && !modelProblem && !desktopProblem;
+  const canEditComposer = docked || !externalMode ? !!data : composerReady;
   const showVoiceTask = (result?: {
     browserTaskId?: string;
     desktopTaskId?: string;
@@ -966,10 +975,17 @@ export function PersonalAssistantProvider({
     if (!value.trim() || !composerReady || busy || voice.listening) return;
     const requestId = crypto.randomUUID();
     if (!data) return;
-    const target = docked ? classifyAssistantExecution(value).kind : undefined;
+    const publicSearch = shouldSearch(value);
+    const target =
+      docked && !publicSearch
+        ? classifyAssistantExecution(value).kind
+        : undefined;
     const nativeAppRequest = isNativeAppRequest(value);
     const siteRequest =
-      !externalMode && !nativeAppRequest && (!target || target === "site");
+      !publicSearch &&
+      !externalMode &&
+      !nativeAppRequest &&
+      (!target || target === "site");
     const externalRequest =
       externalMode ||
       nativeAppRequest ||
@@ -1121,7 +1137,7 @@ export function PersonalAssistantProvider({
       if (
         (conversation.state !== "FAILED" ||
           (!latestIsCurrent && latest?.role === "assistant")) &&
-        (siteRequest || !docked || createdTask)
+        (publicSearch || siteRequest || !docked || createdTask)
       ) {
         setText((current) => (current.trim() === input.message ? "" : current));
         setAgent((previous) => ({
@@ -1681,7 +1697,9 @@ export function PersonalAssistantProvider({
           />
         )}
         placeholder={
-          data?.ready || ((docked || browserMode) && browser.data?.ready)
+          data?.ready ||
+          draftIsPublicSearch ||
+          ((docked || browserMode) && browser.data?.ready)
             ? browserMode
               ? "描述网页目标，小序将在独立浏览器中连续操作…"
               : desktopMode
@@ -1707,6 +1725,11 @@ export function PersonalAssistantProvider({
       {voice.error && (
         <div className="assistant-voice-error" role="alert">
           {voice.error}
+        </div>
+      )}
+      {draftIsPublicSearch && sending && (
+        <div className="assistant-model-hint" role="status">
+          正在搜索公开网页…
         </div>
       )}
       {draftIsSite && modelProblem && (

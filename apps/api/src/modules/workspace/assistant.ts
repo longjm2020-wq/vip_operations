@@ -20,8 +20,10 @@ import { type WorkspaceConfig } from "../../../../../packages/contracts/src/pers
 import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
+import { shouldSearchAssistantPublicWeb } from "../../../../../packages/contracts/src/assistant-execution.js";
 import { agentFileView, ownedAgentFiles } from "./agent-files.js";
 import { resolveChatModel } from "./agent-models.js";
+import { searchAgentWeb } from "./agent-search.js";
 import { encryptionReady } from "../analytics/secrets.js";
 
 import { requireAssistant, readAssistantMemory } from "./assistant-memory.js";
@@ -181,6 +183,15 @@ export async function sendAssistant(
       "电脑任务请直接描述操作；附件和联网查询请切换回网站内",
       400,
     );
+  const hasAttachments = body.attachmentIds.length > 0;
+  if (body.webSearch && (hasAttachments || voice))
+    fail("SEARCH_INPUT", "公开网页查询请单独发送文字问题", 400);
+  const searchRequested =
+    !voice &&
+    !hasAttachments &&
+    shouldSearchAssistantPublicWeb(body.message, {
+      explicitSearch: body.webSearch,
+    });
   const fingerprint = hash(JSON.stringify(body));
   await db.$executeRawUnsafe(
     "INSERT INTO public.personal_assistant_conversations(user_id) VALUES($1::bigint) ON CONFLICT DO NOTHING",
@@ -206,14 +217,14 @@ export async function sendAssistant(
     existing.request_count >= 20
   )
     fail("AI_RATE_LIMIT", "每小时最多发送20条消息，请稍后再试", 429);
-  const hasAttachments = body.attachmentIds.length > 0;
   const execution =
-    autoExecution && !hasAttachments && !body.webSearch
+    autoExecution && !hasAttachments
       ? await resolveAutomaticAssistantExecution(
           c,
           body.message,
           body.desktopDeviceId,
           body.nativeDesktopDeviceId,
+          { inferExternalTargets: !searchRequested },
         )
       : undefined;
   const browserExecution = autoExecution
@@ -232,6 +243,14 @@ export async function sendAssistant(
     !voice && siteExecution && !hasAttachments
       ? parseAssistantWebsiteRequest(body.message)
       : undefined;
+  const siteCommand =
+    siteExecution && !hasAttachments
+      ? parseVoiceCommand(body.message)
+      : undefined;
+  const command =
+    body.webSearch && siteCommand?.kind === "sync" ? undefined : siteCommand;
+  const publicSearch =
+    searchRequested && siteExecution && !websiteRequest && !siteCommand;
   if (
     body.webOpenResult &&
     (!websiteRequest ||
@@ -244,8 +263,9 @@ export async function sendAssistant(
       400,
     );
   // Automatic desktop and browser requests use their own registered planners.
-  const usesChat = autoExecution ? siteExecution : !browserExecution;
-  const s = usesChat ? await settings() : undefined;
+  const usesChat =
+    !publicSearch && (autoExecution ? siteExecution : !browserExecution);
+  const s = usesChat || publicSearch ? await settings() : undefined;
   const attachments = await ownedAgentFiles(c, body.attachmentIds);
   const chatSelection = usesChat
     ? await resolveChatModel(body.model, {
@@ -304,7 +324,7 @@ export async function sendAssistant(
       day: "2-digit",
     }).format(new Date());
     const stored =
-      body.includePersonalContext && siteExecution
+      !publicSearch && body.includePersonalContext && siteExecution
         ? await one(
             db,
             "SELECT config FROM public.personal_workspaces WHERE user_id=$1::bigint",
@@ -312,11 +332,9 @@ export async function sendAssistant(
           )
         : undefined;
     const memory =
-      body.includeMemory && siteExecution ? await readAssistantMemory(c) : null;
-    const command =
-      siteExecution && !hasAttachments && !body.webSearch
-        ? parseVoiceCommand(body.message)
-        : undefined;
+      !publicSearch && body.includeMemory && siteExecution
+        ? await readAssistantMemory(c)
+        : null;
     const executionModel = autoExecution ? undefined : body.model;
     const desktopTask = desktopDeviceId
       ? await queueDesktopTask(c, {
@@ -335,6 +353,7 @@ export async function sendAssistant(
         })
       : null;
     let directReply = clarification;
+    let citations: { title: string; url: string }[] = [];
     if (website)
       directReply = webCommand
         ? assistantWebOpenText(webCommand, body.webOpenResult)
@@ -346,6 +365,26 @@ export async function sendAssistant(
       directReply = desktopTask.localBrowser
         ? "本机浏览器任务已提交。请在所选电脑的小序桌面端打开目标网页。下方任务卡会显示实际进度和接手提示。"
         : "电脑任务已提交，等待所选电脑执行。实际进度、暂停原因及继续操作会显示在下方任务卡中。";
+    else if (publicSearch) {
+      if (body.message.length > 500)
+        fail("SEARCH_INPUT", "请将公开网页查询缩短至 500 字以内后重试", 400);
+      if (!ready(s))
+        fail(
+          "SEARCH_NOT_READY",
+          "公开网页搜索尚未就绪，请管理员在 AI 模型管理中检查并验证搜索连接",
+          503,
+        );
+      const found = await searchAgentWeb(
+        s!,
+        COMPASS_AI_MODEL,
+        JSON.stringify({ query: body.message }),
+        AbortSignal.timeout(90000),
+        undefined,
+        true,
+      );
+      directReply = found.text;
+      citations = found.citations;
+    }
     const answer =
       directReply !== undefined
         ? {
@@ -357,7 +396,7 @@ export async function sendAssistant(
             memorySuggestions: [],
             responseModel: undefined,
             jobIds: [],
-            citations: [],
+            citations,
           }
         : command
           ? await runAssistantVoiceCommand(
@@ -380,7 +419,6 @@ export async function sendAssistant(
                 model: body.model,
                 imageModel: body.imageModel,
                 attachmentIds: body.attachmentIds,
-                webSearch: body.webSearch,
                 requestId: body.requestId,
                 autoExecution,
               },

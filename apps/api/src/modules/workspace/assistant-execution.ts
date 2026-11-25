@@ -16,6 +16,7 @@ export async function resolveAutomaticAssistantExecution(
   instruction: string,
   preferredDeviceId?: string,
   nativeDesktopDeviceId?: string,
+  options?: Parameters<typeof classifyAssistantExecution>[1],
 ): Promise<AutomaticAssistantExecution> {
   if (nativeDesktopDeviceId && isNativeDesktopAppCommand(instruction)) {
     const [device] =
@@ -38,7 +39,7 @@ export async function resolveAutomaticAssistantExecution(
             "请在「我的电脑」核对当前设备、连接和本机跨窗口授权，再重新下达指令。",
         };
   }
-  const target = classifyAssistantExecution(instruction);
+  const target = classifyAssistantExecution(instruction, options);
   if (target.kind === "site") return { kind: "site" };
   if (target.kind === "browser") return { kind: "browser" };
   if (target.kind === "clarify")

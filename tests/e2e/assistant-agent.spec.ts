@@ -2,6 +2,7 @@ import {
   openPersonalAssistant,
   selectAssistantPanel,
   selectAssistantExecution,
+  setAssistantOption,
 } from "./assistant-controls.js";
 import { expect, test, type Page } from "@playwright/test";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
@@ -12,6 +13,11 @@ const jobId = "33333333-3333-4333-8333-333333333333";
 const previewId = "44444444-4444-4444-8444-444444444444";
 const desktopFixtureId = "55555555-5555-4555-8555-555555555555";
 const otherDesktopFixtureId = "99999999-9999-4999-8999-999999999999";
+const publicSearchPrompt = "搜索 GitHub 开源项目";
+const searchCitation = {
+  title: "GitHub 仓库搜索文档",
+  url: "https://docs.github.com/en/search-github/searching-on-github/searching-for-repositories",
+};
 async function desktopScenario(page: Page, native = true) {
   const requests = await setup(page);
   const state = {
@@ -204,7 +210,7 @@ async function desktopScenario(page: Page, native = true) {
 async function setup(
   page: Page,
   mode = "dark",
-  lookup?: { wait?: Promise<void>; ambiguous?: boolean },
+  options?: { wait?: Promise<void>; ambiguous?: boolean; chatReady?: boolean },
 ) {
   const requests: Record<string, any>[] = [];
   const file = {
@@ -230,8 +236,8 @@ async function setup(
     source: "generated",
   };
   const assistant = {
-    ready: true,
-    availabilityMessage: "小序已就绪",
+    ready: options?.chatReady ?? true,
+    availabilityMessage: options?.chatReady === false ? "对话模型未就绪" : "小序已就绪",
     state: "IDLE",
     version: 0,
     error: "",
@@ -340,6 +346,22 @@ async function setup(
       if (request.method() === "POST") {
         const body = request.postDataJSON();
         requests.push(body);
+        if (body.message === publicSearchPrompt && !body.attachmentIds?.length) {
+          assistant.version++;
+          const createdAt = new Date().toISOString();
+          assistant.messages.push(
+            { id: body.requestId, role: "user", text: body.message, createdAt },
+            {
+              id: `reply-${body.requestId}`,
+              role: "assistant",
+              text: "已查询 GitHub 开源仓库的公开资料。",
+              citations: [searchCitation],
+              createdAt,
+            },
+          );
+          await route.fulfill({ json: { data: assistant } });
+          return;
+        }
         if (body.webOpenResult) {
           const resolving = body.message === "打开示例文库";
           const title = resolving
@@ -360,20 +382,20 @@ async function setup(
           });
           if (resolving) {
             assistant.state = "PENDING";
-            await lookup?.wait;
+            await options?.wait;
             assistant.state = "IDLE";
           }
           assistant.messages.push({
             id: `reply-${body.requestId}`,
             role: "assistant",
-            text: lookup?.ambiguous
+            text: options?.ambiguous
               ? "暂时不能唯一确认网站，请补充完整网站或品牌名称。"
               : body.webOpenResult === "blocked"
                 ? `浏览器阻止了新窗口，请点击下方“打开${title}”继续。`
                 : resolving
                   ? `已找到${title}，正在刚才的新窗口中打开。`
                   : `已在新标签页打开${title}，当前对话保留。`,
-            ...(lookup?.ambiguous ? {} : { webNavigation: { title, url } }),
+            ...(options?.ambiguous ? {} : { webNavigation: { title, url } }),
           });
           await route.fulfill({ json: { data: assistant } });
           return;
@@ -617,6 +639,78 @@ test("模型菜单只显示多模态型号、发送所选模型并在重开对�
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0].model).toBe("engine/vision");
   expect(requests[0]).not.toHaveProperty("webSearch");
+});
+
+test("公开问题从普通输入框直接搜索并显示来源，后续消息仍按各自目标发送", async ({
+  page,
+}) => {
+  const requests = await setup(page);
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(4);
+  await expect(
+    composer.getByRole("button", { name: "联网搜索", exact: true }),
+  ).toHaveCount(0);
+  await openPersonalAssistant(page);
+  await setAssistantOption(page, "附带已保存日程与待办", true);
+  await setAssistantOption(page, "使用个人记忆", true);
+  await composer.getByRole("button", { name: "选择对话模型" }).click();
+  await page.getByRole("menuitem", { name: /Gemini 2.5 Pro/ }).click();
+  const input = composer.locator("textarea");
+  const send = composer.getByRole("button", { name: "发送给个人助理" });
+  await input.fill(publicSearchPrompt);
+  await send.click();
+  await expect(page.getByText("参考来源", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: searchCitation.title, exact: true }),
+  ).toHaveAttribute("href", searchCitation.url);
+  expect(requests).toMatchObject([
+    {
+      message: publicSearchPrompt,
+      autoExecution: true,
+      includePersonalContext: false,
+      includeMemory: false,
+    },
+  ]);
+  expect(requests[0]).not.toHaveProperty("webSearch");
+  expect(requests[0]).not.toHaveProperty("model");
+
+  await input.fill("把上面的说明写得更简短");
+  await send.click();
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1]).toMatchObject({
+    includePersonalContext: true,
+    includeMemory: true,
+    model: "engine/vision",
+  });
+  expect(requests[1]).not.toHaveProperty("webSearch");
+
+  const instruction = "在独立浏览器里点击网页帮助";
+  await input.fill(instruction);
+  await send.click();
+  await expect.poll(() => requests.length).toBe(3);
+  expect(requests[2]).toMatchObject({
+    message: instruction,
+    autoExecution: true,
+  });
+  expect(requests[2]).not.toHaveProperty("webSearch");
+});
+
+test("普通对话模型未就绪时，仍可发送明确的公开搜索问题", async ({ page }) => {
+  const requests = await setup(page, "dark", { chatReady: false });
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const input = composer.locator("textarea");
+  const send = composer.getByRole("button", { name: "发送给个人助理" });
+  await input.fill("把上面的说明写得更简短");
+  await expect(send).toBeDisabled();
+  await input.fill(publicSearchPrompt);
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(
+    page.getByRole("link", { name: searchCitation.title, exact: true }),
+  ).toHaveAttribute("href", searchCitation.url);
+  expect(requests).toMatchObject([{ message: publicSearchPrompt }]);
 });
 
 for (const disconnected of [false, true]) {
