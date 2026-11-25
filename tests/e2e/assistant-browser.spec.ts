@@ -349,12 +349,33 @@ for (const width of [1440, 390]) {
     const local = panel.getByRole("button", { name: "本地浏览器", exact: true });
     const address = panel.getByRole("textbox", { name: "网页地址", exact: true });
     const submit = panel.getByRole("button", { name: "打开网址", exact: true });
+    const tabbar = panel.locator(".assistant-browser-tabbar:visible");
+    const newPage = tabbar.getByRole("button", {
+      name: "打开新网址",
+      exact: true,
+    });
+    const clearAddress = tabbar.getByRole("button", {
+      name: "清空本地地址",
+      exact: true,
+    });
     await expect(local).toHaveAttribute("aria-pressed", "true");
-    await expect(panel.getByRole("status")).toHaveText("网页在本机浏览器的新标签页显示");
+    await expect(tabbar.getByText("新网页", { exact: true })).toBeVisible();
+    for (const name of ["后退", "前进", "刷新网页"]) {
+      await expect(
+        panel.getByRole("button", { name, exact: true }),
+      ).toBeDisabled();
+    }
+    await expect(panel.getByRole("status")).toHaveText(
+      "网页在本机浏览器的新标签页显示",
+    );
     await address.fill("https://user:password@example.com");
     await submit.click();
     await expect(panel.getByRole("alert")).toHaveText("请输入不含账号和密码的 HTTPS 网址");
     expect(page.context().pages()).toHaveLength(1);
+    await newPage.click();
+    await expect(address).toHaveValue("");
+    await expect(address).toBeFocused();
+    await expect(panel.getByRole("alert")).toHaveCount(0);
     await address.fill("example.com/local-browser-fixture");
     const opened = page.context().waitForEvent("page");
     if (width === 390) await submit.click();
@@ -376,16 +397,50 @@ for (const width of [1440, 390]) {
     const fallbackTab = await pendingFallback;
     await expect(fallbackTab).toHaveURL(localUrl);
     await fallbackTab.close();
-    expect(state.requests).toEqual([]);
-    expect(state.browserRequests).toEqual([]);
-    expect(state.frameRequests).toEqual([]);
-    expect(state.navigations).toEqual([]);
+    await clearAddress.click();
+    await expect(address).toHaveValue("");
+    await expect(panel.getByRole("alert")).toHaveCount(0);
+    await expect(fallback).toHaveCount(0);
+    await expect(panel.getByRole("status")).toHaveText(
+      "网页在本机浏览器的新标签页显示",
+    );
+    const addressBar = panel.locator(".assistant-browser-address");
+    const localTabbarBounds = (await tabbar.boundingBox())!;
+    const localAddressBounds = (await addressBar.boundingBox())!;
 
     await selectCloudBrowser(page);
     await expect(panel.getByRole("button", { name: "云端独立浏览器", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(panel.getByText("独立浏览器执行服务尚未连接")).toBeVisible();
+    await expect(
+      tabbar.getByRole("button", { name: "浏览器标签与会话菜单", exact: true }),
+    ).toBeVisible();
+    await expect(clearAddress).toHaveCount(0);
+    const cloudTabbarBounds = (await tabbar.boundingBox())!;
+    const cloudAddressBounds = (await addressBar.boundingBox())!;
+    expect(Math.abs(localTabbarBounds.y - cloudTabbarBounds.y)).toBeLessThanOrEqual(
+      1,
+    );
+    expect(Math.abs(localAddressBounds.y - cloudAddressBounds.y)).toBeLessThanOrEqual(
+      1,
+    );
+    expect(Math.abs(localAddressBounds.x - cloudAddressBounds.x)).toBeLessThanOrEqual(
+      1,
+    );
     await local.click();
-    await expect(panel.getByRole("textbox", { name: "网页地址", exact: true })).toBeEnabled();
+    await expect(address).toBeEnabled();
+    await address.fill("example.com/fullscreen-draft");
+    await tabbar.getByRole("button", { name: "全屏查看", exact: true }).click();
+    await expect(panel).toHaveAttribute("data-browser-fullscreen", "true");
+    await expect(address).toHaveValue("example.com/fullscreen-draft");
+    await tabbar.getByRole("button", { name: "退出全屏", exact: true }).click();
+    await expect(panel).toHaveAttribute("data-browser-fullscreen", "false");
+    await expect(local).toHaveAttribute("aria-pressed", "true");
+    await expect(address).toHaveValue("example.com/fullscreen-draft");
+    expect(page.context().pages()).toHaveLength(1);
+    expect(state.requests).toEqual([]);
+    expect(state.browserRequests).toEqual([]);
+    expect(state.frameRequests).toEqual([]);
+    expect(state.navigations).toEqual([]);
   });
 }
 

@@ -4,6 +4,7 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
 } from "react";
 import {
   Alert,
@@ -15,6 +16,7 @@ import {
   Space,
   Tag,
   Tooltip,
+  type InputRef,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -248,26 +250,115 @@ export function AssistantBrowserTaskCard({
   );
 }
 
+function BrowserTabBar({
+  tab,
+  actions,
+  newAddress,
+  newAddressTitle,
+  disabled,
+}: {
+  tab: ReactNode;
+  actions: ReactNode;
+  newAddress: () => void;
+  newAddressTitle: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="assistant-browser-tabbar">
+      {tab}
+      <Button
+        type="text"
+        size="small"
+        icon={<PlusOutlined />}
+        aria-label="打开新网址"
+        title={newAddressTitle}
+        disabled={disabled}
+        onClick={newAddress}
+      />
+      <div className="assistant-browser-window-actions">{actions}</div>
+    </div>
+  );
+}
+
+function BrowserHistoryButtons({
+  back,
+  forward,
+  reload,
+  refreshLabel = "刷新网页",
+  refreshing,
+  title,
+}: {
+  back?: () => void;
+  forward?: () => void;
+  reload?: () => void;
+  refreshLabel?: string;
+  refreshing?: boolean;
+  title?: string;
+}) {
+  return (
+    <>
+      <Button
+        type="text"
+        size="small"
+        icon={<ArrowLeftOutlined />}
+        aria-label="后退"
+        title={title}
+        disabled={!back}
+        onClick={back}
+      />
+      <Button
+        type="text"
+        size="small"
+        icon={<ArrowRightOutlined />}
+        aria-label="前进"
+        title={title}
+        disabled={!forward}
+        onClick={forward}
+      />
+      <Button
+        type="text"
+        size="small"
+        icon={<ReloadOutlined />}
+        aria-label={refreshLabel}
+        title={title}
+        loading={refreshing}
+        disabled={!reload}
+        onClick={reload}
+      />
+    </>
+  );
+}
+
 function LocalBrowserAddress({
   native,
   choose,
   disabled,
+  actions,
 }: {
   native: boolean;
   choose?: () => void;
   disabled: boolean;
+  actions: ReactNode;
 }) {
   const [address, setAddress] = useState("");
   const [opening, setOpening] = useState(false);
   const [opened, setOpened] = useState<"opened" | "requested">();
   const [error, setError] = useState("");
   const [blockedUrl, setBlockedUrl] = useState<string>();
+  const addressInput = useRef<InputRef>(null);
   const launchInProgress = useRef(false);
-  const launch = async (value?: string) => {
-    if (launchInProgress.current) return;
+  const resetFeedback = () => {
     setOpened(undefined);
     setError("");
     setBlockedUrl(undefined);
+  };
+  const clearAddress = () => {
+    setAddress("");
+    resetFeedback();
+  };
+  const launch = async (value?: string) => {
+    if (launchInProgress.current) return;
+    resetFeedback();
     if (!native) {
       const url = assistantWebsiteUrl(value?.trim() || "");
       if (!url) {
@@ -304,6 +395,32 @@ function LocalBrowserAddress({
     status = native ? "已打开本地浏览器窗口" : "已在本机浏览器打开新标签页";
   return (
     <section className="assistant-browser-takeover" aria-label="本地浏览器地址">
+      <BrowserTabBar
+        tab={
+          <div className="assistant-browser-tab">
+            <span className="assistant-browser-local-tab-label">
+              <DesktopOutlined aria-hidden />
+              新网页
+            </span>
+            <Button
+              type="text"
+              size="small"
+              icon={<CloseOutlined />}
+              aria-label="清空本地地址"
+              title="清空本地地址"
+              disabled={opening || !(address || opened || error)}
+              onClick={clearAddress}
+            />
+          </div>
+        }
+        actions={actions}
+        disabled={opening}
+        newAddressTitle="输入新的本地网址"
+        newAddress={() => {
+          clearAddress();
+          addressInput.current?.focus();
+        }}
+      />
       <form
         className="assistant-browser-navigation"
         onSubmit={(event) => {
@@ -311,9 +428,13 @@ function LocalBrowserAddress({
           if (address.trim()) void launch(address);
         }}
       >
+        <BrowserHistoryButtons
+          title={native ? "请在本地窗口操作" : "请在本地浏览器标签页操作"}
+        />
         <div className="assistant-browser-address">
           <DesktopOutlined aria-hidden />
           <Input
+            ref={addressInput}
             variant="borderless"
             aria-label="网页地址"
             placeholder="输入 HTTPS 网址，按回车在本机打开"
@@ -322,9 +443,7 @@ function LocalBrowserAddress({
             disabled={opening}
             onChange={(event) => {
               setAddress(event.target.value);
-              setError("");
-              setOpened(undefined);
-              setBlockedUrl(undefined);
+              resetFeedback();
             }}
           />
           <Button
@@ -920,33 +1039,27 @@ function BrowserTakeover({
           submit();
         }}
       >
-        <Button
-          type="text"
-          size="small"
-          icon={<ArrowLeftOutlined />}
-          aria-label="后退"
-          disabled={!usable || pending || !frame.data?.canGoBack}
-          onClick={() => void navigation({ kind: "back" })}
-        />
-        <Button
-          type="text"
-          size="small"
-          icon={<ArrowRightOutlined />}
-          aria-label="前进"
-          disabled={!usable || pending || !frame.data?.canGoForward}
-          onClick={() => void navigation({ kind: "forward" })}
-        />
-        <Button
-          type="text"
-          size="small"
-          icon={<ReloadOutlined />}
-          aria-label={readOnly ? "刷新历史画面" : "刷新网页"}
-          loading={pending && live}
-          disabled={pending || (live ? !manual : !readOnly)}
-          onClick={() => {
-            if (readOnly) void frame.refetch();
-            else void navigation({ kind: "reload" });
-          }}
+        <BrowserHistoryButtons
+          back={
+            usable && !pending && frame.data?.canGoBack
+              ? () => void navigation({ kind: "back" })
+              : undefined
+          }
+          forward={
+            usable && !pending && frame.data?.canGoForward
+              ? () => void navigation({ kind: "forward" })
+              : undefined
+          }
+          reload={
+            !pending && (live ? manual : readOnly)
+              ? () => {
+                  if (readOnly) void frame.refetch();
+                  else void navigation({ kind: "reload" });
+                }
+              : undefined
+          }
+          refreshLabel={readOnly ? "刷新历史画面" : "刷新网页"}
+          refreshing={pending && live}
         />
         <div className="assistant-browser-address" title={status || currentUrl}>
           <GlobalOutlined aria-hidden />
@@ -1311,13 +1424,41 @@ export function AssistantBrowserPanel({
       }}
     />
   );
+  const full = fullscreen || pageFullscreen;
+  const windowActions = (
+    <>
+      {localView && !embedded && !full && (
+        <Button
+          type="text"
+          size="small"
+          icon={expanded ? <CompressOutlined /> : <ExpandOutlined />}
+          aria-label={expanded ? "恢复分栏" : "展开浏览器"}
+          title={expanded ? "恢复分栏" : "展开浏览器"}
+          onClick={toggleExpanded}
+        />
+      )}
+      <Button
+        type="text"
+        size="small"
+        icon={full ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+        aria-label={full ? "退出全屏" : "全屏查看"}
+        title={
+          full
+            ? "退出全屏（Esc）"
+            : localView ? "全屏查看地址面板" : "全屏查看浏览器"
+        }
+        onClick={() => void toggleFullscreen()}
+      />
+      {closePanel}
+    </>
+  );
   return (
     <div
       ref={panelRef}
       className={`assistant-browser-panel${pageFullscreen ? " assistant-browser-page-fullscreen" : ""}`}
-      data-browser-fullscreen={fullscreen || pageFullscreen}
+      data-browser-fullscreen={full}
     >
-      {!fullscreen && !pageFullscreen && (
+      {!full && (
         <div className="assistant-browser-local assistant-browser-mode">
           <Button
             size="small"
@@ -1340,156 +1481,119 @@ export function AssistantBrowserPanel({
           >
             云端独立浏览器
           </Button>
-          {localView && (
-            <div className="assistant-browser-window-actions">
-              {!embedded && (
+        </div>
+      )}
+      {!localView && (
+        <BrowserTabBar
+          actions={windowActions}
+          newAddressTitle="输入新网址，复用当前浏览器"
+          newAddress={() => setNewTab(true)}
+          tab={
+            <div
+              className="assistant-browser-tab"
+              title={task?.title || task?.instruction || "新网页"}
+            >
+              <Dropdown
+                trigger={["click"]}
+                getPopupContainer={() => panelRef.current || document.body}
+                menu={{
+                  className: "assistant-browser-menu",
+                  selectedKeys: task ? [`task:${task.id}`] : [],
+                  items: [
+                    {
+                      key: "history",
+                      type: "group",
+                      label: "最近网页与任务",
+                      children: tasks.length
+                        ? tasks.map((entry) => ({
+                            key: `task:${entry.id}`,
+                            label: (
+                              <span title={entry.instruction}>
+                                {entry.mode === "BROWSE" &&
+                                isActiveBrowserTask(entry)
+                                  ? "浏览中"
+                                  : browserStatusLabels[entry.status]}{" "}
+                                · {entry.instruction}
+                              </span>
+                            ),
+                          }))
+                        : [
+                            {
+                              key: "empty",
+                              label: "暂无历史任务",
+                              disabled: true,
+                            },
+                          ],
+                    },
+                    { type: "divider" },
+                    {
+                      key: "choose",
+                      label: "让小序操作当前网页",
+                      disabled: disabled || (!embedded && !data?.ready),
+                    },
+                    ...(!embedded
+                      ? [
+                          {
+                            key: "expand",
+                            className: "assistant-browser-menu-expand",
+                            icon: expanded ? (
+                              <CompressOutlined />
+                            ) : (
+                              <ExpandOutlined />
+                            ),
+                            label: expanded ? "恢复分栏" : "展开浏览器",
+                          },
+                        ]
+                      : []),
+                    { type: "divider" },
+                    {
+                      key: "session",
+                      disabled: true,
+                      label: data?.profile?.hasSavedSession
+                        ? "已保存网页登录状态"
+                        : "尚未保存网页登录状态",
+                    },
+                    {
+                      key: "clear",
+                      label: "清除浏览器登录状态",
+                      danger: true,
+                      disabled: disabled || clearing || !data?.profile,
+                    },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key.startsWith("task:")) {
+                      setNewTab(false);
+                      selectTask(key.slice(5));
+                    } else if (key === "choose") choose();
+                    else if (key === "expand") toggleExpanded();
+                    else if (key === "clear") void clear();
+                  },
+                }}
+              >
                 <Button
                   type="text"
                   size="small"
-                  icon={expanded ? <CompressOutlined /> : <ExpandOutlined />}
-                  aria-label={expanded ? "恢复分栏" : "展开浏览器"}
-                  title={expanded ? "恢复分栏" : "展开浏览器"}
-                  onClick={toggleExpanded}
-                />
-              )}
-              {closePanel}
+                  className="assistant-browser-tab-label"
+                  icon={<GlobalOutlined />}
+                  aria-label="浏览器标签与会话菜单"
+                  title="查看最近网页、任务和登录状态"
+                >
+                  {task?.title || (task ? "网页" : "新网页")}
+                </Button>
+              </Dropdown>
+              <Button
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                aria-label="关闭当前网页"
+                title="关闭当前网页并停止操作"
+                loading={closing}
+                onClick={() => void closePage()}
+              />
             </div>
-          )}
-        </div>
-      )}
-      <div className="assistant-browser-tabbar" hidden={localView}>
-        <div
-          className="assistant-browser-tab"
-          title={task?.title || task?.instruction || "新网页"}
-        >
-          <Dropdown
-            trigger={["click"]}
-            getPopupContainer={() => panelRef.current || document.body}
-            menu={{
-              className: "assistant-browser-menu",
-              selectedKeys: task ? [`task:${task.id}`] : [],
-              items: [
-                {
-                  key: "history",
-                  type: "group",
-                  label: "最近网页与任务",
-                  children: tasks.length
-                    ? tasks.map((entry) => ({
-                        key: `task:${entry.id}`,
-                        label: (
-                          <span title={entry.instruction}>
-                            {entry.mode === "BROWSE" &&
-                            isActiveBrowserTask(entry)
-                              ? "浏览中"
-                              : browserStatusLabels[entry.status]}{" "}
-                            · {entry.instruction}
-                          </span>
-                        ),
-                      }))
-                    : [
-                        {
-                          key: "empty",
-                          label: "暂无历史任务",
-                          disabled: true,
-                        },
-                      ],
-                },
-                { type: "divider" },
-                {
-                  key: "choose",
-                  label: "让小序操作当前网页",
-                  disabled: disabled || (!embedded && !data?.ready),
-                },
-                ...(!embedded
-                  ? [
-                      {
-                        key: "expand",
-                        className: "assistant-browser-menu-expand",
-                        icon: expanded ? (
-                          <CompressOutlined />
-                        ) : (
-                          <ExpandOutlined />
-                        ),
-                        label: expanded ? "恢复分栏" : "展开浏览器",
-                      },
-                    ]
-                  : []),
-                { type: "divider" },
-                {
-                  key: "session",
-                  disabled: true,
-                  label: data?.profile?.hasSavedSession
-                    ? "已保存网页登录状态"
-                    : "尚未保存网页登录状态",
-                },
-                {
-                  key: "clear",
-                  label: "清除浏览器登录状态",
-                  danger: true,
-                  disabled: disabled || clearing || !data?.profile,
-                },
-              ],
-              onClick: ({ key }) => {
-                if (key.startsWith("task:")) {
-                  setNewTab(false);
-                  selectTask(key.slice(5));
-                } else if (key === "choose") choose();
-                else if (key === "expand") toggleExpanded();
-                else if (key === "clear") void clear();
-              },
-            }}
-          >
-            <Button
-              type="text"
-              size="small"
-              className="assistant-browser-tab-label"
-              icon={<GlobalOutlined />}
-              aria-label="浏览器标签与会话菜单"
-              title="查看最近网页、任务和登录状态"
-            >
-              {task?.title || (task ? "网页" : "新网页")}
-            </Button>
-          </Dropdown>
-          <Button
-            type="text"
-            size="small"
-            icon={<CloseOutlined />}
-            aria-label="关闭当前网页"
-            title="关闭当前网页并停止操作"
-            loading={closing}
-            onClick={() => void closePage()}
-          />
-        </div>
-        <Button
-          type="text"
-          size="small"
-          icon={<PlusOutlined />}
-          aria-label="打开新网址"
-          title="输入新网址，复用当前浏览器"
-          onClick={() => setNewTab(true)}
+          }
         />
-        <div className="assistant-browser-window-actions">
-          <Button
-            type="text"
-            size="small"
-            icon={
-              fullscreen || pageFullscreen ? (
-                <FullscreenExitOutlined />
-              ) : (
-                <FullscreenOutlined />
-              )
-            }
-            aria-label={fullscreen || pageFullscreen ? "退出全屏" : "全屏查看"}
-            title={
-              fullscreen || pageFullscreen
-                ? "退出全屏（Esc）"
-                : "全屏查看浏览器"
-            }
-            onClick={() => void toggleFullscreen()}
-          />
-          {closePanel}
-        </div>
-      </div>
+      )}
       <div className="assistant-browser-content">
         {open &&
           (localView ? (
@@ -1497,12 +1601,13 @@ export function AssistantBrowserPanel({
               native={nativeLocal}
               choose={chooseLocal}
               disabled={disabled}
+              actions={windowActions}
             />
           ) : (
             <BrowserTakeover
               key={task?.id || "new"}
               task={task}
-              fullscreen={fullscreen || pageFullscreen}
+              fullscreen={full}
               owner={owner}
               refresh={refresh}
               start={start}
