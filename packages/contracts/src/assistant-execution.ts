@@ -152,12 +152,34 @@ export function shouldSearchAssistantPublicWeb(
 // Quoted text can be the message to type, e.g. 「最近怎么样？」. Only
 // punctuation outside the literal tells us whether the user is asking a question.
 const quotedLiterals = /「[^」\n]*」|『[^』\n]*』|“[^”\n]*”|"[^"\n]*"/gu;
+const wecomCancellation = /(?:不要|别|不用|不必|取消|停止|暂停)(?:再|继续)?(?:打开|启动|执行|操作|定位|切换到)(?:企业微信|WeCom)?/iu;
 const askingAboutAction =
   /(?:是什么(?:意思)?|什么意思|要多久|需要多久|占用多少|有什么(?:用|区别)|有什么影响|为什么|为何|怎么回事|没(?:有)?反应|(?:是否|能不能|会不会|能否)|(?:怎么办|怎么做|怎么用|怎么操作|失败了|出错了)|(?:有用|安全|可以|正常)[吗么嘛]|(?:先别|不要|不用|取消|暂停|停止)(?:执行|操作))/u;
 function questionOutsideLiteral(text: string) {
   return /[?？]/u.test(
     text.replace(quotedLiterals, "").replace(/https?:\/\/[^\s,，]+/giu, ""),
   );
+}
+
+/** Only the user's imperative can nominate the installed WeCom application. */
+export function desktopWecomIntent(text: string): "open" | "work" | undefined {
+  const input = normalize(text);
+  const named = desktopName.exec(input) || hostnameAfterComputer.exec(input) || unquotedDesktopName.exec(input);
+  const scoped = named && /电脑|设备/u.test(named[0]) ? input.slice(named[0].length) : input;
+  const command = scoped
+    .replace(/^(?:在|用|使用|通过)?\s*(?:我的电脑|这台电脑|本机|小序桌面端|XUTI\s+DESKTOP)(?:上|里|中)?\s*[,、:]?\s*/iu, "")
+    .replace(quotedLiterals, " 名称 ")
+    .replace(/[,、;；\s]*(?:不需要|无需|不用)(?:我|本人)(?:再次|再)?确认[。.!！]?$/u, "")
+    .trim();
+  if (questionOutsideLiteral(command) || askingAboutAction.test(command) || wecomCancellation.test(command) ||
+      /(?:如何|教程|是什么意思|遇到什么|为什么|假如|如果|失败|报错|没反应|怎么办)|[吗么嘛呢]\s*[。.!！]*$/u.test(command)) return;
+  const open = /^(?:先\s*)?(?:打开|启动|找到|找一下|切换到|切换至|切回|定位到?)\s*(?:已(?:经)?打开的)?(?:本机的?)?\s*(?:企业微信|WeCom)(?:客户端|的?主窗口|窗口)?/iu.exec(command);
+  const inApp = /^(?:在|用|使用|操作)\s*(?:企业微信|WeCom)(?:客户端|的?主窗口|窗口)?(?:中|里|上)?/iu.exec(command);
+  const prefix = open || inApp;
+  if (!prefix) return;
+  const rest = command.slice(prefix[0].length).replace(/^[\s,。.!！、;；:]+/u, "");
+  if (!rest) return "open";
+  if (/^(?:(?:并且?|然后|后再?|再|接着|先|帮我)\s*)*(?:给|向|为|找|搜|查|点|选|填|输入|起草|草拟|写|发|浏览|核对|打开|进入|操作)/u.test(rest)) return "work";
 }
 
 // Only the command prefix is normalized. The text to insert must retain its
@@ -328,6 +350,8 @@ export function isNativeDesktopAppCommand(text: string): boolean {
   );
   const app =
     /^(?:打开|启动|切换到|切换至)(?:已(?:经)?打开的)?\s*(?:企业微信|微信|记事本|计算器)(?:窗口)?(?=\s*(?:$|[,。！!；;\n]))/u;
+  if (desktopWecomIntent(command) && !desktopName.test(command) && !unquotedDesktopName.test(command) &&
+      !hostnameAfterComputer.test(command) && !desktopScope.test(command)) return true;
   if (
     !app.test(command) ||
     questionOutsideLiteral(command) ||
@@ -363,6 +387,16 @@ export function classifyAssistantExecution(
     ? normalize(instruction.slice(currentPage[0].length))
     : instruction;
   const firstClause = command.split(/[,;。；\n]/u, 1)[0] || "";
+  const outside = command.replace(quotedLiterals, "");
+  if (/(?:企业微信|WeCom)/iu.test(outside) && wecomCancellation.test(outside)) return {kind: "site"};
+  const named =
+    desktopName.exec(instruction) ||
+    hostnameAfterComputer.exec(instruction) ||
+    unquotedDesktopName.exec(instruction);
+  const explicitDeviceName =
+    named && /(?:电脑|计算机|设备|(?:computer|device)\b)/iu.test(named[0]) && !desktopScope.test(named[1])
+      ? named[1].trim() : undefined;
+  if (desktopWecomIntent(text)) return explicitDeviceName ? {kind: "desktop", deviceName: explicitDeviceName} : {kind: "desktop"};
   if (
     !firstClause ||
     questionOutsideLiteral(command) ||
@@ -392,16 +426,6 @@ export function classifyAssistantExecution(
 
   if (parseVoiceCommand(instruction)) return { kind: "site" };
 
-  const named =
-    desktopName.exec(instruction) ||
-    hostnameAfterComputer.exec(instruction) ||
-    unquotedDesktopName.exec(instruction);
-  const explicitDeviceName =
-    named &&
-    /(?:电脑|计算机|设备|(?:computer|device)\b)/iu.test(named[0]) &&
-    !desktopScope.test(named[1])
-      ? named[1].trim()
-      : undefined;
   const requestedLocations = command
     .split(/[,;。；\n]/u)
     .filter(

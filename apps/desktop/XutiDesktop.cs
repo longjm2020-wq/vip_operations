@@ -178,11 +178,15 @@ sealed class AssistantForm : Form {
     string nativeAttemptId="";
     string backgroundAttemptId="", previousVerificationId="";
     string desktopExplorerTaskId="";
+    string wecomTaskId="";
+    bool locatingWeCom;
+    DateTime lastPhysicalInput;
     Native.ExplorerCopy fileCopy;
     string failureTaskId="", failureDiagnostic="";
     Action<Action> manualPauseDispatch;
     Func<WindowChoice> startWindowOverride;
     Func<string,Action,Task<WindowChoice>> notepadOverride;
+    Func<Action,Action,Task<WindowChoice>> wecomOverride;
     long epoch;
     Dictionary<string, object> task;
     bool BrowserOnly { get { return task!=null&&task.ContainsKey("localBrowser")&&Object.Equals(task["localBrowser"],true); } }
@@ -524,6 +528,8 @@ sealed class AssistantForm : Form {
         return !closing && id.Length>0 && id==taskId && token==connectionToken && version==epoch;
     }
     void ManualInput(string reason) {
+        lastPhysicalInput=DateTime.UtcNow;
+        if(locatingWeCom) return; // No desktop input is sent while locating. Check idle and the current claim before focusing.
         if(backgroundAttemptId.Length>0 || (fileCopy!=null && fileCopy.PasteIssued && working))return;
         if((!armed && !allowing) || closing || manualPauseSent) return;
         if(CanYieldForeground && (!working || observingForeground)) {
@@ -590,8 +596,12 @@ sealed class AssistantForm : Form {
         Exception failure=null;
         try {
         string nativeAction=NativeAction;
-        if(nativeAction.Length>0) {
-            if(BrowserOnly || grant.Length==0 || (nativeAction!="open_notepad" && nativeAction!="focus_notepad" && nativeAction!="type_notepad"))
+        bool wecomTask=S(task,"startLocation")=="wecom";
+        if(wecomTask || nativeAction.Length>0) {
+            if(wecomTask) {
+                if(BrowserOnly || BoundTask || nativeAction.Length>0 || grant.Length==0)
+                    throw new Exception("请在原 Windows 电脑上记住操作授权，再继续企业微信任务。");
+            } else if(BrowserOnly || grant.Length==0 || (nativeAction!="open_notepad" && nativeAction!="focus_notepad" && nativeAction!="type_notepad"))
                 throw new Exception("请先在本机确认记住操作授权，再继续记事本任务。");
             if(state!="WAITING") {
                 var resumed=await Request("tasks/"+id+"/control",new {action="resume"});
@@ -602,7 +612,8 @@ sealed class AssistantForm : Form {
                 task=resumed;state="WAITING";autoAttemptedId="";status.Text=TaskStage(resumed);
                 ShowTaskControls();return;
             }
-            await RunNotepad(id,connectionToken,version,grant,nativeAction);
+            if(wecomTask)await StartWeCom(id,connectionToken,version,grant);
+            else await RunNotepad(id,connectionToken,version,grant,nativeAction);
             return;
         }
         if(captureBlocked)throw new Exception("窗口截取未响应，请重启本机助手后继续此任务。");
@@ -672,7 +683,7 @@ sealed class AssistantForm : Form {
             if(!CurrentStart(id,connectionToken,version,grant))return;
             LocalPause();version=epoch;failure=ex;startFailureNote=ex.Message;
         }
-        finally { allowing=false; }
+        finally { locatingWeCom=false;allowing=false; }
         if(failure!=null) {
             await ReportStartFailure(id,connectionToken,version,startFailureNote);
         }
@@ -710,13 +721,58 @@ sealed class AssistantForm : Form {
         state=S(result,"status");task=result;status.Text=TaskStage(result);ShowTaskControls();
         if(Changed!=null)Changed();
     }
+    async Task StartWeCom(string id,string connectionToken,long version,string grant) {
+        Action check=()=>CheckStart(id,connectionToken,version,grant);
+        locatingWeCom=true;
+        nativeAttemptId=Guid.NewGuid().ToString();
+        var claimBody=new {action="start_wecom",authorizationId=grant,attemptId=nativeAttemptId};
+        var claim=await Request("tasks/"+id+"/control",claimBody);
+        check();
+        if(S(claim,"status")!="RUNNING")throw new Exception("企业微信任务已停止或已撤销授权。");
+        task=claim;state="RUNNING";status.Text="正在查找这台电脑上的企业微信。";
+        Action beforeLaunch=()=>{
+            check();
+            string key="wecom-launch:"+id;
+            if(journal.ContainsKey(key))throw new Exception("此任务已请求打开企业微信。请从托盘打开主窗口后继续。");
+            Record(key,"requested");
+        };
+        var lastCheck=Stopwatch.StartNew();
+        Func<bool,Task> checkLease=async force=>{
+            check();
+            if(force || lastCheck.ElapsedMilliseconds>=3000) {
+                var current=await Request("tasks/"+id+"/control",claimBody);
+                check();
+                if(S(current,"status")!="RUNNING")throw new Exception("原企业微信定位任务已暂停或停止。");
+                lastCheck.Restart();
+            }
+        };
+        Func<Task> waitForIdle=async()=>{
+            do {
+                while(WaitingForWindow(true,lastPhysicalInput,DateTime.UtcNow)) {
+                    status.Text="正在等你用完键鼠，再定位企业微信。";
+                    await Task.Delay(250);await checkLease(false);
+                }
+                await checkLease(true);
+            } while(WaitingForWindow(true,lastPhysicalInput,DateTime.UtcNow));
+        };
+        var target=wecomOverride!=null ? await wecomOverride(check,beforeLaunch) : await Native.FocusWeCom(check,beforeLaunch,waitForIdle,()=>checkLease(false));
+        check();
+        var result=await Request("tasks/"+id+"/control",new {action="ready_wecom",authorizationId=grant,attemptId=nativeAttemptId,windowId=target.Id,window="企业微信",application="WXWork"});
+        check();state=S(result,"status");task=result;
+        if(state=="RUNNING") {
+            selected=target;approvedId=id;activeAuthorizationId=grant;wecomTaskId=id;
+            foregroundInputAt=WaitingForWindow(true,lastPhysicalInput,DateTime.UtcNow)?lastPhysicalInput:DateTime.MinValue;
+            armed=true;epoch++;allow.Enabled=false;manualAllow.Enabled=false;
+        }
+        status.Text=TaskStage(result);ShowTaskControls();if(Changed!=null)Changed();
+    }
     async Task Poll() {
         if (polling || allowing || changingAuthorization || token.Length == 0 || closing) return;
         polling = true;
         string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
             string retainedTaskId=continuation==null?null:continuation.RetainedTaskId(authorizationId);
-            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, desktopFolderCopy=true, fileCopyVerification=true, backgroundFileCopy=true, retainedTaskId });
+            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, desktopFolderCopy=true, fileCopyVerification=true, backgroundFileCopy=true, wecomApp=true, retainedTaskId });
             if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
@@ -773,6 +829,7 @@ sealed class AssistantForm : Form {
             if(foregroundInputAt!=DateTime.MinValue || !Native.IsForeground(selected))throw new ForegroundInUse();
         }
         Native.ValidateWindow(selected, true);
+        if(wecomTaskId==id)Native.CheckWeComWindow(selected);
         if(BoundTask)BoundWindow();
         if(BrowserOnly)Native.LocalBrowser(selected).ValidateLocalPage();
     }
@@ -803,7 +860,8 @@ sealed class AssistantForm : Form {
                 if(localBrowser!=null&&browserRevision!=localBrowser.PageRevision)
                     throw new Exception("本地网页已切换，请核对当前页面再继续。");
             };
-            bool crossWindow=!browserOnly&&!BoundTask&&activeAuthorizationId.Length>0;
+            bool wecom=wecomTaskId==id;
+            bool crossWindow=!browserOnly&&!BoundTask&&!wecom&&activeAuthorizationId.Length>0;
             var copy=fileCopy;
             if(copy!=null)await copy.CheckLocation(selected);
             var available = copy!=null ? copy.Windows(selected) : crossWindow ? Native.ObservationWindows(Handle,selected) : new List<WindowChoice>();
@@ -859,6 +917,8 @@ sealed class AssistantForm : Form {
             var action = D(command.ContainsKey("action") ? command["action"] : null);
             if(S(command,"requestId")!=requestId) throw new Exception("待执行步骤来自旧画面，请核对窗口后继续");
             Native.ValidateAction(action);
+            string wecomInput=S(command,"wecomInput");
+            if(wecom)Native.CheckWeComAction(action,shot.Popup!=null,wecomInput);
             if(copy!=null)copy.VerifyOtherAction(action,selected);
             string key=S(action,"kind")=="key"?S(action,"key"):"";
             bool copyKey=key=="COPY" || key=="PASTE";
@@ -872,7 +932,7 @@ sealed class AssistantForm : Form {
             WindowChoice target=null;
             if(S(action,"kind")=="switch_window") {
                 if(shot.Popup!=null)throw new Native.InputNotSent("弹出菜单打开时只能操作已核验的当前菜单。");
-                if(browserOnly || BoundTask)throw new Exception("此任务只能操作已确认的窗口。");
+                if(browserOnly || BoundTask || wecom)throw new Exception("此任务只能操作已确认的窗口。");
                 if(activeAuthorizationId.Length==0) throw new Exception("尚未授权跨窗口操作");
                 target=Native.ResolveTarget(available,S(action,"windowId"),selected);
                 Native.ValidateWindow(target,false);
@@ -892,7 +952,7 @@ sealed class AssistantForm : Form {
             } else {
                 if(copy!=null)await copy.CheckLocation(selected);
                 if(copy!=null && key=="PASTE")copy.PasteCommandId=commandId;
-                executingKind=S(action,"kind");await Native.Execute(selected,shot,action,checkInput,localBrowser,copy,()=>CheckTaskActive(id,version));
+                executingKind=S(action,"kind");await Native.Execute(selected,shot,action,checkInput,localBrowser,copy,()=>CheckTaskActive(id,version),wecom,wecomInput);
             }
             Record(commandId,"ok");
             observingForeground=CanYieldForeground;
@@ -1024,6 +1084,7 @@ sealed class AssistantForm : Form {
             using(var form=new AssistantForm(fake,isolated)) {
                 Native.DesktopExplorerSelfTest(isolated);
                 Native.ExplorerCopy.SelfTest(isolated);
+                Native.WeComSelfTest(isolated);
                 System.Threading.SynchronizationContext.SetSynchronizationContext(null);
                 Action seed=()=>{form.token=new string('a',64);form.owner="Isolated self-test";form.deviceId=Guid.NewGuid().ToString();form.authorizationId=Guid.NewGuid().ToString();};
                 seed(); string grant=form.authorizationId;
@@ -1089,6 +1150,33 @@ sealed class AssistantForm : Form {
                 newTask();string newerTask=Guid.NewGuid().ToString();form.startWindowOverride=()=>{form.taskId=newerTask;return null;};
                 form.StartTask(true).GetAwaiter().GetResult();
                 if(calls!=0||form.taskId!=newerTask)throw new Exception("Old startup reported against a new task");
+                foreach(bool locateOnly in new[]{true,false}) {
+                    newTask();form.task["startLocation"]="wecom";var actions=new List<string>();
+                    var target=new WindowChoice{Title="Private chat title",App="WXWork"};
+                    form.wecomOverride=(check,beforeLaunch)=>{
+                        check();actions.Add("foreground");beforeLaunch();return Task.FromResult(target);
+                    };
+                    fake.Reply=req=>{
+                        var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));
+                        string action=S(body,"action");actions.Add(action);
+                        if(action=="ready_wecom" && (S(body,"windowId")!=target.Id || S(body,"application")!="WXWork" || S(body,"window")!="企业微信"))
+                            throw new Exception("WeCom readiness must identify the window without a contact or chat title");
+                        return TestResponse(200,"{\"data\":{\"status\":\""+(action=="ready_wecom" && locateOnly?"DONE":"RUNNING")+"\"}}");
+                    };
+                    form.StartTask(true).GetAwaiter().GetResult();
+                    if(!actions.SequenceEqual(new[]{"start_wecom","foreground","ready_wecom"}) || form.armed==locateOnly ||
+                        (!locateOnly && (form.wecomTaskId!=form.taskId || form.selected!=target)))
+                        throw new Exception("WeCom startup must claim once, bind a verified target, and skip capture for locating only");
+                }
+                newTask();form.task["startLocation"]="wecom";form.authorizationId="";
+                form.wecomOverride=(check,beforeLaunch)=>{throw new Exception("WeCom started without a remembered grant");};
+                fake.Reply=req=>{
+                    var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));
+                    if(S(body,"action")!="handoff" || S(body,"note").Contains("without a remembered grant"))throw new Exception("Invalid unauthorised WeCom action");
+                    return TestResponse(200,"{\"data\":{\"status\":\"NEEDS_USER\"}}");
+                };
+                form.StartTask(true).GetAwaiter().GetResult();
+                form.wecomOverride=null;
                 foreach(string nativeAction in new[]{"focus_notepad","open_notepad"}) {
                     newTask();form.task["nativeAction"]=nativeAction;
                     var events=new List<string>();string attempt=null;
@@ -1183,7 +1271,7 @@ sealed class AssistantForm : Form {
             Console.WriteLine("Desktop connection, startup and safe diagnosis validation: passed (fake HTTP, isolated credentials, no desktop input)");return 0;
         } catch(Exception ex){Console.WriteLine(ex.Message);return 1;}
         finally {
-            foreach(string name in new[]{"connection.bin","connection.bin.tmp"}){string file=Path.Combine(isolated,name);if(File.Exists(file))File.Delete(file);}
+            foreach(string name in new[]{"connection.bin","connection.bin.tmp","commands.bin","commands.bin.tmp"}){string file=Path.Combine(isolated,name);if(File.Exists(file))File.Delete(file);}
             if(Directory.Exists(isolated))Directory.Delete(isolated);
         }
     }
@@ -1269,7 +1357,7 @@ static partial class Native {
     [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h,int code,IntPtr w,IntPtr l);
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern IntPtr GetModuleHandle(string name);
-    static readonly HashSet<string> BlockedApps = new HashSet<string>(new[]{"cmd","powershell","pwsh","windowsterminal","conhost","openconsole","wsl","bash","mintty","regedit","mmc","taskmgr","credentialuibroker","consent","msiexec","mstsc","putty","keepass","keepassxc","1password","bitwarden","systemsettings","codex","codex-computer-use","chatgpt"},StringComparer.OrdinalIgnoreCase);
+    static readonly HashSet<string> BlockedApps = new HashSet<string>(new[]{"cmd","powershell","pwsh","windowsterminal","conhost","openconsole","wsl","bash","mintty","regedit","mmc","taskmgr","credentialuibroker","consent","msiexec","mstsc","putty","keepass","keepassxc","1password","bitwarden","systemsettings","textinputhost","inputapp","tabtip","codex","codex-computer-use","chatgpt"},StringComparer.OrdinalIgnoreCase);
     static readonly Regex Sensitive = new Regex("密码|验证码|密钥|授权码|付款|支付|删除|发送|转账|下单|安装|登录|password|passcode|api.?key|secret|credential|sign.?in|log.?in|payment|purchase|delete|send|checkout|install",RegexOptions.IgnoreCase);
     static string Title(IntPtr h) { var b=new StringBuilder(1024); GetWindowText(h,b,b.Capacity); return b.ToString(); }
     static string Cut(string s,int n) { return s.Length>n?s.Substring(0,n):s; }
@@ -1453,12 +1541,12 @@ static partial class Native {
         var list=candidates.ToList();
         return list.FirstOrDefault(w=>w.Handle==GetForegroundWindow()) ?? list.FirstOrDefault();
     }
-    static void CheckInputDesktop() {
+    static void CheckInputDesktop(string taskName="记事本任务") {
         IntPtr desktop=OpenInputDesktop(0,false,1); // DESKTOP_READOBJECTS
         try {
             var name=new StringBuilder(128); int needed;
             if(desktop==IntPtr.Zero || !GetUserObjectInformation(desktop,2,name,name.Capacity*2,out needed) || !String.Equals(name.ToString(),"Default",StringComparison.OrdinalIgnoreCase))
-                throw new Exception("请解锁电脑并返回普通 Windows 桌面，再继续记事本任务。");
+                throw new Exception("请解锁电脑并返回普通 Windows 桌面，再继续"+taskName+"。");
         } finally { if(desktop!=IntPtr.Zero)CloseDesktop(desktop); }
     }
     public static async Task<WindowChoice> FocusNotepad(IntPtr own,bool open,Action check,Action beforeLaunch) {
@@ -1841,8 +1929,9 @@ static partial class Native {
         foreach(var key in keys.Reverse())inputs.Add(K(key,2));
         Send(inputs.ToArray());
     }
-    public static async Task Execute(WindowChoice w,Shot shot,Dictionary<string,object> a,Action check,BrowserWindow localBrowser=null,ExplorerCopy copy=null,Action verifyTask=null) {
+    public static async Task Execute(WindowChoice w,Shot shot,Dictionary<string,object> a,Action check,BrowserWindow localBrowser=null,ExplorerCopy copy=null,Action verifyTask=null,bool wecom=false,string wecomInput="") {
         ValidateAction(a); check();
+        if(wecom)CheckWeComAction(a,shot.Popup!=null,wecomInput);
         if(shot.Popup!=null) {
             string action=S(a,"kind");
             if(action=="wait") {await Task.Delay(800);return;}
@@ -1879,12 +1968,14 @@ static partial class Native {
                 if(MenuOpen(ThreadInfo(w,out activeThread)))throw new InputNotSent("弹出菜单已变化，请核对当前菜单后继续。");
             };
             checkPoint();
-            GuardElement(AutomationElement.FromPoint(new System.Windows.Point(x,y))); check();
+            var pointElement=AutomationElement.FromPoint(new System.Windows.Point(x,y));
+            GuardElement(pointElement); check();
             // Move and act in one injected batch. A harmless physical move between
             // separate calls must not redirect the click or scroll to another control.
             var screen=SystemInformation.VirtualScreen;
             var move=new INPUT{type=0,data=new UNION{mouse=new MOUSE{dx=AbsolutePixel(x,screen.Left,screen.Width),dy=AbsolutePixel(y,screen.Top,screen.Height),flags=0xC001}}};
             check();checkPoint();
+            if(wecom && kind=="click")CheckWeComControl(w,AutomationElement.FromPoint(new System.Windows.Point(x,y)),"");
             if(kind=="scroll")Send(move,Mouse(0x0800,unchecked((uint)((S(a,"direction")=="up"?120:-120)*Number(a,"amount",1,6)))));
             else { bool right=S(a,"button")=="right";Send(move,Mouse(right?0x0008u:0x0002u),Mouse(right?0x0010u:0x0004u));if(S(a,"button")=="double"){await Task.Delay(80);check();try{checkPoint();}catch(InputNotSent e){throw new Exception("已发送第一次单击，请核对结果。"+e.Message);}Send(move,Mouse(2),Mouse(4));} }
             return;
@@ -1903,9 +1994,13 @@ static partial class Native {
             SendChord(Keys[key]);
         } else {
             // Unicode SendInput doesn't interpret text as key shortcuts or executable code.
+            var editTarget=wecom ? AutomationElement.FocusedElement : null;
+            if(wecom)CheckWeComControl(w,editTarget,wecomInput);
             foreach(char ch in S(a,"text")) {
                 if(localBrowser!=null)localBrowser.ValidateLocalAction(kind,"",0,0);
-                check();GuardElement(AutomationElement.FocusedElement);
+                check();var focused=AutomationElement.FocusedElement;GuardElement(focused);
+                if(wecom && (focused==null || !Automation.Compare(editTarget,focused)))
+                    throw new Exception("企业微信输入焦点已改变，请核对已输入的文字。");
                 Send(new INPUT{type=1,data=new UNION{key=new KEY{scan=ch,flags=4}}},new INPUT{type=1,data=new UNION{key=new KEY{scan=ch,flags=6}}});
                 await Task.Delay(2);
             }

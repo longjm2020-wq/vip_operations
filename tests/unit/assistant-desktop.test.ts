@@ -148,6 +148,7 @@ beforeAll(async () => {
   await fixture.db.exec(await readFile("packages/database/migrations/117_desktop_file_shortcuts.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/118_desktop_folder_copy.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/119_desktop_file_copy_verification.sql", "utf8"));
+  await fixture.db.exec(await readFile("packages/database/migrations/120_desktop_wecom.sql", "utf8"));
 });
 beforeEach(async () => {
   fixture.session = true;
@@ -228,6 +229,98 @@ async function shot() {
 }
 
 describe("paired desktop task execution", () => {
+  async function wecomFixture(instruction: string) {
+    const d = await paired(), c = actor();
+    const {authorizationId} = await setDesktopAuthorization(c,d.deviceId,true);
+    const poll=(enabled=true)=>pollDesktop(c,d.deviceId,true,{wecomApp:enabled});
+    const create=()=>queueDesktopTask(c,{deviceId:d.deviceId,requestId:randomUUID(),instruction});
+    await expect(create()).rejects.toMatchObject({response:{error:{code:"WECOM_UPDATE_REQUIRED"}}});
+    await poll();const t=await create();
+    const send=(body:object)=>desktopControl(c,t.id,body,d.deviceId);
+    const attemptId=randomUUID(), windowId=randomUUID();
+    const start={action:"start_wecom",attemptId,authorizationId};
+    const ready={action:"ready_wecom",attemptId,authorizationId,application:"WXWork",window:"企业微信",windowId};
+    await expect(send(start)).rejects.toThrow();
+    expect((await poll(false)).task).toBeNull();
+    expect((await poll()).task).toMatchObject({id:t.id,status:"WAITING",startLocation:"wecom"});
+    await expect(send({action:"allow",authorizationId,application:"TextInputHost",window:"Input",windowId})).rejects.toThrow();
+    return {d,t,c,poll,send,start,ready};
+  }
+
+  it("finishes an explicit WeCom launch only on the original authorized native foreground proof", async()=>{
+    const {c,d,t,send,start,ready}=await wecomFixture("在我的电脑上找到企业微信窗口");
+    expect((await fixture.db!.query("SELECT model_ref FROM assistant_desktop_tasks WHERE id=$1",[t.id])).rows).toEqual([{model_ref:null}]);
+    expect((await send(start)).status).toBe("RUNNING");
+    expect((await send(start)).status).toBe("RUNNING");
+    await expect(send({...ready,application:"WeChat"})).rejects.toThrow();
+    await expect(send({...ready,attemptId:randomUUID()})).rejects.toThrow();
+    await expect(desktopControl(c,t.id,ready)).rejects.toThrow();
+    await expect(desktopControl(c,t.id,ready,randomUUID())).rejects.toThrow();
+    const result=await send(ready);expect(result).toMatchObject({status:"DONE",step:1,confirmedSteps:1});
+    expect(result.recentSteps![0].action).toBe("locate_wecom");
+    expect((await send(ready)).step).toBe(1);
+    await expect(send(start)).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await pollDesktop(c,d.deviceId,true,{wecomApp:true})).task).toBeNull();
+  });
+
+  it("keeps WeCom preparation in the verified app and stops at an unsent greeting draft",async()=>{
+    const {c,d,t,send,start,ready}=await wecomFixture("打开企业微信给我的好友测试甲发一句问候");
+    await send(start);expect((await send(ready)).status).toBe("RUNNING");
+    const observe=async()=>planDesktop(c,d.deviceId,t.id,{...await shot(),application:"WXWork",window:"企业微信",windowId:ready.windowId});
+    vi.stubGlobal("fetch",vi.fn(async()=>model({kind:"type",description:"填写消息草稿",text:"你好",wecomInput:"draft"})));
+    const plan=await observe(), cmd=plan.command!;
+    const ack=()=>acknowledgeDesktop(c,d.deviceId,t.id,{commandId:cmd.id,outcome:"ok",note:"输入成功"});
+    await expect(ack()).rejects.toThrow();
+    expect(cmd.wecomInput).toBe("draft");
+    expect((await permitDesktop(c,d.deviceId,t.id,{commandId:cmd.id})).allowed).toBe(true);
+    expect(await ack()).toMatchObject({status:"NEEDS_USER",confirmedSteps:2,stage:expect.stringContaining("亲自发送")});
+    await desktopControl(c,t.id,{action:"resume"});await pollDesktop(c,d.deviceId,true,{wecomApp:true});
+    const next=randomUUID();await send({...start,attemptId:next});await send({...ready,attemptId:next});
+    expect((await observe()).command).toBeNull();
+  });
+  it("reclaims a legacy handoff only after explicit resume and never falls back to a changed authorization",async()=>{
+    const {c,d,t,poll,send,start,ready}=await wecomFixture("打开企业微信给我的好友测试甲发一句问候");
+    await fixture.db!.query("UPDATE assistant_desktop_tasks SET status='NEEDS_USER',window_name='Input',application='TextInputHost',window_id=$2,authorization_id=NULL WHERE id=$1",[t.id,randomUUID()]);
+    expect((await poll()).task).toMatchObject({id:t.id,status:"NEEDS_USER",startLocation:"wecom"});
+    await expect(send(start)).rejects.toThrow();
+    await desktopControl(c,t.id,{action:"resume"});
+    expect((await poll()).task).toMatchObject({id:t.id,startLocation:"wecom",status:"WAITING"});
+    await send(start);
+    await fixture.db!.query("UPDATE assistant_desktop_devices SET authorization_id=$2 WHERE id=$1",[d.deviceId,randomUUID()]);
+    expect((await poll()).task).toBeNull();
+    await expect(send(ready)).rejects.toThrow();
+  });
+  it("rejects a model claim that an externally addressed message has been sent",async()=>{
+    const {c,d,t,send,start,ready}=await wecomFixture("在企业微信中给测试甲发一句问候");
+    await send(start);await send(ready);
+    vi.stubGlobal("fetch",vi.fn(async()=>model({kind:"done",description:"消息已发送"})));
+    const end=await planDesktop(c,d.deviceId,t.id,{...await shot(),application:"WXWork",window:"企业微信",windowId:ready.windowId});
+    expect(end.task).toMatchObject({status:"NEEDS_USER",stage:expect.stringContaining("亲自发送")});
+  });
+  it.each(["pause","stop","revoke","downgrade","other_app","other_window","enter","multiline"])("rejects an invalid WeCom continuation: %s",async cause=>{
+    const {c,d,t,poll,send,start,ready}=await wecomFixture("在企业微信中搜索测试甲");
+    await send(start);
+    if(["pause","stop","revoke","downgrade"].includes(cause)){
+      if(cause==="revoke")await setDesktopAuthorization(c,d.deviceId,false);
+      else if(cause==="downgrade")await poll(false);
+      else await desktopControl(c,t.id,{action:cause});
+      await expect(send(ready)).rejects.toThrow();
+      return;
+    }
+    await send(ready);
+    const observation={...await shot(),application:"WXWork",window:"企业微信",windowId:ready.windowId};
+    if(cause==="other_app"||cause==="other_window"){
+      const other={id:randomUUID(),application:"notepad",title:"私有窗口"};
+      const body=cause==="other_app"?{...observation,application:other.application}:{...observation,windows:[other]};
+      await expect(planDesktop(c,d.deviceId,t.id,body)).rejects.toThrow();expect(fetch).not.toHaveBeenCalled();
+    }else{
+      const action=cause==="enter"?{kind:"key",key:"ENTER",description:"按键"}:{kind:"type",text:"草稿\r\n",wecomInput:"draft",description:"输入"};
+      vi.stubGlobal("fetch",vi.fn(async()=>model(action)));
+      const result=await planDesktop(c,d.deviceId,t.id,observation);
+      expect(result.command).toBeNull();expect(result.task.status).toBe("NEEDS_USER");
+    }
+  });
   const newCapabilities = {
     fileCopyShortcuts: true,
     desktopFolderCopy: true,

@@ -16,6 +16,7 @@ export const isActiveDesktopTask = (task: DesktopTask) =>
 
 type StepReceipt = NonNullable<DesktopTask["recentSteps"]>[number];
 const actionLabels: Record<StepReceipt["action"], string> = {
+  locate_wecom: "定位企业微信",
   file_copy: "后台复制文件",
   click: "点击",
   scroll: "滚动",

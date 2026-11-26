@@ -202,6 +202,88 @@ test("工作台自动区分记事本连续输入、普通提问与网页任务�
   }
 });
 
+test("在工作台指定企业微信后，复合任务从已授权的企业微信窗口开始", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const name = "企业微信定位回归设备";
+  const { client, deviceId, revoke } = await pairTestReceiver(
+    page,
+    request,
+    baseURL!,
+    name,
+  );
+  const capabilities = { nativeActions: true, wecomApp: true };
+  const instruction =
+    "在我的电脑上打开企业微信给我的好友测试联系人准备一句问候";
+  try {
+    const { authorizationId } = await client("authorization", {
+      enabled: true,
+    });
+    await client("poll", capabilities);
+    await page.goto("/my-workspace");
+    await selectAssistantPanel(page, "我的电脑");
+    await page
+      .locator(".assistant-desktop-item")
+      .filter({ hasText: name })
+      .getByRole("button", { name: "设为常用电脑" })
+      .click();
+    const composer = page.locator(".assistant-compose:visible");
+    const openOnly = "在我的电脑上打开企业微信";
+    await composer.getByRole("textbox").fill(openOnly);
+    await client("poll", capabilities);
+    await composer.getByRole("button", { name: "发送给个人助理" }).click();
+    const openCard = page
+      .getByRole("region", { name: "电脑任务：" + openOnly, exact: true })
+      .filter({ visible: true })
+      .first();
+    await expect(openCard).toContainText(openOnly);
+    const opening = (await client("poll", capabilities)).task;
+    expect(opening).toMatchObject({
+      deviceId,
+      instruction: openOnly,
+      startLocation: "wecom",
+    });
+    const receipt = { authorizationId, attemptId: randomUUID() };
+    const control = "tasks/" + opening.id + "/control";
+    expect(
+      (await client(control, { action: "start_wecom", ...receipt })).status,
+    ).toBe("RUNNING");
+    expect(
+      (
+        await client(control, {
+          action: "ready_wecom",
+          ...receipt,
+          windowId: randomUUID(),
+          application: "WXWork",
+          window: "企业微信",
+        })
+      ).status,
+    ).toBe("DONE");
+    await expect(openCard).toContainText("已核验企业微信窗口在前台", {
+      timeout: 15000,
+    });
+    await composer.getByRole("textbox").fill(instruction);
+    await client("poll", capabilities);
+    await composer.getByRole("button", { name: "发送给个人助理" }).click();
+    const card = page
+      .getByRole("region", { name: "电脑任务：" + instruction })
+      .filter({ visible: true })
+      .first();
+    await expect(card).toContainText(instruction);
+    const { task } = await client("poll", capabilities);
+    expect(task).toMatchObject({
+      deviceId,
+      instruction,
+      status: "WAITING",
+      startLocation: "wecom",
+    });
+  } finally {
+    await revoke();
+  }
+});
+
 test("在工作台一句话新建桌面文件夹并复制内容，升级后重试只派一单", async ({
   page,
   request,

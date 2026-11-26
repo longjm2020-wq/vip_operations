@@ -1105,6 +1105,7 @@ test("当前桌面壳与已选本机一致时，微信简写只发一次原文�
   const send = composer.getByRole("button", { name: "发送给个人助理" });
   const commands = [
     "打开微信，给好友阿龙发句问候",
+    "打开企业微信给我的好友测试联系人准备一句问候",
     "打开微信会占用多少内存？",
     "写一句给微信好友阿龙的问候",
     "在办公室电脑上打开微信，给好友阿龙发句问候",
@@ -1114,7 +1115,7 @@ test("当前桌面壳与已选本机一致时，微信简写只发一次原文�
     await send.click();
     await expect.poll(() => requests.length).toBe(index + 1);
     expect(requests[index]).toMatchObject({ message, autoExecution: true });
-    if (index === 0) {
+    if (index < 2) {
       expect(requests[index]).toMatchObject({
         desktopDeviceId: desktopFixtureId,
         nativeDesktopDeviceId: desktopFixtureId,

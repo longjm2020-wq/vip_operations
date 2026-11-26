@@ -200,6 +200,7 @@ beforeAll(async () => {
     "117_desktop_file_shortcuts.sql",
     "118_desktop_folder_copy.sql",
     "119_desktop_file_copy_verification.sql",
+    "120_desktop_wecom.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(

@@ -6,6 +6,7 @@ export const sourceFiles = [
   "apps/desktop/XutiDesktop.cs",
   "apps/desktop/DesktopExplorer.cs",
   "apps/desktop/ExplorerCopy.cs",
+  "apps/desktop/WeCom.cs",
   "apps/desktop/DesktopShell.cs",
   "apps/desktop/app.manifest",
   "apps/desktop/启动小序.cmd",

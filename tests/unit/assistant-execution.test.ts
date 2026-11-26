@@ -3,6 +3,7 @@ import { desktopFileCopyDeviceName, desktopFileCopyIntent, explicitlyRequestsBac
 import {
   classifyAssistantExecution,
   desktopExplorerIntent,
+  desktopWecomIntent,
   assistantFollowupAnchor,
   assistantFollowupText,
   classifyAssistantFollowup,
@@ -12,6 +13,21 @@ import {
 } from "../../packages/contracts/src/assistant-execution.js";
 
 describe("workbench execution from direct instructions", () => {
+  it.each(["打开企业微信","帮我找一下企业微信","请在我的电脑找到企业微信窗口","切换到已打开的企业微信窗口","在我的电脑打开企业微信，不需要我确认"])("locates WeCom only for a direct app command: %s", text=>{
+    expect(desktopWecomIntent(text)).toBe("open");expect(classifyAssistantExecution(text).kind).toBe("desktop");
+  });
+  it.each(["打开企业微信给我的好友测试甲发一句问候","在企业微信中搜索王工并起草「这件事怎么样？」","启动企业微信后再给张三写草稿"])("keeps the WeCom follow-up in its selected app: %s",text=>{
+    expect(desktopWecomIntent(text)).toBe("work");expect(classifyAssistantExecution(text).kind).toBe("desktop");expect(isNativeDesktopAppCommand(text)).toBe(true);
+  });
+  it.each(["打开微信给王工发问候","打开企业微信官网","能否打开企业微信？","不要打开企业微信","把「打开企业微信」输入记事本","如何在企业微信中搜索联系人","在云端浏览器里打开企业微信网页版","“打开企业微信”","","打开企业微信失败了"])("never initiates WeCom from a different target or a discussion: %s",text=>{
+    expect(desktopWecomIntent(text)).toBeUndefined();
+  });
+  it("honors a withdrawn launch while allowing explicit unsent drafts",()=>{
+    const cancelled="在我的电脑上打开企业微信，不要打开，别执行";
+    expect(classifyAssistantExecution(cancelled).kind).toBe("site");
+    expect(desktopWecomIntent(cancelled)).toBeUndefined();
+    expect(desktopWecomIntent("在企业微信中给王工写草稿，不要发送")).toBe("work");
+  });
   it("reads the requested file execution mode only from an imperative modifier", () => {
     const copy = String.raw`把「D:\样品\说明.txt」复制到「D:\归档」`;
     const expected = desktopFileCopyIntent(copy);

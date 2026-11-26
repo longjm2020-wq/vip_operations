@@ -181,13 +181,13 @@ export type DesktopTask = {
   confirmedSteps?: number;
   recentSteps?: {
     step: number;
-    action: "click" | "scroll" | "type" | "key" | "switch_window" | "wait" | "file_copy";
+    action: "click" | "scroll" | "type" | "key" | "switch_window" | "wait" | "file_copy" | "locate_wecom";
     result: "ok" | "blocked" | "uncertain";
     fileShortcut?: "copy" | "paste";
     verifiedAfterPaste?: true;
   }[];
   /** Hint for the authorized client's automatic start on its real execution poll. */
-  startLocation?: "desktopExplorer";
+  startLocation?: "desktopExplorer" | "wecom";
   /** Available to file-copy capable native clients on their execution polls. */
   fileCopy?: DesktopFileCopy;
   /** Execution poll only. This command refers to the original paste permit. */
