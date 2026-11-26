@@ -29,6 +29,17 @@ export const desktopStatusLabels: Record<
   FAILED: "未完成",
   CANCELED: "已停止",
 };
+// Windows 1.2.19 and 1.2.20 report the last path component in this receipt.
+export function desktopMissingAttachmentDirectory(stage: string, plan?: DesktopFolderCreationPlan | null) {
+  const name = /^无法核对目录 (.+)（Windows [23]）。$/u.exec(stage)?.[1];
+  if (!name || !plan) return;
+  const isParent = name === plan.parentName;
+  const isChild = plan.folderNames.includes(name);
+  if (isParent && isChild) return name;
+  if (isParent) return `桌面\\${name}`;
+  if (isChild) return `桌面\\${plan.parentName}\\${name}`;
+}
+
 export const desktopTaskSchema = z
   .object({
     deviceId: z.string().uuid(),

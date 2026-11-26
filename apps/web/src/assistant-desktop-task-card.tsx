@@ -2,11 +2,13 @@ import { useRef, useState } from "react";
 import { Alert, Button, Space, Tag } from "antd";
 import { PauseOutlined, StopOutlined } from "@ant-design/icons";
 import {
+  desktopMissingAttachmentDirectory,
   desktopStatusLabels,
   type DesktopDevice,
   type DesktopTask,
 } from "../../../packages/contracts/src/assistant-desktop";
 import { desktopExplorerIntent } from "../../../packages/contracts/src/assistant-execution";
+import { desktopFolderAttachmentTargetPolicy } from "../../../packages/contracts/src/desktop-folder-creation";
 import { api } from "./api";
 import { desktopClientRequest, isDesktopClient } from "./desktop-client";
 import { desktopReceiverProblem } from "./desktop-setup";
@@ -66,8 +68,18 @@ function receiptResult(receipt: StepReceipt) {
   return resultLabels[receipt.result];
 }
 
-function handoffHint(task: DesktopTask, device?: DesktopDevice) {
+function missingAttachmentDirectory(task: DesktopTask) {
+  if (task.status === "NEEDS_USER" && (task.nativeAction === "copy_folder_attachment" || task.nativeAction === "copy_folder_attachments"))
+    return desktopMissingAttachmentDirectory(task.stage, task.folderCreation);
+}
+
+function handoffHint(task: DesktopTask, device?: DesktopDevice, missingDirectory?: string) {
   if (task.status !== "NEEDS_USER" && task.status !== "PAUSED") return;
+  if (missingDirectory) {
+    if (desktopFolderAttachmentTargetPolicy(task.instruction) === "create-missing")
+      return "在 Windows 小序 1.2.20 或更高版本点击「继续当前任务」，会自动补齐清单中缺少的目录，使用原附件继续分发。";
+    return "这条指令限制了可用目录。请核对并备齐原清单中的目录，再点击「继续当前任务」，已提交的附件会继续使用。";
+  }
   if (task.folderAttachment || task.folderAttachments?.length)
     return "请按任务提示核对目标目录和同名文件，再继续补齐附件。";
   if (task.nativeAction === "create_folders_with_notes")
@@ -132,7 +144,8 @@ export function AssistantDesktopTaskCard({
     (task.fileCopyMode === "background" && task.recentSteps?.some(receipt => receipt.action === "file_copy" && receipt.result === "ok")));
   const statusLabel = awaitingVerification ? "等待自动核验" : retrying ? "等待自动重试" :
     verified ? "复制已核验" : desktopStatusLabels[task.status];
-  const hint = awaitingVerification ? undefined : handoffHint(task, device);
+  const missingDirectory = missingAttachmentDirectory(task);
+  const hint = awaitingVerification ? undefined : handoffHint(task, device, missingDirectory);
   const control = async (action: "pause" | "resume" | "stop") => {
     if (pending.current) return;
     pending.current = true;
@@ -182,7 +195,7 @@ export function AssistantDesktopTaskCard({
       )}
       <p role="status">{awaitingVerification
         ? "请保持所选电脑的最新版桌面端连接。接单后会自动检查目标文件，无需再次粘贴。"
-        : task.stage}</p>
+        : missingDirectory ? `找不到目标目录「${missingDirectory}」。` : task.stage}</p>
       <div className="assistant-desktop-task-meta">
         {task.localBrowser && "本地浏览器 · "}
         {backgroundLabel && `${backgroundLabel} · `}

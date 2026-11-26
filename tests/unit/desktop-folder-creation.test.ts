@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   desktopFolderAttachmentRequest,
   desktopFolderAttachmentFollowup,
+  desktopFolderAttachmentTargetPolicy,
   desktopFolderAttachmentSchema,
   desktopFolderAttachmentsSchema,
   desktopFolderBatchAttachmentRequest,
@@ -155,6 +156,130 @@ describe("Windows Desktop folder creation plans", () => {
         folderNames: [name],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("target folder policy for attachment distribution and original-task retries", () => {
+  const singular = "把这张图复制到桌面「样品」里的「春款」";
+  const batch = "把这些附件复制到桌面「样品」下的子目录：春款、夏款";
+  const followup = "把这些图片复制到刚才建好的每个子目录";
+  const compound =
+    "在桌面「样品」下新建两个子目录：春款、夏款，然后把这些图片复制到每个子目录";
+
+  it("defaults to completing the original targets, including explicit and relative copy", () => {
+    for (const instruction of [singular, batch, followup, compound]) {
+      expect(desktopFolderAttachmentTargetPolicy(instruction)).toBe(
+        "create-missing",
+      );
+    }
+    expect(desktopFolderAttachmentRequest(singular)?.plan.folderNames).toEqual([
+      "春款",
+    ]);
+    expect(
+      desktopFolderBatchAttachmentRequest(batch)?.plan.folderNames,
+    ).toEqual(["春款", "夏款"]);
+    expect(desktopFolderAttachmentFollowup(followup)).toEqual({
+      source: "image",
+      quantity: "multiple",
+    });
+    expect(desktopFolderBatchAttachmentRequest(compound)?.mode).toBe("create");
+  });
+
+  it.each([
+    "只用已有目录，" + singular,
+    singular + "，不要新建文件夹。",
+    singular + "。 ，不要新建文件夹",
+    singular + "，不自动创建目录",
+    singular + "，禁止补建任何缺失子目录",
+    "请在后台静默执行，只用已有目录，" + singular,
+    singular + "，仅使用已存在的目录，并且不打开窗口。",
+  ])(
+    "retains the copy scope and flags the explicit no-create rule: %s",
+    (instruction) => {
+      expect(desktopFolderAttachmentTargetPolicy(instruction)).toBe(
+        "existing-only",
+      );
+      expect(desktopFolderAttachmentRequest(instruction)).toMatchObject({
+        existingOnly: true,
+        plan: { parentName: "样品", folderNames: ["春款"] },
+      });
+      expect(looksLikeDesktopFolderAttachment(instruction)).toBe(true);
+    },
+  );
+
+  it("uses the same restriction for batches and verified relative destinations", () => {
+    expect(
+      desktopFolderBatchAttachmentRequest(batch + "，禁止新建目录"),
+    ).toMatchObject({
+      existingOnly: true,
+      mode: "existing",
+      plan: { parentName: "样品", folderNames: ["春款", "夏款"] },
+    });
+    expect(
+      desktopFolderAttachmentFollowup(followup + "，只用已有目录"),
+    ).toEqual({
+      source: "image",
+      quantity: "multiple",
+      existingOnly: true,
+    });
+    expect(
+      desktopFolderAttachmentTargetPolicy(followup + "，只用已有目录"),
+    ).toBe("existing-only");
+  });
+
+  it("accepts an explicit missing-folder creation clause without adding it as a target", () => {
+    const direct = batch + "，缺目录就自动创建目录";
+    expect(
+      desktopFolderBatchAttachmentRequest(direct)?.plan.folderNames,
+    ).toEqual(["春款", "夏款"]);
+    expect(desktopFolderAttachmentTargetPolicy(direct)).toBe("create-missing");
+    expect(
+      desktopFolderAttachmentFollowup(followup + "，自动补齐缺失子目录"),
+    ).toEqual({ source: "image", quantity: "multiple" });
+    expect(
+      desktopFolderBatchAttachmentRequest(compound + "，缺目录就自动创建目录")
+        ?.mode,
+    ).toBe("create");
+  });
+
+  it.each([
+    batch + "，跳过缺失",
+    batch + "，跳过不存在的目录",
+    batch + "，缺目录就跳过",
+    followup + "，找不到就略过",
+    followup + "，缺少的跳过",
+    "把这张图复制到刚才建好的每个文件夹，目录不存在就忽略",
+    singular + "，只用已有目录，缺目录就自动创建目录",
+    compound + "，禁止新建文件夹",
+  ])(
+    "requires clarification for skipped targets or conflicting rules: %s",
+    (instruction) => {
+      expect(desktopFolderAttachmentTargetPolicy(instruction)).toBe(
+        "unsupported",
+      );
+      expect(desktopFolderAttachmentRequest(instruction)).toBeUndefined();
+      expect(desktopFolderBatchAttachmentRequest(instruction)).toBeUndefined();
+      expect(desktopFolderAttachmentFollowup(instruction)).toBeUndefined();
+      expect(
+        looksLikeDesktopFolderBatchAttachment(instruction) ||
+          looksLikeDesktopFolderAttachment(instruction),
+      ).toBe(true);
+    },
+  );
+
+  it("keeps policy-like words inside literal folder names", () => {
+    const instruction =
+      "把这些附件复制到桌面「禁止新建目录」下的子目录：『跳过缺失』、『只用已有目录』";
+    expect(desktopFolderAttachmentTargetPolicy(instruction)).toBe(
+      "create-missing",
+    );
+    expect(desktopFolderBatchAttachmentRequest(instruction)?.plan).toEqual({
+      parentName: "禁止新建目录",
+      folderNames: ["跳过缺失", "只用已有目录"],
+    });
+    expect(
+      desktopFolderAttachmentRequest("怎么" + singular + "，不要新建文件夹？"),
+    ).toBeUndefined();
   });
 });
 

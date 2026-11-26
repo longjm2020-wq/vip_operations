@@ -3,9 +3,9 @@ import { z } from "zod";
 import { db, one, rows, type Tx } from "../../../../../packages/database/src/index.js";
 import {
   desktopFolderAttachmentSchema, desktopFolderAttachmentsSchema, desktopFolderAttachmentRequest, desktopFolderAttachmentFollowup,
-  desktopFolderBatchAttachmentRequest, looksLikeDesktopFolderAttachment, looksLikeDesktopFolderBatchAttachment,
+  desktopFolderAttachmentTargetPolicy, desktopFolderBatchAttachmentRequest, looksLikeDesktopFolderAttachment, looksLikeDesktopFolderBatchAttachment,
   folderBatchAttachmentGuidance, folderAttachmentGuidance, maxDesktopFolderAttachmentBytes, maxDesktopFolderAttachmentsBytes,
-  maxDesktopFolderAttachments, type DesktopFolderCreationPlan, type DesktopFolderStep
+  maxDesktopFolderAttachments, desktopFolderSteps, type DesktopFolderCreationPlan, type DesktopFolderStep
 } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import { fail, parse, type Context } from "../../core.js";
 import { requireAssistant } from "./assistant-memory.js";
@@ -28,14 +28,24 @@ export function isAttachmentManifest(action: unknown) {
 
 export function folderAttachmentIntent(text: string, count: number): AttachmentIntent | undefined {
   const relative = desktopFolderAttachmentFollowup(text);
-  if (relative) return { ...relative, action: "copy_folder_attachments", relative: true, steps: ["copy_attachments", "verify"] };
-  const batch = desktopFolderBatchAttachmentRequest(text);
-  const single = desktopFolderAttachmentRequest(text);
-  if (single && (!batch || (batch.mode === "existing" && batch.quantity !== "multiple" && count === 1)))
-    return { ...single, action: "copy_folder_attachment", quantity: batch?.quantity ?? "single", attachmentCount: batch?.attachmentCount };
-  if (batch) return { ...batch, action: batch.mode === "create" ? "create_folders_with_attachments" : "copy_folder_attachments" };
+  const batch = relative ? undefined : desktopFolderBatchAttachmentRequest(text);
+  const single = relative || batch ? undefined : desktopFolderAttachmentRequest(text);
+  const target = relative ?? batch ?? single;
+  if (target) {
+    const action = target.existingOnly
+      ? (!relative && count === 1 ? "copy_folder_attachment" : "copy_folder_attachments")
+      : "create_folders_with_attachments";
+    return {
+      ...target,
+      quantity: batch?.quantity ?? relative?.quantity ?? "single",
+      action,
+      relative: !!relative,
+      steps: desktopFolderSteps(action)!,
+    };
+  }
   if (looksLikeDesktopFolderBatchAttachment(text) || looksLikeDesktopFolderAttachment(text))
-    fail("INVALID_FOLDER_ATTACHMENT", folderBatchAttachmentGuidance.format, 400);
+    fail("INVALID_FOLDER_ATTACHMENT", desktopFolderAttachmentTargetPolicy(text) === "unsupported"
+      ? folderBatchAttachmentGuidance.targetPolicy : folderBatchAttachmentGuidance.format, 400);
 }
 
 export function validateFolderAttachmentSelection(intent: AttachmentIntent, ids: string[]) {

@@ -623,7 +623,8 @@ for (const mode of ["自动识别", "操作我的电脑"] as const) {
     const receiving = { nativeActions: true, folderCreation: true, folderNotes: true, folderBatchNotes: true, folderAttachment: true };
     const photo = await sharp({ create: { width: 3, height: 2, channels: 3, background: "#874b72" } }).jpeg().toBuffer();
     const sha256 = createHash("sha256").update(photo).digest("hex");
-    const instruction = "把这张图复制到桌面 “测试自动化9999” 下的100个子文件夹（XUTI-01 至 XUTI-100），每个文件夹一份，保留图片原名。";
+    const parentName = `附件核验-${mode}`;
+    const instruction = `把这张图复制到桌面 “${parentName}” 下的100个子文件夹（XUTI-01 至 XUTI-100），每个文件夹一份，保留图片原名，不要新建目录。`;
     try {
       const { authorizationId } = await client("authorization", { enabled: true });
       await client("poll", receiving);
@@ -644,17 +645,32 @@ for (const mode of ["自动识别", "操作我的电脑"] as const) {
       }
       await client("poll", receiving);
       await composer.getByRole("button", { name: "发送给个人助理" }).click();
-      const card = page.getByRole("region", { name: "电脑任务：" + instruction }).filter({ visible: true }).first();
-      await expect(card).toContainText("后台分发附件");
+      const regions = page.getByRole("region", { name: "电脑任务：" + instruction }).filter({ visible: true });
+      await expect(regions.first()).toContainText("后台分发附件");
       const { task } = await client("poll", receiving);
+      const card = regions.and(page.locator(`[data-desktop-task-id="${task.id}"]`)).first();
       expect(task).toMatchObject({
         deviceId, nativeAction: "copy_folder_attachment", folderSteps: ["copy_attachment", "verify"],
-        folderCreation: { parentName: "测试自动化9999", folderNames: Array.from({ length: 100 }, (_, i) => "XUTI-" + String(i + 1).padStart(2, "0")) },
+        folderCreation: { parentName, folderNames: Array.from({ length: 100 }, (_, i) => "XUTI-" + String(i + 1).padStart(2, "0")) },
         folderAttachment: { name: "LOGO400.jpg", bytes: photo.length, sha256 },
       });
-      const attemptId = task.folderCreationAttemptId;
-      const claim = { authorizationId, attemptId };
       const control = "tasks/" + task.id + "/folder-creation";
+      const firstAttempt = task.folderCreationAttemptId;
+      await client(control, { authorizationId, attemptId: firstAttempt, action: "start" });
+      await client("tasks/" + task.id + "/control", {
+        action: "handoff", startupFailure: true, attemptId: firstAttempt,
+        note: "无法核对目录 XUTI-63（Windows 2）。",
+      });
+      await expect(card.getByRole("status")).toHaveText(`找不到目标目录「桌面\\${parentName}\\XUTI-63」。`, { timeout: 15000 });
+      await expect(card).toContainText("这条指令限制了可用目录");
+      await client("poll", receiving);
+      await card.getByRole("button", { name: "继续当前任务" }).click();
+      await expect(card.getByRole("button", { name: "继续当前任务" })).toHaveCount(0);
+      const resumed = (await client("poll", receiving)).task;
+      expect(resumed).toMatchObject({ id: task.id, nativeAction: "copy_folder_attachment" });
+      const attemptId = resumed.folderCreationAttemptId;
+      expect(attemptId).not.toBe(firstAttempt);
+      const claim = { authorizationId, attemptId };
       await client(control, { ...claim, action: "start" });
       expect((await downloadAttachment(task.id, authorizationId, randomUUID())).ok()).toBe(false);
       const download = await downloadAttachment(task.id, authorizationId, attemptId);
@@ -681,8 +697,8 @@ test("批量建目录后按原名分发两张图片，并在下一条消息向�
   const { client, deviceId, downloadAttachment, revoke } = await pairTestReceiver(page, request, baseURL!, deviceName);
   const receiving = { nativeActions: true, folderCreation: true, folderAttachment: true, folderAttachments: true };
   const folderNames = Array.from({ length: 100 }, (_, i) => "XUTI-" + String(i + 1).padStart(2, "0"));
-  const parentName = "测试自动化666";
-  const instruction = "在我的电脑桌面新建父文件夹“测试自动化666”，并在文件内新建100个子文件夹，命名规则按“XUTI-01……XUTI-n”，然后把这些图片复制进每一个子文件夹";
+  const parentName = "测试自动化88";
+  const instruction = "把这些图复制到桌面“测试自动化88”下的100个子文件夹（XUTI-01 至 XUTI-100），每个文件夹一份，保留图片原名。";
   const photos = await Promise.all(["5.jpeg", "4.jpeg"].map(async (name, i) => ({
     name, mimeType: "image/jpeg",
     buffer: await sharp({ create: { width: 5, height: 3, channels: 3, background: i ? "#974325" : "#347638" } }).jpeg().toBuffer(),
@@ -700,16 +716,17 @@ test("批量建目录后按原名分发两张图片，并在下一条消息向�
       .getByRole("button", { name: "设为常用电脑" }).click();
     const composer = page.locator(".assistant-compose:visible");
     for (const turn of [
-      { text: instruction, files: photos, action: "create_folders_with_attachments", steps: ["ensure_directories", "copy_attachments", "verify"] },
-      { text: "把这些附件复制到刚才建好的每个子目录", files: documents, action: "copy_folder_attachments", steps: ["copy_attachments", "verify"] },
+      { text: instruction, files: photos },
+      { text: "把这些附件复制到刚才建好的每个子目录", files: documents },
+      { text: `在我的电脑桌面新建父文件夹“${parentName}”，并在文件内新建100个子文件夹，命名规则按“XUTI-01……XUTI-n”，然后把这些图片复制进每一个子文件夹`, files: photos },
     ]) {
       await composer.getByLabel("上传助理附件").setInputFiles(turn.files);
       for (const file of turn.files) await expect(composer.locator(".agent-attachments")).toContainText(file.name);
       await composer.getByRole("textbox").fill(turn.text);
-      if (turn.action === "create_folders_with_attachments") {
+      if (turn.text === instruction) {
         await composer.locator(".assistant-draft-target").click();
         await page.getByRole("menuitem", { name: "操作我的电脑", exact: true }).click();
-        const mismatch = turn.text.replace("这些图片", "三张图片");
+        const mismatch = turn.text.replace("这些图", "三张图片");
         await composer.getByRole("textbox").fill(mismatch);
         await client("poll", receiving);
         await composer.getByRole("button", { name: "发送给个人助理" }).click();
@@ -724,8 +741,13 @@ test("批量建目录后按原名分发两张图片，并在下一条消息向�
       const card = page.getByRole("region", { name: "电脑任务：" + turn.text }).filter({ visible: true }).first();
       await expect(card).toContainText("2 个附件 × 100 个子目录，共 200 份");
       for (const file of turn.files) await expect(card.locator(".assistant-desktop-attachments")).toContainText(file.name);
+      await card.getByText("后台执行计划", { exact: true }).click();
+      await expect(card.locator(".assistant-desktop-plan li").first()).toHaveText("按名称清单补齐父目录和子目录");
       const { task } = await client("poll", receiving);
-      expect(task).toMatchObject({ deviceId, nativeAction: turn.action, folderSteps: turn.steps, folderCreation: { parentName, folderNames } });
+      expect(task).toMatchObject({
+        deviceId, nativeAction: "create_folders_with_attachments",
+        folderSteps: ["ensure_directories", "copy_attachments", "verify"], folderCreation: { parentName, folderNames },
+      });
       const digests = turn.files.map(file => createHash("sha256").update(file.buffer).digest("hex"));
       expect(task.folderAttachments).toEqual(turn.files.map((file, i) => ({
         id: expect.any(String), name: file.name, bytes: file.buffer.length, sha256: digests[i],

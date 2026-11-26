@@ -140,9 +140,11 @@ export const folderBatchAttachmentGuidance = {
   count: "指令里指定的文件数量与这条消息中的附件数量不一致，请核对后重试。",
   image: "这条指令指定了图片，请只附上要分发的图片。",
   collision: "附件中存在同名文件，请先区分文件名后再一起发送。",
+  targetPolicy:
+    "缺失目录可以按原清单补建，也可以要求只用已有目录。目前无法跳过部分目标，请选定一种方式后再发送。",
   platform: folderAttachmentGuidance.platform,
   update:
-    "请更新所选 Windows 电脑的小序桌面端并重新连接，以便在后台批量分发附件。",
+    "请更新到小序 Windows 桌面端 1.2.20 或以上并重新连接，以支持在后台补齐目标目录、分发并核验附件。",
 } as const;
 
 const politePrefix = /^(?:小序[，,、\s]*)?(?:(?:请你?|帮我|替我|麻烦你?)\s*)*/u;
@@ -584,6 +586,75 @@ const attachmentCompoundBoundary = new RegExp(
   "gu",
 );
 
+type AttachmentTargetPolicy =
+  "create-missing" | "existing-only" | "unsupported";
+
+const targetFolder = String.raw`(?:父目录|子目录|父文件夹|子文件夹|目录|文件夹)`;
+const missingTarget = String.raw`(?:(?:缺(?:失|少)?|没有)\s*${targetFolder}|${targetFolder}\s*(?:缺失|不存在)|(?:缺失|不存在)的?\s*${targetFolder})`;
+const onlyExistingTarget = String.raw`(?:(?:不要再|不要|别|请勿|勿|禁止|不得|不许|不允许|不能|不用|无需|不必|不)\s*(?:自动\s*)?(?:新建|创建|建立|补建|补齐)(?:\s*(?:任何\s*)?(?:新的?|缺失的?|不存在的?)?\s*${targetFolder})?|(?:只|仅)\s*(?:用|使用|处理|复制到|分发到|在)?\s*(?:已有|已经存在|已存在|现有)(?:的)?\s*${targetFolder})`;
+const ensureMissingTarget = String.raw`(?:${missingTarget}\s*(?:就|时|则)?\s*(?:请\s*)?(?:自动\s*)?(?:新建|创建|建立|补建|补齐)(?:\s*(?:该|这些|缺失的?)?\s*${targetFolder})?|(?:遇到\s*)?(?:请\s*)?(?:自动\s*)?(?:补建|补齐|创建|新建)\s*(?:缺失|不存在|缺少)的?\s*${targetFolder})`;
+const skipMissingTarget = String.raw`(?:(?:跳过|忽略|略过)\s*(?:所有|这些)?\s*(?:(?:缺失|缺少|不存在|找不到|没找到)(?:的)?(?:\s*${targetFolder})?|${targetFolder}\s*(?:缺失|不存在))|(?:${missingTarget}|找不到(?:的?\s*${targetFolder})?|没找到(?:的?\s*${targetFolder})?|(?:没有|缺失|缺少)的?)\s*(?:就|时|则)?\s*(?:直接\s*)?(?:跳过|忽略|略过))`;
+const targetPolicyClause = `(?:${onlyExistingTarget}|${ensureMissingTarget}|${skipMissingTarget})`;
+const targetPolicyPrefix = new RegExp(
+  String.raw`^(?:请\s*)?${targetPolicyClause}\s*[，,、；;。：:]\s*`,
+  "u",
+);
+const targetPolicySuffix = new RegExp(
+  String.raw`[，,、；;。]\s*(?:并且?|也|且|如果|若)?\s*(?:请\s*)?${targetPolicyClause}\s*$`,
+  "u",
+);
+const targetPolicyOnlyExisting = new RegExp(onlyExistingTarget, "u");
+const targetPolicyEnsure = new RegExp(
+  String.raw`(?:^|[，,、；;。：:]\s*)(?:并且?|也|且|如果|若)?\s*${ensureMissingTarget}(?=\s*(?:[，,、；;。！!]|$))`,
+  "u",
+);
+const targetPolicySkip = new RegExp(skipMissingTarget, "u");
+
+function readAttachmentTargetPolicy(text: string) {
+  let command = text
+    .trim()
+    .replace(/[。!！]$/u, "")
+    .trimEnd();
+  const mask = (value: string) =>
+    value.replace(quotation, (literal) => "■".repeat(literal.length));
+  const outside = mask(command);
+  const existingOnly = targetPolicyOnlyExisting.test(outside);
+  const policy: AttachmentTargetPolicy =
+    targetPolicySkip.test(outside) ||
+    (existingOnly && targetPolicyEnsure.test(outside))
+      ? "unsupported"
+      : existingOnly
+        ? "existing-only"
+        : "create-missing";
+  // Strip only deliberate clauses. Literal names may contain the same words.
+  let previous;
+  do {
+    previous = command;
+    const prefix = targetPolicyPrefix.exec(mask(command));
+    if (prefix) command = command.slice(prefix[0].length);
+    command = command.replace(trailingExecutionMode, "");
+    const suffix = targetPolicySuffix.exec(mask(command));
+    if (suffix) command = command.slice(0, suffix.index);
+    command = command
+      .trim()
+      .replace(/[。!！]$/u, "")
+      .trimEnd();
+  } while (command !== previous);
+  return { command, policy };
+}
+
+/** The missing-folder rule used for new attachment tasks and existing task retries. */
+export function desktopFolderAttachmentTargetPolicy(
+  text: string,
+): AttachmentTargetPolicy {
+  const clauses = joinFolderClauses(text);
+  if (!clauses) return "unsupported";
+  const { policy } = readAttachmentTargetPolicy(clauses.command);
+  return policy === "existing-only" && readCompoundAttachment(text)
+    ? "unsupported"
+    : policy;
+}
+
 function readAttachmentCopy(text: string) {
   const clauses = joinFolderClauses(text);
   if (!clauses) return;
@@ -599,10 +670,9 @@ function readAttachmentCopy(text: string) {
     .replace(attachmentComputerScope, "")
     .replace(backgroundPrefix, "")
     .replace(politePrefix, "")
-    .replace(/[。!！]$/u, "")
-    .trimEnd()
-    .replace(trailingExecutionMode, "");
-  const outside = command.replace(quotation, "");
+    .trim();
+  const target = readAttachmentTargetPolicy(command);
+  const outside = target.command.replace(quotation, "");
   if (
     questionOrDiscussion.test(outside) ||
     /(?:为什么|是不是|能不能|要不要|会不会|可否|有没有)/u.test(outside)
@@ -610,7 +680,8 @@ function readAttachmentCopy(text: string) {
     return;
   return {
     ordered: clauses.ordered,
-    command,
+    command: target.command,
+    policy: target.policy,
     deviceName: device?.slice(1).find(Boolean)?.trim(),
   };
 }
@@ -635,9 +706,14 @@ function looksLikeDesktopAttachmentDestination(target: string): boolean {
 
 export function desktopFolderAttachmentRequest(
   text: string,
-): (DesktopFolderRequest & { source: "image" | "attachment" }) | undefined {
+):
+  | (DesktopFolderRequest & {
+      source: "image" | "attachment";
+      existingOnly?: true;
+    })
+  | undefined {
   const request = readAttachmentCopy(text);
-  if (!request?.ordered) return;
+  if (!request?.ordered || request.policy === "unsupported") return;
   const copy = attachmentCommand.exec(request.command);
   if (!copy) return;
   const plan = explicitAttachmentTargets(copy[3]);
@@ -647,6 +723,7 @@ export function desktopFolderAttachmentRequest(
     deviceName: request.deviceName,
     steps: ["copy_attachment", "verify"],
     source: attachmentSource(copy[1] ?? copy[2]),
+    ...(request.policy === "existing-only" ? { existingOnly: true } : {}),
   };
 }
 
@@ -690,6 +767,7 @@ type FolderAttachmentSelection = {
   source: AttachmentSource;
   quantity: "single" | "multiple" | "selected";
   attachmentCount?: number;
+  existingOnly?: true;
 };
 export type DesktopFolderBatchAttachmentRequest = DesktopFolderRequest &
   FolderAttachmentSelection & {
@@ -703,12 +781,13 @@ function attachmentSource(reference: string): AttachmentSource {
 function readCompoundAttachment(text: string) {
   const clauses = joinFolderClauses(text);
   if (!clauses) return;
-  const outside = clauses.command.replace(quotation, (literal) =>
+  const target = readAttachmentTargetPolicy(clauses.command);
+  const outside = target.command.replace(quotation, (literal) =>
     " ".repeat(literal.length),
   );
   for (const boundary of outside.matchAll(attachmentCompoundBoundary)) {
-    const folders = clauses.command.slice(0, boundary.index);
-    const files = clauses.command.slice(boundary.index + boundary[0].length);
+    const folders = target.command.slice(0, boundary.index);
+    const files = target.command.slice(boundary.index + boundary[0].length);
     const request = readAttachmentCopy(files);
     if (!request || !readBatchCommand(folders)) continue;
     const copy = anyAttachmentCommand.exec(request.command);
@@ -722,15 +801,23 @@ function readCompoundAttachment(text: string) {
         copy,
         ordered: clauses.ordered,
         fileDeviceName: request.deviceName,
+        policy:
+          target.policy === "create-missing" ? request.policy : target.policy,
       };
   }
 }
 
 export function looksLikeDesktopFolderBatchAttachment(text: string): boolean {
   if (readCompoundAttachment(text)) return true;
-  if (desktopFolderAttachmentFollowup(text)) return true;
   const request = readAttachmentCopy(text);
-  const copy = request && batchAttachmentCommand.exec(request.command);
+  if (!request) return false;
+  const relative = anyAttachmentCommand.exec(request.command);
+  if (
+    relative &&
+    referencedChildTargets.test(attachmentDelivery(relative[3]).target)
+  )
+    return true;
+  const copy = batchAttachmentCommand.exec(request.command);
   return !!copy && looksLikeDesktopAttachmentDestination(copy[3]);
 }
 
@@ -786,7 +873,7 @@ export function desktopFolderAttachmentFollowup(
   text: string,
 ): (FolderAttachmentSelection & { deviceName?: string }) | undefined {
   const request = readAttachmentCopy(text);
-  if (!request?.ordered) return;
+  if (!request?.ordered || request.policy === "unsupported") return;
   const copy = anyAttachmentCommand.exec(request.command);
   const delivery = copy && attachmentSelection(copy);
   if (!delivery || !referencedChildTargets.test(delivery.target)) return;
@@ -797,6 +884,7 @@ export function desktopFolderAttachmentFollowup(
       ? {}
       : { attachmentCount: delivery.attachmentCount }),
     ...(request.deviceName ? { deviceName: request.deviceName } : {}),
+    ...(request.policy === "existing-only" ? { existingOnly: true } : {}),
   };
 }
 
@@ -806,7 +894,11 @@ export function desktopFolderBatchAttachmentRequest(
   const compound = readCompoundAttachment(text);
   const existing = compound ? undefined : readAttachmentCopy(text);
   if (
-    compound ? !compound.ordered || compound.fileDeviceName : !existing?.ordered
+    compound
+      ? !compound.ordered ||
+        compound.fileDeviceName ||
+        compound.policy !== "create-missing"
+      : !existing?.ordered || existing.policy === "unsupported"
   )
     return;
   const copy =
@@ -830,5 +922,6 @@ export function desktopFolderBatchAttachmentRequest(
       : ["copy_attachments", "verify"],
     ...selection,
     mode: compound ? "create" : "existing",
+    ...(existing?.policy === "existing-only" ? { existingOnly: true } : {}),
   };
 }

@@ -14,6 +14,7 @@ import {
   desktopActionSchema,
   desktopDevicePurposeSchema,
   desktopObservationSchema,
+  desktopMissingAttachmentDirectory,
   desktopTaskSchema,
   type DesktopTask,
   type DesktopAction,
@@ -30,6 +31,7 @@ import {
 } from "../../../../../packages/contracts/src/desktop-file-copy.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import {
+  desktopFolderAttachmentTargetPolicy, desktopFolderAttachmentsSchema, desktopFolderCreationPlanSchema,
   desktopFolderAttachmentFollowup, desktopFolderCompoundRequest, desktopFolderCreationRequest, desktopFolderNotesIntent, desktopFolderNotesSteps, desktopFolderSteps,
   folderAttachmentGuidance, folderBatchAttachmentGuidance, folderCompoundGuidance, folderCreationGuidance, folderNotesGuidance,
   looksLikeDesktopFolderBatchAttachment, looksLikeDesktopFolderAttachment, looksLikeDesktopFolderCompound, looksLikeDesktopFolderCreation, looksLikeDesktopFolderNotes,
@@ -853,8 +855,8 @@ export async function queueDesktopTask(
     if (existing) {
       if (
         existing.device_id !== b.deviceId ||
-        (existing.folder_attachment_id ?? null) !== attachmentId ||
-        JSON.stringify(existing.folder_attachments?.map((f: {id: string}) => f.id) ?? []) !== JSON.stringify(manifest ? attachmentIds : []) ||
+        JSON.stringify(existing.folder_attachments?.map((f: {id: string}) => f.id) ??
+          (existing.folder_attachment_id ? [existing.folder_attachment_id] : [])) !== JSON.stringify(attachmentIds) ||
         (existing.previous_task_id ?? null) !== previousId ||
         (existing.folder_source_task_id ?? null) !== (context?.folderSource?.taskId ?? null) ||
         existing.instruction !== b.instruction ||
@@ -1264,6 +1266,45 @@ export async function controlMacFileCopy(
   });
 }
 
+async function restoreMissingAttachmentDirectories(c: Context, task: Row, device: Row) {
+  if (task.status !== "NEEDS_USER" ||
+      (task.native_action !== "copy_folder_attachment" && task.native_action !== "copy_folder_attachments") ||
+      desktopFolderAttachmentTargetPolicy(task.instruction) !== "create-missing")
+    return;
+  const plan = desktopFolderCreationPlanSchema.safeParse(task.folder_creation);
+  if (!plan.success || !desktopMissingAttachmentDirectory(task.stage, plan.data)) return;
+  if (!device.folder_attachments)
+    fail("FOLDER_ATTACHMENT_UPDATE_REQUIRED", "请更新原 Windows 电脑的小序桌面端并重新连接，再继续补齐指定目录和附件。", 409);
+
+  const files = desktopFolderAttachmentsSchema.safeParse(task.folder_attachments ??
+    [{...task.folder_attachment, id: task.folder_attachment_id}]);
+  if (!files.success) fail("FOLDER_ATTACHMENT_UNAVAILABLE", "原任务的附件信息不完整，请重新选择附件。", 409);
+  const restored = await one(db, `WITH receiver AS (
+      SELECT id,user_id,authorization_id FROM assistant_desktop_devices
+      WHERE id=$3::uuid AND user_id=$2::bigint AND authorization_id=$4::uuid AND platform='windows'
+        AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()
+        AND native_actions AND folder_creation AND folder_attachment AND folder_attachments
+        AND last_seen_at>now()-interval '20 seconds' AND engine_seen_at>now()-interval '20 seconds' FOR UPDATE
+    )
+    UPDATE assistant_desktop_tasks t SET status='WAITING',native_action='create_folders_with_attachments',
+      stage='等待原电脑补齐指定的父目录或子目录，复制并核验全部附件',
+      folder_steps=$7::jsonb,folder_attachments=$6::jsonb,folder_attachment=NULL,folder_attachment_id=NULL,
+      planning_id=NULL,planning_at=NULL,pending=NULL,started_at=NULL,delivered_at=NULL,updated_at=now()
+    FROM receiver d WHERE t.id=$1::uuid AND t.user_id=d.user_id AND t.device_id=d.id AND t.authorization_id=d.authorization_id
+      AND t.xmin::text=$5 AND t.status='NEEDS_USER' AND t.native_action IN ('copy_folder_attachment','copy_folder_attachments')
+      AND (t.folder_source_task_id IS NULL OR EXISTS (SELECT 1 FROM assistant_desktop_tasks source
+        WHERE source.id=t.folder_source_task_id AND source.user_id=t.user_id AND source.device_id=t.device_id
+          AND source.authorization_id=t.authorization_id AND source.status='DONE' AND source.last_ack IS NOT NULL
+          AND source.folder_creation=t.folder_creation))
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements($6::jsonb) file WHERE NOT EXISTS (
+        SELECT 1 FROM personal_assistant_files f WHERE f.id=(file->>'id')::uuid AND f.user_id=t.user_id
+          AND f.name=file->>'name' AND f.size=(file->>'bytes')::integer))
+    RETURNING t.*`, task.id,c.actor.id,task.device_id,task.authorization_id,task.control_revision,
+    JSON.stringify(files.data),JSON.stringify(desktopFolderSteps("create_folders_with_attachments")));
+  if (!restored) fail("FOLDER_TASK_CHANGED", "原任务、附件或设备授权已变化，请重新核对。", 409);
+  return desktopTaskView(restored);
+}
+
 export async function desktopControl(
   c: Context,
   taskId: string,
@@ -1528,6 +1569,8 @@ export async function desktopControl(
         "请在本机打开最新版桌面端并记住操作授权，再继续本机任务",
         409,
       );
+    const restored = await restoreMissingAttachmentDirectories(c, old, resumeDevice);
+    if (restored) return restored;
     // An explicit continue may upgrade an old, never-started task. A previous
     // input, approval or planning attempt must retain its original workflow.
     const upgrade =

@@ -211,6 +211,7 @@ beforeAll(async () => {
     "123_desktop_folder_batch_notes.sql",
     "124_desktop_folder_attachment.sql",
     "125_desktop_folder_attachments.sql",
+    "126_desktop_attachment_directory_repair.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -1049,7 +1050,7 @@ describe("assistant business tools and private memory", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
   const noteInstruction = "在每个子文件夹内新建一个记事本，命名按文件夹名命名";
-  const attachmentInstruction = '把这张图复制到桌面 “测试自动化9999” 下的100个子文件夹（XUTI-01 至 XUTI-100），每个文件夹一份，保留图片原名。';
+  const attachmentInstruction = '把这张图复制到桌面 “测试自动化9999” 下的100个子文件夹（XUTI-01 至 XUTI-100），每个文件夹一份，保留图片原名，不要新建文件夹。';
   const attachmentCapabilities = { nativeActions:true, folderCreation:true, folderAttachment:true };
   async function attachmentDevice() {
     const deviceId = randomUUID(), authorizationId = randomUUID();
@@ -1129,8 +1130,8 @@ describe("assistant business tools and private memory", () => {
     expect((await pollDesktop(c,deviceId,false,attachmentCapabilities)).task).toBeNull();
     const poll = async () => (await pollDesktop(c,deviceId,false,manifestCapabilities)).task!;
     const delivery = await poll();
-    expect(delivery.nativeAction).toBe(automatic ? "create_folders_with_attachments" : "copy_folder_attachments");
-    expect(delivery.folderSteps).toEqual([...(automatic ? ["ensure_directories"] : []), "copy_attachments","verify"]);
+    expect(delivery.nativeAction).toBe("create_folders_with_attachments");
+    expect(delivery.folderSteps).toEqual(["ensure_directories","copy_attachments","verify"]);
     const first = {authorizationId, attemptId:delivery.folderCreationAttemptId};
     await expect(downloadFolderAttachment(c, deviceId,id,{...first,fileId:files[0].id})).rejects.toThrow();
     await controlFolderCreation(c,deviceId,id,{action:"start",...first});
@@ -1163,11 +1164,85 @@ describe("assistant business tools and private memory", () => {
       const followId = followup.messages.at(-1)?.desktopTaskId;
       assert.isString(followId);
       const row = (await fixture.database!.query("SELECT native_action,folder_source_task_id,folder_creation FROM assistant_desktop_tasks WHERE id=$1", [followId])).rows[0];
-      expect(row).toMatchObject({native_action:"copy_folder_attachments",folder_source_task_id:id,folder_creation:delivery.folderCreation});
+      expect(row).toMatchObject({native_action:"create_folders_with_attachments",folder_source_task_id:id,folder_creation:delivery.folderCreation});
+      // Older servers issued relative targets as copy-only. Resume keeps the same verified source and folders.
+      await fixture.database!.query(`UPDATE assistant_desktop_tasks SET native_action='copy_folder_attachments',
+        folder_steps='["copy_attachments","verify"]'::jsonb WHERE id=$1`, [followId]);
+      const legacy = (await poll()).folderCreationAttemptId;
+      await controlFolderCreation(c,deviceId,followId,{action:"start",authorizationId,attemptId:legacy});
+      await desktopControl(c,followId,{action:"handoff",startupFailure:true,attemptId:legacy,
+        note:"无法核对目录 测试自动化666（Windows 3）。"},deviceId);
+      const repaired = await desktopControl(c,followId,{action:"resume"});
+      expect(repaired).toMatchObject({id:followId,nativeAction:"create_folders_with_attachments",
+        folderAttachments:[{id:files[1].id}],folderCreation:delivery.folderCreation});
+      expect((await fixture.database!.query("SELECT folder_source_task_id FROM assistant_desktop_tasks WHERE id=$1", [followId])).rows)
+        .toEqual([{folder_source_task_id:id}]);
       await desktopControl(c,followId,{action:"stop"});
     }
     for (const file of files) expect(await deleteAgentFile(c,file.id)).toEqual({deleted:true});
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([1,2])("repairs a legacy copy-only card with %i bound files only after an explicit missing-directory handoff and resume", async count => {
+    const c = actor(), {deviceId, authorizationId} = await attachmentDevice();
+    await pollDesktop(c, deviceId, false, manifestCapabilities);
+    const files = await Promise.all(Array.from({length:count}, (_,i) =>
+      saveAgentFile(c, "附件"+i+".txt","text/plain",Buffer.from("test"+i),"upload")));
+    const request = {deviceId,requestId:randomUUID(),attachmentIds:files.map(f => f.id), instruction:existingAttachments};
+    const strict = request.instruction + "，不要新建文件夹。";
+    const original = await queueDesktopTask(c,{...request,instruction:strict});
+    const copyAction = count === 1 ? "copy_folder_attachment" : "copy_folder_attachments";
+    expect(original.nativeAction).toBe(copyAction);
+    // Pre-126 tasks used copy-only even without a restriction. Preserve their original payload and immutable file bindings.
+    await fixture.database!.query("UPDATE assistant_desktop_tasks SET instruction=$2 WHERE id=$1",[original.id,request.instruction]);
+    expect((await queueDesktopTask(c,request)).id).toBe(original.id);
+    const poll = () => pollDesktop(c,deviceId,false,manifestCapabilities);
+    const attemptId = (await poll()).task!.folderCreationAttemptId;
+    const claim = {authorizationId, attemptId};
+    await controlFolderCreation(c, deviceId, original.id, {action:"start", ...claim});
+    const missing = "无法核对目录 春款（Windows 2）。";
+    const handoff = await desktopControl(c,original.id,{action:"handoff",startupFailure:true,attemptId,note:missing},deviceId);
+    expect(handoff).toMatchObject({status:"NEEDS_USER",nativeAction:copyAction,stage:missing});
+    await expect(downloadFolderAttachment(c,deviceId,original.id,count === 1 ? claim : {...claim,fileId:files[0].id})).rejects.toThrow();
+    await expect(deleteAgentFile(c,files[0].id)).rejects.toThrow();
+    await fixture.database!.query("UPDATE assistant_desktop_devices SET authorization_id=$2 WHERE id=$1", [deviceId,randomUUID()]);
+    await expect(desktopControl(c,original.id,{action:"resume"})).rejects.toThrow();
+    await fixture.database!.query("UPDATE assistant_desktop_devices SET authorization_id=$2 WHERE id=$1", [deviceId,authorizationId]);
+    const restored = await desktopControl(c, original.id,{action:"resume"});
+    expect(restored).toMatchObject({id:original.id,status:"WAITING",nativeAction:"create_folders_with_attachments",
+      folderCreation:original.folderCreation,folderSteps:["ensure_directories","copy_attachments","verify"]});
+    expect(restored.folderAttachments?.map(f => f.id)).toEqual(request.attachmentIds);
+    expect(await queueDesktopTask(c,request)).toMatchObject({id:original.id,nativeAction:restored.nativeAction});
+    await expect(controlFolderCreation(c,deviceId,original.id,{action:"start",...claim})).rejects.toThrow();
+    expect((await pollDesktop(c,deviceId,false,attachmentCapabilities)).task).toBeNull();
+    const current = (await poll()).task!;
+    expect(current.folderCreationAttemptId).not.toBe(attemptId);
+    const next = {authorizationId,attemptId:current.folderCreationAttemptId};
+    await controlFolderCreation(c,deviceId,current.id,{action:"start",...next});
+    for (const [i,f] of files.entries())
+      expect(await downloadFolderAttachment(c,deviceId,current.id,{...next,fileId:f.id})).toEqual(Buffer.from("test"+i));
+    await expect(controlFolderCreation(c,deviceId,current.id,{action:"complete",...claim,verifiedCount:3,
+      sha256s:current.folderAttachments!.map(f => f.sha256)})).rejects.toThrow();
+    const done = await controlFolderCreation(c,deviceId,current.id,{action:"complete",...next,verifiedCount:3,
+      sha256s:current.folderAttachments!.map(f => f.sha256)});
+    expect(done.stage).toContain(String(3*count)+" 份副本");
+  });
+  it.each([
+    [true,"无法核对目录 春款（Windows 2）。"],
+    [false,"无法核对目录 别的目录（Windows 2）。"],
+    [false,"无法核对目录 春款（Windows 5）。"],
+    [false,"有同名文件的内容与附件不同，请核对已有文件。"],
+  ] as const)("preserves the original copy scope on resume when restricted=%s, reason=%s", async (restricted,reason) => {
+    const c = actor(), {deviceId,authorizationId} = await attachmentDevice();
+    await pollDesktop(c,deviceId,false,manifestCapabilities);
+    const file = await saveAgentFile(c,"样品.txt","text/plain",Buffer.from("unchanged"),"upload");
+    const strict = existingAttachments+"，不要新建文件夹";
+    const original = await queueDesktopTask(c,{deviceId,requestId:randomUUID(),attachmentIds:[file.id],instruction:strict});
+    if (!restricted) await fixture.database!.query("UPDATE assistant_desktop_tasks SET instruction=$2 WHERE id=$1",[original.id,existingAttachments]);
+    const attemptId=(await pollDesktop(c,deviceId,false,manifestCapabilities)).task!.folderCreationAttemptId;
+    await controlFolderCreation(c,deviceId,original.id,{action:"start",authorizationId,attemptId});
+    await desktopControl(c,original.id,{action:"handoff",startupFailure:true,attemptId,note:reason},deviceId);
+    expect(await desktopControl(c,original.id,{action:"resume"})).toMatchObject({
+      status:"WAITING",nativeAction:"copy_folder_attachment",folderAttachment:original.folderAttachment,folderSteps:["copy_attachment","verify"]});
   });
   it("explains wrong selection, invalid scopes, duplicate Windows names and older receivers before dispatch", async () => {
     const c = actor(), {deviceId} = await attachmentDevice();
@@ -1181,6 +1256,8 @@ describe("assistant business tools and private memory", () => {
     await expect(send(existingAttachments,[files[0].id,files[1].id])).rejects.toMatchObject({response:{error:{message:expect.stringMatching(/sample.TXT.*同名/i)}}});
     await expect(send(existingAttachments,[files[0].id,files[0].id])).rejects.toMatchObject({response:{error:{message:expect.stringContaining("重复")}}});
     await expect(send(existingAttachments,[files[0].id,files[2].id])).rejects.toMatchObject({response:{error:{message:expect.stringContaining("当前账号")}}});
+    await expect(send("把这些附件复制到刚才建好的每个子目录，缺少的跳过",[files[0].id]))
+      .rejects.toMatchObject({response:{error:{code:"INVALID_FOLDER_ATTACHMENT",message:expect.stringContaining("跳过")}}});
     await expect(send(compoundImages+"，再打开图片",[files[0].id])).rejects.toMatchObject({response:{error:{message:expect.stringContaining("子文件夹")}}});
     expect((await fixture.database!.query("SELECT * FROM assistant_desktop_tasks")).rows).toHaveLength(0);
     expect((await readAssistant(c)).version).toBe(0);
