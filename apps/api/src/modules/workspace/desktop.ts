@@ -554,7 +554,7 @@ export async function setDesktopAuthorization(
     );
     if (!enabled)
       await tx.$executeRawUnsafe(
-        "UPDATE assistant_desktop_tasks SET status='PAUSED',stage=CASE WHEN browser_only THEN '本机授权已撤销，请在小序桌面端重新允许浏览器任务' ELSE '跨窗口授权已撤销，请在本机选择窗口后继续' END,authorization_id=NULL,pending=NULL,planning_id=NULL,file_copy_phase=NULL,updated_at=now() WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])",
+        "UPDATE assistant_desktop_tasks SET status='PAUSED',stage=CASE WHEN native_action='copy_finder_files' THEN 'Finder 授权已撤销，请在 Mac 的 Finder 助手重新开始接单' WHEN browser_only THEN '本机授权已撤销，请在小序桌面端重新允许浏览器任务' ELSE '跨窗口授权已撤销，请在本机选择窗口后继续' END,authorization_id=NULL,pending=NULL,planning_id=NULL,file_copy_phase=NULL,updated_at=now() WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])",
         deviceId,
         c.actor.id,
         active,

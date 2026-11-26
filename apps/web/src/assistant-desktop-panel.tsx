@@ -307,7 +307,9 @@ export function AssistantDesktopPanel({
                         `/my-workspace/assistant/desktop/devices/${d.id}/authorization/revoke`,
                         "POST",
                       );
-                      message.success("跨窗口授权已撤销，当前电脑任务已暂停");
+                      message.success(d.platform === "macos"
+                        ? "Finder 授权已撤销，当前电脑任务已暂停"
+                        : "跨窗口授权已撤销，当前电脑任务已暂停");
                     })
                   }
                 >

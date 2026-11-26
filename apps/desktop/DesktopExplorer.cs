@@ -88,15 +88,15 @@ static partial class Native {
         string previous;
         views[handle]=views.TryGetValue(handle,out previous) && !SameFolder(previous,path) ? null : path;
     }
-    static async Task<Dictionary<IntPtr,string>> ShellFolders() {
+    static async Task<Dictionary<IntPtr,string>> ShellFolders(int waitMs=2500) {
         Task<Dictionary<IntPtr,string>> scan;
         lock(shellScanLock) {
             if(activeShellScan==null || activeShellScan.IsCompleted)
                 activeShellScan=Task.Run((Func<Dictionary<IntPtr,string>>)ReadShellFolders);
             scan=activeShellScan;
         }
-        if(await Task.WhenAny(scan,Task.Delay(2500))!=scan)
-            throw new Exception("资源管理器未响应。请在本机打开桌面文件夹，再继续原任务。");
+        if(await Task.WhenAny(scan,Task.Delay(waitMs))!=scan)
+            throw new Exception("资源管理器未及时返回目录。请打开指定的文件夹后继续任务。");
         try {return await scan;}
         catch {throw new Exception("无法核对资源管理器中的桌面目录。请在本机选择目标文件夹窗口后继续。");}
     }
@@ -114,16 +114,21 @@ static partial class Native {
     }
     public static async Task<WindowChoice> OpenExplorerDirectory(IntPtr own,string directory,Action check) {
         check();CheckInputDesktop();
-        var target=SelectExplorer(own,await ShellFolders(),directory);
+        // A fresh Windows session can have no folder window and an uninitialized
+        // Shell automation server. Launch the requested folder before querying COM.
+        WindowChoice target=null;
+        if(Windows(own).Any(w=>IsExplorerFolderWindow(w.Handle)))
+            target=SelectExplorer(own,await ShellFolders(12000),directory);
         if(target==null) {
             check(); CheckInputDesktop();
             // Callers supply only the Windows desktop or an explicitly requested, verified physical folder.
             string argument=directory.EndsWith("\\",StringComparison.Ordinal) ? directory+"." : directory;
             using(Process.Start(new ProcessStartInfo(systemExplorer,"/n,\""+argument+"\""){UseShellExecute=false})) {}
             var elapsed=Stopwatch.StartNew();
-            while(elapsed.ElapsedMilliseconds<8000 && target==null) {
+            while(elapsed.ElapsedMilliseconds<20000 && target==null) {
                 await Task.Delay(250);check();
-                target=SelectExplorer(own,await ShellFolders(),directory);
+                if(Windows(own).Any(w=>IsExplorerFolderWindow(w.Handle)))
+                    target=SelectExplorer(own,await ShellFolders(12000),directory);
             }
         }
         check();CheckInputDesktop();

@@ -31,6 +31,8 @@ const resultLabels: Record<StepReceipt["result"], string> = {
 
 function handoffHint(task: DesktopTask, device?: DesktopDevice) {
   if (task.status !== "NEEDS_USER" && task.status !== "PAUSED") return;
+  if (task.nativeAction === "copy_finder_files")
+    return "请在 Mac 核对源文件和目标文件夹，确认 Finder 助手正在接单，再点「继续当前任务」。";
   if (task.stage.includes("遮挡") || task.stage.includes("弹出菜单已变化")) {
     if (
       !task.localBrowser &&

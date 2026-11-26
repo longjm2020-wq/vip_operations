@@ -12,6 +12,7 @@ using System.Windows.Forms;
 // real selection and its real clipboard owner. No server token or model needed.
 public class ExplorerCopySmoke {
     [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
+    [DllImport("user32.dll")] static extern IntPtr GetShellWindow();
     [DllImport("user32.dll", SetLastError=true)] static extern bool GetUserObjectInformation(
         IntPtr handle, int index, out StationFlags value, uint size, out uint needed);
     [StructLayout(LayoutKind.Sequential)] struct StationFlags { public int inherit, reserved, flags; }
@@ -61,6 +62,17 @@ public class ExplorerCopySmoke {
         await (Task)Native("Execute",window,shot,action,check,null,session);
     }
     async Task Transfer(string fixture,IntPtr own) {
+        Console.WriteLine("Interactive session {0}; shell HWND before fixture startup: {1}",
+            Process.GetCurrentProcess().SessionId,GetShellWindow());
+        if(GetShellWindow()==IntPtr.Zero) {
+            // GitHub's disposable interactive logon may start the runner before
+            // its normal Explorer shell. Start only the OS-installed default shell.
+            var explorer=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe");
+            using(Process.Start(new ProcessStartInfo(explorer){UseShellExecute=false})) {}
+            var wait=Stopwatch.StartNew();
+            while(GetShellWindow()==IntPtr.Zero && wait.ElapsedMilliseconds<20000)await Task.Delay(250);
+            Console.WriteLine("Shell HWND after startup: {0}",GetShellWindow());
+        }
         var source=Directory.CreateDirectory(Path.Combine(fixture,"source")).FullName;
         var target=Directory.CreateDirectory(Path.Combine(fixture,"target")).FullName;
         var nested=Directory.CreateDirectory(Path.Combine(source,"nested")).FullName;
