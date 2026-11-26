@@ -1,7 +1,7 @@
 import type {
   AssistantConversation,
   AssistantMessage,
-} from "../../../packages/contracts/src/personal-assistant";
+} from "../../../packages/contracts/src/personal-assistant.js";
 
 const checkIntervalMs = 3_000;
 // Match the server's limit for a reserved conversation turn.
@@ -38,7 +38,7 @@ export async function recoverAssistantSend(input: {
     if (!input.isCurrent()) return;
     if (conversation) {
       const index = conversation.messages.findIndex(
-        (message) => message.role === "user" && message.id === input.requestId,
+        (message) => message.role === "user" && (message.attemptId ?? message.id) === input.requestId,
       );
       if (index < 0) return;
       const reply = conversation.messages[index + 1];

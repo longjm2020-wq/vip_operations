@@ -12,6 +12,26 @@ import {
 } from "../../packages/contracts/src/assistant-execution.js";
 
 describe("workbench execution from direct instructions", () => {
+  it("keeps the screenshot's folder creation and contents copy together", () => {
+    const source = String.raw`D:\Desktop\AI0520`;
+    const expected = { source, destination: "自动化112601", destinationKind: "newDesktopFolder", selection: "contents" };
+    for (const scope of ["在我的电脑桌面", "在我的电脑", "在桌面上", "在电脑「样品室」的桌面"]) {
+      const message = scope + '新建文件夹"自动化112601"，并将路径' + source + "下的内容复制进来";
+      expect(desktopFileCopyIntent(message)).toEqual(expected);
+      expect(desktopFileCopyIntent(message, "macos")).toBeUndefined();
+      expect(classifyAssistantExecution(message)).toEqual(scope.includes("样品室") ? {kind: "desktop", deviceName: "样品室"} : {kind: "desktop"});
+    }
+    const copy = (name: string, from: string) => '在我的电脑新建文件夹「' + name + '」，并将路径' + from + '下的所有内容复制进来';
+    for (const name of ["..", "A/B", "CON", "A.", "新建:测试", ".hidden"])
+      expect(desktopFileCopyIntent(copy(name, source))).toBeUndefined();
+    for (const from of [".", "AI0520", String.raw`D:\..\样品`, String.raw`\\server\share`])
+      expect(desktopFileCopyIntent(copy("样品", from))).toBeUndefined();
+    const valid = copy("归档", source);
+    for (const message of [valid + "，并删除原目录", "不要" + valid, "如何" + valid, valid + "吗？"])
+      expect(desktopFileCopyIntent(message)).toBeUndefined();
+    expect(desktopFileCopyIntent(valid.replace("内容", "文件"))?.selection).toBe("files");
+    expect(desktopFileCopyIntent(valid.replace("在我的电脑", ""))).toBeUndefined();
+  });
   it("preserves original file names, platform and the scope of the selected shortcuts", () => {
     expect(desktopFileCopyIntent("请在 Mac 上用 Command+C 和 Command+V 把「~/样品/Ａ 雪.txt」复制到「~/核对」", "macos")).toEqual({
       source: "~/样品/Ａ 雪.txt", destination: "~/核对", selection: "file",

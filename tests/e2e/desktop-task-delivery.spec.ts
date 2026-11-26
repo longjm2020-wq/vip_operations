@@ -202,6 +202,92 @@ test("工作台自动区分记事本连续输入、普通提问与网页任务�
   }
 });
 
+test("在工作台一句话新建桌面文件夹并复制内容，升级后重试只派一单", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const name = "桌面资料复制回归设备";
+  const { client, deviceId, revoke } = await pairTestReceiver(
+    page,
+    request,
+    baseURL!,
+    name,
+  );
+  const receiving = {
+    desktopExplorer: true,
+    fileCopyShortcuts: true,
+    nativeActions: true,
+  };
+  const source = "D:\\Desktop\\AI0520";
+  const instruction = `在我的电脑桌面新建文件夹"自动化112601"，并将路径${source}下的内容复制进来`;
+  try {
+    await client("authorization", { enabled: true });
+    await client("poll", receiving);
+    await page.goto("/my-workspace");
+    await selectAssistantPanel(page, "我的电脑");
+    await page
+      .locator(".assistant-desktop-item")
+      .filter({ hasText: name })
+      .getByRole("button", { name: "设为常用电脑" })
+      .click();
+    await page
+      .locator(".assistant-desktop-panel")
+      .getByRole("button", { name: "下达指令", exact: true })
+      .click();
+    const composer = page.locator(".assistant-compose:visible");
+    const draft = composer.getByRole("textbox");
+    const send = composer.getByRole("button", { name: "发送给个人助理" });
+    await draft.fill(instruction);
+    const [firstAttempt] = await Promise.all([
+      page.waitForResponse((res) =>
+        res.request().method() === "POST" &&
+        new URL(res.url()).pathname === "/api/v1/my-workspace/assistant"
+      ),
+      send.click(),
+    ]);
+    expect((await firstAttempt.json()).data.state).toBe("FAILED");
+    await expect(page.getByText(/请在所选 Windows 电脑下载并启动 1\.2\.13/).first()).toBeVisible();
+    await expect(draft).toHaveValue(instruction);
+    expect((await client("poll", receiving)).task).toBeNull();
+
+    const updated = { ...receiving, desktopFolderCopy: true };
+    await client("poll", updated);
+    await send.click();
+    const card = page
+      .getByRole("region", { name: "电脑任务：" + instruction })
+      .filter({ visible: true })
+      .first();
+    await expect(card).toContainText(instruction);
+    const { task } = await client("poll", updated);
+    expect(task).toMatchObject({
+      deviceId,
+      status: "WAITING",
+      fileCopy: {
+        source,
+        destination: "自动化112601",
+        selection: "contents",
+        destinationKind: "newDesktopFolder",
+      },
+    });
+    const assistant = await page.request.get("/api/v1/my-workspace/assistant");
+    const { messages } = (await assistant.json()).data;
+    expect(
+      messages.filter(
+        (m: { role: string; text: string }) =>
+          m.role === "user" && m.text === instruction,
+      ),
+    ).toHaveLength(1);
+    expect(
+      messages.filter(
+        (m: { desktopTaskId?: string }) => m.desktopTaskId === task.id,
+      ),
+    ).toHaveLength(1);
+  } finally {
+    await revoke();
+  }
+});
+
 test("从小序聊天将文件复制交给配对的 Mac，原任务卡显示 Finder 回执", async ({
   page,
   request,

@@ -170,6 +170,7 @@ export type DesktopDevice = {
 };
 export type DesktopTask = {
   id: string;
+  requestId?: string;
   deviceId: string;
   deviceName?: string;
   instruction: string;

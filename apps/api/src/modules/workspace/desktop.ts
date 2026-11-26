@@ -22,6 +22,8 @@ import {
   desktopFileCopyIntent,
   desktopFileCopyDeviceName,
   mentionsDesktopFileCopy,
+  looksLikeDesktopFolderCopy,
+  desktopFolderCopyGuidance,
   type DesktopPlatform,
 } from "../../../../../packages/contracts/src/desktop-file-copy.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
@@ -317,6 +319,9 @@ function desktopStepReceipts(
 export function desktopTaskView(row: Row): DesktopTask {
   return {
     id: row.id,
+    ...(row.file_copy_flow || row.native_action === "copy_finder_files"
+      ? { requestId: row.request_id }
+      : {}),
     deviceId: row.device_id,
     deviceName: row.device_name,
     instruction: row.instruction,
@@ -604,6 +609,17 @@ export async function queueDesktopTask(
     b.model ?? null,
   );
   const mac = capability?.platform === "macos";
+  const windowsSpec = desktopFileCopyIntent(b.instruction);
+  const createsDesktopFolder =
+    windowsSpec?.destinationKind === "newDesktopFolder";
+  const compoundRequest = looksLikeDesktopFolderCopy(b.instruction);
+  if (mac && (createsDesktopFolder || compoundRequest))
+    fail("DEVICE_PLATFORM_MISMATCH", desktopFolderCopyGuidance.platform, 400);
+  if (
+    compoundRequest &&
+    (!createsDesktopFolder || previousId || b.localBrowser)
+  )
+    fail("INVALID_COMPOUND_COPY", desktopFolderCopyGuidance.format, 400);
   if (
     mac &&
     (previousId ||
@@ -621,11 +637,7 @@ export async function queueDesktopTask(
       "这条指令使用 Mac 路径，请选择对应的 Mac 电脑",
       400,
     );
-  const winCopy =
-    !mac &&
-    !previousId &&
-    !b.localBrowser &&
-    !!desktopFileCopyIntent(b.instruction);
+  const winCopy = !mac && !previousId && !b.localBrowser && !!windowsSpec;
   const namedDevice =
     (mac || winCopy) && desktopFileCopyDeviceName(b.instruction);
   if (
@@ -685,11 +697,13 @@ export async function queueDesktopTask(
     }
     const d = await one(
       tx,
-      "SELECT id,platform,file_copy_shortcuts,authorization_id,native_actions,window_continuations,retained_task_id,engine_seen_at>now()-interval '20 seconds' AS engine_ready,local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds' FOR UPDATE",
+      "SELECT id,platform,file_copy_shortcuts,desktop_folder_copy,authorization_id,native_actions,window_continuations,retained_task_id,engine_seen_at>now()-interval '20 seconds' AS engine_ready,local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds' FOR UPDATE",
       b.deviceId,
       c.actor.id,
     );
     if (!d) fail("DEVICE_OFFLINE", "请先打开本机助手并连接电脑", 409);
+    if (createsDesktopFolder && !d.desktop_folder_copy)
+      fail("DESKTOP_FOLDER_COPY_UPDATE", desktopFolderCopyGuidance.update, 409);
     if ((mac || d.native_actions !== null) && !d.engine_ready)
       fail("DEVICE_ENGINE_UNAVAILABLE", engineUnavailable, 409);
     if (winCopy && (!d.file_copy_shortcuts || !d.engine_ready))
@@ -755,22 +769,24 @@ export async function queueDesktopTask(
       fail("DESKTOP_BUSY", "这台电脑已有任务，请完成或停止后再发送", 409);
     const row = await one(
       tx,
-      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only,native_action,authorization_id,previous_task_id,window_id,window_name,application,file_copy_flow) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8,$9,$10::uuid,$11::uuid,$12::uuid,$13,$14,$15) RETURNING *",
+      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only,native_action,authorization_id,previous_task_id,window_id,window_name,application,file_copy_flow,creates_desktop_folder) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8,$9,$10::uuid,$11::uuid,$12::uuid,$13,$14,$15,$16) RETURNING *",
       randomUUID(),
       b.deviceId,
       c.actor.id,
       b.requestId,
       b.instruction,
       model?.id ?? null,
-      previous
-        ? "等待本机核对上次操作的窗口"
-        : b.localBrowser
-          ? d.authorization_id
-            ? "等待小序桌面端按授权操作已打开的网页"
-            : "请先在小序桌面端打开目标网页，再允许本次任务"
-          : d.authorization_id
-            ? "等待本机按设备授权开始"
-            : "请在本机助手选择窗口并允许本次任务",
+      createsDesktopFolder
+        ? "等待本机在桌面新建文件夹并复制指定内容"
+        : previous
+          ? "等待本机核对上次操作的窗口"
+          : b.localBrowser
+            ? d.authorization_id
+              ? "等待小序桌面端按授权操作已打开的网页"
+              : "请先在小序桌面端打开目标网页，再允许本次任务"
+            : d.authorization_id
+              ? "等待本机按设备授权开始"
+              : "请在本机助手选择窗口并允许本次任务",
       !!b.localBrowser,
       nativeAction ?? null,
       nativeAction || previous || winCopy ? d.authorization_id : null,
@@ -779,6 +795,7 @@ export async function queueDesktopTask(
       previous?.window_name ?? "",
       previous?.application ?? "",
       winCopy,
+      createsDesktopFolder,
     );
     return desktopTaskView(row!);
   });
@@ -1101,7 +1118,7 @@ export async function desktopControl(
     b.action === "resume"
       ? await one(
           db,
-          "SELECT platform,file_copy_shortcuts,authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
+          "SELECT platform,file_copy_shortcuts,desktop_folder_copy,authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
           old.device_id,
           c.actor.id,
         )
@@ -1120,6 +1137,8 @@ export async function desktopControl(
       );
     if (!resumeDevice?.online)
       fail("DEVICE_OFFLINE", "请先恢复所选电脑的连接", 409);
+    if (old.creates_desktop_folder && !resumeDevice.desktop_folder_copy)
+      fail("DESKTOP_FOLDER_COPY_UPDATE", desktopFolderCopyGuidance.update, 409);
     if (
       old.file_copy_flow &&
       (!resumeDevice.file_copy_shortcuts || !resumeDevice.authorization_id)
@@ -1208,7 +1227,7 @@ export async function desktopControl(
   // Resuming discards an unexecuted pending command. Local executor never replays uncertain inputs.
   const row = await one(
     db,
-    "UPDATE assistant_desktop_tasks SET status=$3,stage=$4,planning_id=NULL,pending=NULL,file_copy_phase=NULL,window_name=COALESCE($5,window_name),application=COALESCE($6,application),window_id=CASE WHEN $3='RUNNING' THEN $8::uuid ELSE window_id END,authorization_id=CASE WHEN $3='RUNNING' OR ($3='WAITING' AND (native_action IS NOT NULL OR file_copy_flow)) THEN $9::uuid ELSE authorization_id END,delivered_at=CASE WHEN $3='WAITING' THEN NULL ELSE delivered_at END,started_at=CASE WHEN $3='RUNNING' THEN now() ELSE started_at END,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND status=$7 AND ($10::uuid IS NULL OR planning_id=$10::uuid) AND ($3<>'RUNNING' OR EXISTS(SELECT 1 FROM assistant_desktop_devices d WHERE d.id=device_id AND d.revoked_at IS NULL AND d.token_hash IS NOT NULL AND d.expires_at>now() AND ($9::uuid IS NULL OR d.authorization_id=$9::uuid) AND (previous_task_id IS NULL OR (assistant_desktop_tasks.authorization_id=$9::uuid AND window_id=$8::uuid AND application=$6 AND d.window_continuations AND d.retained_task_id=previous_task_id)) AND (NOT browser_only OR d.local_browser_seen_at>now()-interval '20 seconds'))) RETURNING *",
+    "UPDATE assistant_desktop_tasks SET status=$3,stage=$4,planning_id=NULL,pending=NULL,file_copy_phase=NULL,window_name=COALESCE($5,window_name),application=COALESCE($6,application),window_id=CASE WHEN $3='RUNNING' THEN $8::uuid ELSE window_id END,authorization_id=CASE WHEN $3='RUNNING' OR ($3='WAITING' AND (native_action IS NOT NULL OR file_copy_flow)) THEN $9::uuid ELSE authorization_id END,delivered_at=CASE WHEN $3='WAITING' THEN NULL ELSE delivered_at END,started_at=CASE WHEN $3='RUNNING' THEN now() ELSE started_at END,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND status=$7 AND ($10::uuid IS NULL OR planning_id=$10::uuid) AND ($3<>'RUNNING' OR EXISTS(SELECT 1 FROM assistant_desktop_devices d WHERE d.id=device_id AND d.revoked_at IS NULL AND d.token_hash IS NOT NULL AND d.expires_at>now() AND ($9::uuid IS NULL OR d.authorization_id=$9::uuid) AND (NOT creates_desktop_folder OR (d.platform='windows' AND d.desktop_folder_copy AND d.file_copy_shortcuts AND d.authorization_id=assistant_desktop_tasks.authorization_id AND assistant_desktop_tasks.status='WAITING' AND delivered_at>now()-interval '30 seconds' AND d.engine_seen_at>now()-interval '20 seconds')) AND (previous_task_id IS NULL OR (assistant_desktop_tasks.authorization_id=$9::uuid AND window_id=$8::uuid AND application=$6 AND d.window_continuations AND d.retained_task_id=previous_task_id)) AND (NOT browser_only OR d.local_browser_seen_at>now()-interval '20 seconds'))) RETURNING *",
     taskId,
     c.actor.id,
     status,
@@ -1242,11 +1261,21 @@ export async function pollDesktop(
     desktopExplorer?: boolean;
     platform?: DesktopPlatform;
     fileCopyShortcuts?: boolean;
+    desktopFolderCopy?: boolean;
     retainedTaskId?: string | null;
     statusOnly?: boolean;
   } = {},
 ) {
   const platform = options.platform ?? "windows";
+  if (
+    options.desktopFolderCopy &&
+    (platform !== "windows" || !options.fileCopyShortcuts)
+  )
+    fail(
+      "INVALID_CAPABILITY",
+      "新建桌面文件夹复制需要 Windows 文件复制能力",
+      400,
+    );
   if (
     platform === "macos" &&
     !options.statusOnly &&
@@ -1272,6 +1301,7 @@ export async function pollDesktop(
          local_browser_seen_at=CASE WHEN $4 THEN now() ELSE local_browser_seen_at END,
          native_actions=CASE WHEN $3 THEN $5::boolean WHEN $6 THEN coalesce(native_actions,false) ELSE native_actions END,
          window_continuations=CASE WHEN NOT $6 THEN $7::boolean ELSE window_continuations END,
+         desktop_folder_copy=CASE WHEN $6 THEN desktop_folder_copy ELSE $11::boolean END,
          file_copy_shortcuts=CASE WHEN $6 THEN file_copy_shortcuts ELSE $10::boolean END,
          retained_task_id=CASE WHEN $6 THEN retained_task_id WHEN $7 THEN $8::uuid ELSE NULL END
        WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()
@@ -1286,6 +1316,7 @@ export async function pollDesktop(
       options.retainedTaskId ?? null,
       platform,
       !!options.fileCopyShortcuts,
+      !!options.desktopFolderCopy,
     );
     if (!d || options.statusOnly)
       return { task: null, authorizationId: d?.authorization_id ?? null };
@@ -1295,7 +1326,7 @@ export async function pollDesktop(
       `SELECT * FROM assistant_desktop_tasks WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])
        AND (NOT browser_only OR $4::boolean) AND (CASE WHEN $7='macos' THEN native_action='copy_finder_files'
          ELSE native_action IS DISTINCT FROM 'copy_finder_files' AND (native_action IS NULL OR $5::boolean) END)
-       AND (NOT file_copy_flow OR $8::boolean) AND (previous_task_id IS NULL OR $6::boolean) ORDER BY created_at LIMIT 1`,
+       AND (NOT file_copy_flow OR $8::boolean) AND (NOT creates_desktop_folder OR $9::boolean) AND (previous_task_id IS NULL OR $6::boolean) ORDER BY created_at LIMIT 1`,
       deviceId,
       c.actor.id,
       active,
@@ -1304,6 +1335,7 @@ export async function pollDesktop(
       confirmedPoll && !!options.windowContinuations,
       platform,
       !!options.fileCopyShortcuts,
+      !!options.desktopFolderCopy,
     );
     if (
       row?.status === "WAITING" &&
@@ -1360,7 +1392,7 @@ async function deviceTask(c: Context, deviceId: string, id: string) {
   parse(z.string().uuid(), id);
   const row = await one(
     db,
-    "SELECT t.*,d.platform,d.file_copy_shortcuts,d.authorization_id AS device_authorization_id,d.local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_tasks t JOIN assistant_desktop_devices d ON d.id=t.device_id WHERE t.id=$1::uuid AND t.device_id=$2::uuid AND t.user_id=$3::bigint",
+    "SELECT t.*,d.platform,d.file_copy_shortcuts,d.desktop_folder_copy,d.authorization_id AS device_authorization_id,d.local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_tasks t JOIN assistant_desktop_devices d ON d.id=t.device_id WHERE t.id=$1::uuid AND t.device_id=$2::uuid AND t.user_id=$3::bigint",
     id,
     deviceId,
     c.actor.id,
@@ -1373,6 +1405,7 @@ function windowsFileCopy(t: Row): boolean {
     t.file_copy_flow &&
     t.platform === "windows" &&
     t.file_copy_shortcuts &&
+    (!t.creates_desktop_folder || t.desktop_folder_copy) &&
     !!t.authorization_id &&
     t.authorization_id === t.device_authorization_id &&
     !t.native_action &&
@@ -1415,7 +1448,7 @@ export async function permitDesktop(
       `UPDATE assistant_desktop_tasks t SET file_copy_phase=$5 FROM assistant_desktop_devices d
        WHERE t.id=$1::uuid AND t.device_id=$2::uuid AND t.user_id=$3::bigint AND t.status='RUNNING'
          AND t.pending->>'id'=$4 AND t.file_copy_flow AND t.file_copy_phase IS NOT DISTINCT FROM $6::text
-         AND d.id=t.device_id AND d.platform='windows' AND d.file_copy_shortcuts AND d.authorization_id=t.authorization_id
+         AND d.id=t.device_id AND d.platform='windows' AND d.file_copy_shortcuts AND (NOT t.creates_desktop_folder OR d.desktop_folder_copy) AND d.authorization_id=t.authorization_id
          AND d.token_hash IS NOT NULL AND d.revoked_at IS NULL AND d.expires_at>now() RETURNING t.id`,
       id,
       deviceId,
@@ -1527,7 +1560,11 @@ export async function acknowledgeDesktop(
       id,
       b.commandId,
       status,
-      phase === "pasted" ? "已核验文件复制到指定的资源管理器目录" : b.note,
+      phase === "pasted"
+        ? t.creates_desktop_folder
+          ? "已核验新建的桌面文件夹和复制结果"
+          : "已核验文件复制到指定的资源管理器目录"
+        : b.note,
       JSON.stringify(history),
       target?.id || null,
       target?.title || null,

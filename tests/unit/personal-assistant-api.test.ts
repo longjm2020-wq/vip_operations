@@ -30,6 +30,7 @@ import {
   runAgentJob,
 } from "../../apps/api/src/modules/workspace/agent-jobs.js";
 import { assistantPublicText } from "../../packages/contracts/src/ai-presentation.js";
+import { recoverAssistantSend } from "../../apps/web/src/assistant-send-recovery.js";
 import { pollAssistantJobs, startAssistantJobs } from "../../apps/worker/src/assistant-jobs.js";
 import * as teamVideo from "../../apps/api/src/modules/workspace/team-video.js";
 import sharp from "sharp";
@@ -197,6 +198,7 @@ beforeAll(async () => {
     "115_desktop_window_continuations.sql",
     "116_browser_goal_continuation.sql",
     "117_desktop_file_shortcuts.sql",
+    "118_desktop_folder_copy.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -265,6 +267,57 @@ const toolSession = (): AssistantToolSession => ({
   memorySuggestions: [],
 });
 describe("multimodal agent ownership and jobs", () => {
+  it("keeps an unsubmitted desktop copy in one user turn across failures and recovers its original task", async () => {
+    const deviceId = randomUUID();
+    await fixture.database!.query(
+      "INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,engine_seen_at,authorization_id,file_copy_shortcuts) VALUES($1,7,'复制设备','s','t',now(),now(),$2,false)",
+      [deviceId, randomUUID()],
+    );
+    const copy = { ...input(), message: "把「D:/样品/说明.txt」复制到「D:/归档」", desktopDeviceId: deviceId };
+    const failed = await sendAssistant(actor(), copy);
+    expect(failed.state).toBe("FAILED");
+    expect(failed.messages).toMatchObject([{ id: copy.requestId, role: "user" }]);
+    const retry = { ...copy, version: failed.version, requestId: randomUUID() };
+    const failedAgain = await sendAssistant(actor(), retry);
+    expect(failedAgain.messages).toMatchObject([{ id: copy.requestId, attemptId: retry.requestId, role: "user" }]);
+    expect((await sendAssistant(actor(), retry)).version).toBe(failedAgain.version);
+    await fixture.database!.query("UPDATE assistant_desktop_devices SET file_copy_shortcuts=true WHERE id=$1", [deviceId]);
+    const sent = await sendAssistant(actor(), { ...copy, version: failedAgain.version, requestId: randomUUID() });
+    const taskId = sent.messages.at(-1)?.desktopTaskId;
+    expect(taskId).toEqual(expect.any(String));
+    expect(sent.messages.map((m: AssistantMessage) => m.role)).toEqual(["user", "assistant"]);
+    // Simulate a process loss after the queue committed, before the reply was persisted.
+    await fixture.database!.query(
+      "UPDATE personal_assistant_conversations SET state='PENDING',version=version-1,pending_since=now()-interval '5 minutes',messages=messages - 1 WHERE user_id=7",
+    );
+    const stale = await readAssistant(actor());
+    expect(stale.state).toBe("FAILED");
+    const newAttempt = randomUUID();
+    const recovered = await sendAssistant(actor(), { ...copy, version: stale.version, requestId: newAttempt });
+    expect(recovered.messages.at(-1)?.desktopTaskId).toBe(taskId);
+    expect((await fixture.database!.query("SELECT id,request_id FROM assistant_desktop_tasks")).rows)
+      .toEqual([{ id: taskId, request_id: copy.requestId }]);
+    expect((await readAssistant(actor())).messages.map((m: AssistantMessage) => m.role)).toEqual(["user", "assistant"]);
+    const response = await recoverAssistantSend({
+      requestId: newAttempt, submittedAt: Date.now(), read: () => readAssistant(actor()), isCurrent: () => true,
+    });
+    expect(response?.reply?.desktopTaskId).toBe(taskId);
+    await fixture.database!.query("UPDATE assistant_desktop_tasks SET status='DONE' WHERE id=$1", [taskId]);
+    const next = await sendAssistant(actor(), { ...copy, version: recovered.version, requestId: randomUUID() });
+    expect(next.messages.map((m: AssistantMessage) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(next.messages.at(-1)?.desktopTaskId).not.toBe(taskId);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves separate failed copy turns when the user changes the target device or instruction", async () => {
+    const copy = { ...input(), message: "把「D:/样品/说明.txt」复制到「D:/归档」", desktopDeviceId: randomUUID() };
+    const first = await sendAssistant(actor(), copy);
+    const second = await sendAssistant(actor(), { ...copy, desktopDeviceId: randomUUID(), version: first.version, requestId: randomUUID() });
+    expect(second.messages).toHaveLength(2);
+    const third = await sendAssistant(actor(), { ...copy, message: copy.message + "，保留原文件", version: second.version, requestId: randomUUID() });
+    expect(third.messages).toHaveLength(3);
+  });
+
   async function retainedNotepad() {
     const device = randomUUID(),
       grant = randomUUID(),
@@ -964,6 +1017,40 @@ describe("assistant business tools and private memory", () => {
         webSearch: true,
       }),
     ).rejects.toThrow();
+  });
+  it.each([true, false])("submits create-desktop-folder and copy-contents together (automatic %s)", async automatic => {
+    const deviceId = randomUUID();
+    await fixture.database!.exec("UPDATE compass_ai_settings SET enabled=false, verified_at=NULL");
+    await fixture.database!.query(
+      `INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,authorization_id,file_copy_shortcuts,desktop_folder_copy)
+       VALUES($1,7,'样品室','s','t',now(),now(),true,$2,true,true)`, [deviceId, randomUUID()],
+    );
+    const message = automatic
+      ? String.raw`在我的电脑新建文件夹"自动化112601"，并将路径D:\Desktop\AI0520下的内容复制进来`
+      : String.raw`在我的电脑桌面新建文件夹"自动化112601"，并将路径D:\Desktop\AI0520下的内容复制进来`;
+    const body = { ...input(), message, desktopDeviceId: deviceId, ...(automatic ? { autoExecution: true } : {}) };
+    const reply = await sendAssistant(actor(), body);
+    const taskId = reply.messages.at(-1)?.desktopTaskId;
+    expect(taskId).toEqual(expect.any(String));
+    expect((await sendAssistant(actor(), body)).messages.at(-1)?.desktopTaskId).toBe(taskId);
+    expect((await fixture.database!.query(
+      "SELECT id,device_id,creates_desktop_folder,file_copy_flow,model_ref FROM assistant_desktop_tasks",
+    )).rows).toEqual([{id: taskId, device_id: deviceId, creates_desktop_folder: true, file_copy_flow: true, model_ref: null}]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("clarifies unsupported compound copies before a visual or chat model can receive them", async () => {
+    const device = randomUUID();
+    await fixture.database!.query(
+      `INSERT INTO assistant_desktop_devices(id,user_id,name,platform,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,file_copy_shortcuts)
+       VALUES($1,7,'样品室','macos','s','t',now(),now(),false,true)`, [device],
+    );
+    const message = String.raw`在我的电脑桌面新建文件夹"样品"，并将路径D:\Desktop\AI0520下的内容复制进来`;
+    const resolve = (text: string) => resolveAutomaticAssistantExecution(actor(), text, device);
+    await expect(resolve(message)).rejects.toMatchObject({ response: {error: {code: "DEVICE_PLATFORM_MISMATCH"}} });
+    await fixture.database!.query("UPDATE assistant_desktop_devices SET platform='windows' WHERE id=$1", [device]);
+    await expect(resolve(message)).rejects.toMatchObject({ response: {error: {code: "DESKTOP_FOLDER_COPY_UPDATE"}} });
+    await expect(resolve(message + "，再清空源目录")).rejects.toMatchObject({ response: {error: {code: "INVALID_COMPOUND_COPY"}} });
+    expect(fetch).not.toHaveBeenCalled();
   });
   it.each([["windows", true], ["macos", true], ["macos", false]] as const)("routes a chat file copy to the named %s with AI disabled (automatic %s)", async (platform, automatic) => {
     const deviceId = randomUUID();

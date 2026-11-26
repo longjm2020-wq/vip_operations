@@ -374,6 +374,7 @@ export function PersonalAssistantProvider({
   const [includeContext, setIncludeContext] = useState(false),
     [sending, setSending] = useState(false);
   const [checkingSend, setCheckingSend] = useState(false);
+  const activeSend = useRef<string | null>(null);
   const [error, setError] = useState("");
   const [agent, setAgent] = useState<AgentOptions>({
     attachments: [],
@@ -1059,7 +1060,7 @@ export function PersonalAssistantProvider({
     `${section}:${messages.length}:${Number(busy)}:${liveCaptions.at(-1)?.text || ""}:${Number(voiceVisible)}:${Number(q.isLoading)}`,
   );
   const send = async (value: string) => {
-    if (!value.trim() || !composerReady || busy || voice.listening) return;
+    if (!value.trim() || !composerReady || busy || activeSend.current || voice.listening) return;
     const requestId = crypto.randomUUID();
     if (!data) return;
     const publicSearch = shouldSearch(value);
@@ -1096,6 +1097,7 @@ export function PersonalAssistantProvider({
       : undefined;
     if (docked || section !== "browser" || !browserMode) setSection("chat");
     setOpen(true);
+    activeSend.current = requestId;
     setSending(true);
     setError("");
     voice.stop();
@@ -1167,10 +1169,14 @@ export function PersonalAssistantProvider({
           );
         const problem = desktopReceiverProblem(currentDevice, localClient.data);
         if (problem) throw new Error(problem);
+        const last = data.messages.at(-1);
+        const retryingTurn = data.state === "FAILED" && last?.role === "user" &&
+          !last.source && last.text === value.trim() ? last.id : null;
         if (
           current.data.tasks.some(
             (task) =>
-              task.deviceId === selectedDeviceId && isActiveDesktopTask(task),
+              task.deviceId === selectedDeviceId && isActiveDesktopTask(task) &&
+              (!retryingTurn || task.requestId !== retryingTurn),
           )
         ) {
           message.info(
@@ -1318,11 +1324,15 @@ export function PersonalAssistantProvider({
               : "") + (e as Error).message,
       );
     } finally {
-      if (isCurrent()) {
-        if (!playbackAllowed.current) speech.stop();
-        setCheckingSend(false);
-        setSending(false);
-        await q.refetch();
+      try {
+        if (isCurrent()) await q.refetch();
+      } finally {
+        if (activeSend.current === requestId) activeSend.current = null;
+        if (isCurrent()) {
+          if (!playbackAllowed.current) speech.stop();
+          setCheckingSend(false);
+          setSending(false);
+        }
       }
     }
   };

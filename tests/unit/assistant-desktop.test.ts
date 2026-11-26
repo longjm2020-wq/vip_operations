@@ -139,6 +139,7 @@ beforeAll(async () => {
     ),
   );
   await fixture.db.exec(await readFile("packages/database/migrations/117_desktop_file_shortcuts.sql", "utf8"));
+  await fixture.db.exec(await readFile("packages/database/migrations/118_desktop_folder_copy.sql", "utf8"));
 });
 beforeEach(async () => {
   fixture.session = true;
@@ -272,22 +273,40 @@ describe("paired desktop task execution", () => {
     expect((await desktopState(actor())).tasks[0]).toMatchObject({ status: "PAUSED", confirmedSteps: 0 });
   });
 
-  it("dispatches Windows copy, target switch and paste with consumed permits and no model", async () => {
+  it.each([false, true])("dispatches Windows copy, target switch and paste with consumed permits and no model (new desktop folder %s)", async compound => {
     const { deviceId } = await paired();
     const c = actor();
     const { authorizationId } = await setDesktopAuthorization(c, deviceId, true);
-    const request = { deviceId, requestId: randomUUID(), instruction: String.raw`将路径D:\Desktop\AI0520下的文件复制到D:\Desktop\自动化666\新建文件夹` };
+    const request = { deviceId, requestId: randomUUID(), instruction: compound
+      ? String.raw`在我的电脑新建文件夹"自动化112601"，并将路径D:\Desktop\AI0520下的内容复制进来`
+      : String.raw`将路径D:\Desktop\AI0520下的文件复制到D:\Desktop\自动化666\新建文件夹` };
     await expect(queueDesktopTask(c, request)).rejects.toThrow();
-    const poll = () => pollDesktop(c, deviceId, false, { fileCopyShortcuts: true });
+    const poll = (desktopFolderCopy = compound) => pollDesktop(c, deviceId, false, { fileCopyShortcuts: true, desktopFolderCopy });
+    if (compound) {
+      await poll(false);
+      await expect(queueDesktopTask(c, request)).rejects.toMatchObject({ response: { error: { code: "DESKTOP_FOLDER_COPY_UPDATE" } } });
+    }
     await poll();
     await expect(queueDesktopTask(c, { ...request, instruction: "copy ~/Desktop/a.txt to ~/Desktop/b" })).rejects.toThrow();
     await expect(queueDesktopTask(c, { ...request, instruction: request.instruction + "，然后打开终端" })).rejects.toThrow();
     const t = await queueDesktopTask(c, request);
     // Downgraded clients cannot claim this task.
     expect((await pollDesktop(c, deviceId, true, { nativeActions: true })).task).toBeNull();
-    expect((await poll()).task?.fileCopy?.selection).toBe("files");
+    if (compound) {
+      expect((await poll(false)).task).toBeNull();
+      await desktopControl(c, t.id, { action: "pause" });
+      await expect(desktopControl(c, t.id, { action: "resume" })).rejects.toMatchObject({ response: { error: { code: "DESKTOP_FOLDER_COPY_UPDATE" } } });
+      await poll();
+      await desktopControl(c, t.id, { action: "resume" });
+    }
     const source = { id: randomUUID(), title: "AI0520", application: "explorer" };
     const target = { id: randomUUID(), title: "新建文件夹", application: "explorer" };
+    if (compound) {
+      await expect(desktopControl(c, t.id, { action: "allow", authorizationId, application: source.application, windowId: source.id, window: source.title }, deviceId)).rejects.toThrow();
+      expect((await poll()).task?.fileCopy).toMatchObject({ selection: "contents", destination: "自动化112601", destinationKind: "newDesktopFolder" });
+    } else {
+      expect((await poll()).task?.fileCopy?.selection).toBe("files");
+    }
     await desktopControl(c, t.id, { action: "allow", authorizationId, application: source.application, windowId: source.id, window: source.title }, deviceId);
     const plan = (w: typeof source, fileShortcut?: string) => planDesktop(c, deviceId, t.id, {
       fileCopy: true, requestId: randomUUID(), windowId: w.id, window: w.title, application: w.application,
@@ -297,6 +316,11 @@ describe("paired desktop task execution", () => {
     const ack = (commandId: string) => acknowledgeDesktop(c, deviceId, t.id, { commandId, outcome: "ok", note: "本机已核验" });
     const copy = (await plan(source, "copy")).command!;
     expect(copy.action.key).toBe("COPY");
+    if (compound) {
+      expect((await poll(false)).task).toBeNull();
+      expect((await permit(copy.id, "copy")).allowed).toBe(false);
+      await poll();
+    }
     expect((await permit(copy.id)).allowed).toBe(false);
     await expect(ack(copy.id)).rejects.toThrow();
     expect((await permit(copy.id, "copy")).allowed).toBe(true);

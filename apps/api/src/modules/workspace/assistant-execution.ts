@@ -7,8 +7,12 @@ import {
   isNativeDesktopAppCommand,
 } from "../../../../../packages/contracts/src/assistant-execution.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
-import { desktopFileCopyIntent } from "../../../../../packages/contracts/src/desktop-file-copy.js";
-import type { Context } from "../../core.js";
+import {
+  desktopFileCopyIntent,
+  desktopFolderCopyGuidance,
+  looksLikeDesktopFolderCopy,
+} from "../../../../../packages/contracts/src/desktop-file-copy.js";
+import { fail, type Context } from "../../core.js";
 import { canContinueBrowserGoal } from "./assistant-browser.js";
 
 export type AutomaticAssistantExecution =
@@ -135,6 +139,16 @@ export async function resolveAutomaticAssistantExecution(
             "请在「我的电脑」核对当前设备、连接和本机跨窗口授权，再重新下达指令。",
         };
   }
+  const windowsCopy = desktopFileCopyIntent(instruction);
+  if (!windowsCopy && looksLikeDesktopFolderCopy(instruction)) {
+    if (
+      /~\/|\/Users\/|在\s*(?:我的\s*)?Mac(?:OS)?\s*[上中里]?/iu.test(
+        instruction,
+      )
+    )
+      fail("DEVICE_PLATFORM_MISMATCH", desktopFolderCopyGuidance.platform, 400);
+    fail("INVALID_COMPOUND_COPY", desktopFolderCopyGuidance.format, 400);
+  }
   const target = classifyAssistantExecution(instruction, options);
   if (target.kind === "site") return { kind: "site" };
   if (target.kind === "browser") return { kind: "browser" };
@@ -148,7 +162,7 @@ export async function resolveAutomaticAssistantExecution(
   const deviceName = target.deviceName;
   const filePlatform = desktopFileCopyIntent(instruction, "macos")
     ? "macos"
-    : desktopFileCopyIntent(instruction, "windows")
+    : windowsCopy
       ? "windows"
       : undefined;
   if (!deviceName && !preferredDeviceId)
@@ -163,7 +177,7 @@ export async function resolveAutomaticAssistantExecution(
 
   const devices = await rows(
     db,
-    `SELECT id,name,platform,native_actions,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
+    `SELECT id,name,platform,native_actions,desktop_folder_copy,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
             coalesce(last_seen_at > now() - interval '20 seconds', false) AS online
        FROM assistant_desktop_devices
       WHERE user_id = $1::bigint AND token_hash IS NOT NULL
@@ -188,11 +202,15 @@ export async function resolveAutomaticAssistantExecution(
         ? `电脑「${devices[0].name}」已离线。请在这台电脑打开桌面端，或在右侧「我的电脑」选择目标设备。`
         : "指定的电脑暂未连接或已离线。请在右侧「我的电脑」恢复连接后再试。",
     };
+  if (windowsCopy?.destinationKind && devices[0].platform !== "windows")
+    fail("DEVICE_PLATFORM_MISMATCH", desktopFolderCopyGuidance.platform, 400);
   if (filePlatform && devices[0].platform !== filePlatform)
     return {
       kind: "clarify",
       message: `这些路径属于 ${filePlatform === "macos" ? "Mac" : "Windows"}。请在「我的电脑」选择对应设备后再发送。`,
     };
+  if (windowsCopy?.destinationKind && !devices[0].desktop_folder_copy)
+    fail("DESKTOP_FOLDER_COPY_UPDATE", desktopFolderCopyGuidance.update, 409);
   if (devices[0].native_actions !== null && !devices[0].receiving)
     return {
       kind: "clarify",

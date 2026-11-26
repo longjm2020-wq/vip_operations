@@ -68,6 +68,8 @@ export const assistantAnswerSchema = z
   .strict();
 export type AssistantMessage = {
   id: string;
+  /** Latest submission when a failed desktop copy resumes the original user turn. */
+  attemptId?: string;
   role: "user" | "assistant";
   text: string;
   createdAt: string;

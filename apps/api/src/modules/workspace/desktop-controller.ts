@@ -95,6 +95,7 @@ export class AssistantDesktopController {
             desktopExplorer: z.literal(true).optional(),
             platform: z.enum(["windows", "macos"]).optional(),
             fileCopyShortcuts: z.literal(true).optional(),
+            desktopFolderCopy: z.literal(true).optional(),
             retainedTaskId: z.string().uuid().nullable().optional(),
           })
           .strict(),
@@ -108,6 +109,7 @@ export class AssistantDesktopController {
           windowContinuations: b.windowContinuations,
           desktopExplorer: b.desktopExplorer,
           fileCopyShortcuts: b.fileCopyShortcuts,
+          desktopFolderCopy: b.desktopFolderCopy,
           platform: b.platform,
           retainedTaskId: b.retainedTaskId,
         });

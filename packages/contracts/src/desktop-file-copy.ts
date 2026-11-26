@@ -2,10 +2,24 @@
 export type DesktopFileCopy = {
   source: string;
   destination: string;
-  selection: "file" | "files";
+  selection: "file" | "files" | "contents";
+  /** destination is a single folder name under the device's actual Windows Desktop. */
+  destinationKind?: "newDesktopFolder";
 };
 
 export type DesktopPlatform = "windows" | "macos";
+
+export const desktopFolderCopyGuidance = {
+  format:
+    "请写明桌面上要新建的单级文件夹名称和已有源目录的完整本地路径，例如“在我的电脑桌面新建文件夹「样品归档」，并将路径 D:\\样品 下的内容复制进来”。其他操作请另发一条指令。",
+  update:
+    "请在所选 Windows 电脑下载并启动 1.2.13 或更新桌面端，恢复接单后再发送。也可以先手动建好目标文件夹，再单独发送普通文件的复制指令。",
+  platform:
+    "新建桌面文件夹并复制内容需要 Windows 电脑。源目录在 Windows 时，请选择该电脑。使用 Mac 时，请先建好目标目录，再发送 Finder 普通文件复制指令。",
+} as const;
+
+const reservedWindowsName =
+  /^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(?:COM|LPT)[1-9¹²³])(?:\.|$)/iu;
 
 function localPath(
   value: string,
@@ -51,9 +65,7 @@ function localPath(
         !part ||
         /[<>:"|?*\p{Cc}\p{Cf}]/u.test(part) ||
         /[. ]$/u.test(part) ||
-        /^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(?:COM|LPT)[1-9¹²³])(?:\.|$)/iu.test(
-          part,
-        ),
+        reservedWindowsName.test(part),
     )
   )
     return;
@@ -75,6 +87,51 @@ export function desktopFileCopyDeviceName(text: string): string | undefined {
   return namedComputer.exec(copyInstruction(text))?.[1]?.trim();
 }
 
+function newDesktopCopy(
+  command: string,
+  localComputer: boolean,
+): DesktopFileCopy | undefined {
+  // Missing "桌面" is shorthand only in an instruction explicitly addressed to this computer.
+  const prefix = /^(?:在)?(?:的)?桌面(?:上|中)?\s*/u;
+  if (!prefix.test(command) && !localComputer) return;
+  const scoped = command.replace(prefix, "");
+  const match =
+    /^(?:新建|创建)(?:一个)?(?:新的)?文件夹\s*(?:(?:命名|取名)(?:为|叫)?|叫作?|名为)?\s*(?:"([^"]+)"|“([^”]+)”|「([^」]+)」|'([^']+)'|‘([^’]+)’|([\p{L}\p{N}_-][\p{L}\p{N}_. -]{0,99}?))\s*[，,、；;]?\s*(?:并且?|然后|再|接着)\s*(?:将|把|从)\s*(?:路径\s*)?(.+?)\s*(?:下|内|里|中)(?:面)?(?:的)?\s*(?:全部|所有)?(内容|文件)\s*(?:复制|拷贝)(?:进来|进去|到(?:该|这个|此|刚(?:刚)?(?:新建|创建)的|新建的)文件夹(?:内|中|里)?)$/u.exec(
+      scoped,
+    );
+  if (!match) return;
+  const name = match.slice(1, 7).find(Boolean)!;
+  if (
+    name !== name.trim() ||
+    name.length > 100 ||
+    /[\\/:*?"<>|\p{Cc}\p{Cf}]/u.test(name) ||
+    name.startsWith(".") ||
+    /[. ]$/u.test(name) ||
+    reservedWindowsName.test(name)
+  )
+    return;
+  const source = localPath(match[7], "windows");
+  if (!source) return;
+  return {
+    source,
+    destination: name,
+    destinationKind: "newDesktopFolder",
+    selection: match[8] === "内容" ? "contents" : "files",
+  };
+}
+
+/** Only classify an imperative compound request; questions, examples and negations remain in chat. */
+export function looksLikeDesktopFolderCopy(text: string): boolean {
+  const command = copyInstruction(text).replace(namedComputer, "");
+  return (
+    /^(?:在(?:我的电脑|本机|这台电脑|(?:我的\s*)?(?:Mac|Windows)(?:电脑)?)(?:上|中|里)?[，,\s]*)?(?:(?:在|的)?桌面(?:上|中)?\s*)?(?:新建|创建)(?:一个)?(?:新的)?文件夹/iu.test(
+      command,
+    ) &&
+    /复制|拷贝/u.test(command) &&
+    !/[?？]|(?:吗|行不行|怎么做|如何操作)[。！!]?\s*$/u.test(command)
+  );
+}
+
 export function desktopFileCopyIntent(
   text: string,
   platform: DesktopPlatform = "windows",
@@ -86,7 +143,8 @@ export function desktopFileCopyIntent(
     "\\s*\\+?\\s*C\\s*(?:、|，|,|和|及|/|与|然后按|再按|and)\\s*" +
     modifier +
     "\\s*\\+?\\s*V";
-  const command = copyInstruction(text)
+  const input = copyInstruction(text);
+  const command = input
     .replace(namedComputer, "")
     .replace(/^在\s*(?:我的电脑|这台电脑|本机)(?:上|中|里)?[，,\s]*/u, "")
     .replace(
@@ -106,6 +164,14 @@ export function desktopFileCopyIntent(
       "",
     );
   if (/[\r\n?？]|(?:吗|行不行)[。.！!]?$/u.test(command)) return;
+  if (platform === "windows") {
+    const compound = newDesktopCopy(
+      command,
+      namedComputer.test(input) ||
+        /^在\s*(?:我的电脑|本机|这台电脑|(?:我的\s*)?Windows)/iu.test(input),
+    );
+    if (compound) return compound;
+  }
   const instruction =
     /^(?:将|把|从)\s*(?:路径\s*)?(.+?)\s*(?:复制|拷贝)(?:到|至)\s*(.+)$/u.exec(
       command,
