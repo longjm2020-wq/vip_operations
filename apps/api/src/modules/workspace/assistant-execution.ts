@@ -7,6 +7,7 @@ import {
   isNativeDesktopAppCommand,
 } from "../../../../../packages/contracts/src/assistant-execution.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
+import { desktopFileCopyIntent } from "../../../../../packages/contracts/src/desktop-file-copy.js";
 import type { Context } from "../../core.js";
 import { canContinueBrowserGoal } from "./assistant-browser.js";
 
@@ -145,17 +146,24 @@ export async function resolveAutomaticAssistantExecution(
     };
 
   const deviceName = target.deviceName;
+  const filePlatform = desktopFileCopyIntent(instruction, "macos")
+    ? "macos"
+    : desktopFileCopyIntent(instruction, "windows")
+      ? "windows"
+      : undefined;
   if (!deviceName && !preferredDeviceId)
     return {
       kind: "clarify",
-      message: target.localBrowser
-        ? "请在右侧「我的电脑」连接并选择运行小序桌面端的设备，再在右侧浏览器打开本地网页。"
-        : "请在右侧「我的电脑」连接并选择常用电脑，或在指令里明确写出已连接的设备名，例如「在电脑‘办公室电脑’上打开 Excel」。",
+      message: filePlatform
+        ? `请在右侧「我的电脑」选择执行复制的 ${filePlatform === "macos" ? "Mac" : "Windows 电脑"}，设为常用电脑后再发送。`
+        : target.localBrowser
+          ? "请在右侧「我的电脑」连接并选择运行小序桌面端的设备，再在右侧浏览器打开本地网页。"
+          : "请在右侧「我的电脑」连接并选择常用电脑，或在指令里明确写出已连接的设备名，例如「在电脑‘办公室电脑’上打开 Excel」。",
     };
 
   const devices = await rows(
     db,
-    `SELECT id,name,native_actions,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
+    `SELECT id,name,platform,native_actions,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
             coalesce(last_seen_at > now() - interval '20 seconds', false) AS online
        FROM assistant_desktop_devices
       WHERE user_id = $1::bigint AND token_hash IS NOT NULL
@@ -179,6 +187,11 @@ export async function resolveAutomaticAssistantExecution(
       message: devices[0]
         ? `电脑「${devices[0].name}」已离线。请在这台电脑打开桌面端，或在右侧「我的电脑」选择目标设备。`
         : "指定的电脑暂未连接或已离线。请在右侧「我的电脑」恢复连接后再试。",
+    };
+  if (filePlatform && devices[0].platform !== filePlatform)
+    return {
+      kind: "clarify",
+      message: `这些路径属于 ${filePlatform === "macos" ? "Mac" : "Windows"}。请在「我的电脑」选择对应设备后再发送。`,
     };
   if (devices[0].native_actions !== null && !devices[0].receiving)
     return {

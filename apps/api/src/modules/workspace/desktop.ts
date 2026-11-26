@@ -16,7 +16,14 @@ import {
   desktopObservationSchema,
   desktopTaskSchema,
   type DesktopTask,
+  type DesktopAction,
 } from "../../../../../packages/contracts/src/assistant-desktop.js";
+import {
+  desktopFileCopyIntent,
+  desktopFileCopyDeviceName,
+  mentionsDesktopFileCopy,
+  type DesktopPlatform,
+} from "../../../../../packages/contracts/src/desktop-file-copy.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import {
   assistantFollowupText,
@@ -346,7 +353,7 @@ export async function desktopState(c: Context) {
   const [devices, tasks] = await Promise.all([
     rows(
       db,
-      "SELECT id,name,last_seen_at,expires_at,authorization_id,purpose,assistant_default,native_actions,coalesce(engine_seen_at>now()-interval '20 seconds',false) AS engine_ready FROM assistant_desktop_devices WHERE user_id=$1::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC",
+      "SELECT id,name,platform,last_seen_at,expires_at,authorization_id,purpose,assistant_default,native_actions,coalesce(engine_seen_at>now()-interval '20 seconds',false) AS engine_ready FROM assistant_desktop_devices WHERE user_id=$1::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC",
       c.actor.id,
     ),
     rows(
@@ -362,6 +369,7 @@ export async function desktopState(c: Context) {
     devices: devices.map((d) => ({
       id: d.id,
       name: d.name,
+      platform: d.platform,
       online:
         !!d.last_seen_at &&
         Date.now() - new Date(d.last_seen_at).getTime() < 20000,
@@ -449,6 +457,7 @@ export async function pairDesktop(input: unknown) {
       .object({
         code: z.string().regex(/^[a-f0-9]{32}$/),
         name: z.string().trim().min(1).max(80),
+        platform: z.enum(["windows", "macos"]).default("windows"),
       })
       .strict(),
     input,
@@ -464,10 +473,11 @@ export async function pairDesktop(input: unknown) {
     const actor = await actorForSessionHash(device.session_hash);
     requireAssistant({ actor, requestId: randomUUID() });
     await tx.$executeRawUnsafe(
-      "UPDATE assistant_desktop_devices SET name=$2,token_hash=$3,pair_hash=NULL,pair_expires_at=NULL,last_seen_at=now() WHERE id=$1::uuid",
+      "UPDATE assistant_desktop_devices SET name=$2,token_hash=$3,platform=$4,pair_hash=NULL,pair_expires_at=NULL,last_seen_at=now() WHERE id=$1::uuid",
       device.id,
       b.name,
       hash(token),
+      b.platform,
     );
     return {
       deviceId: device.id,
@@ -511,7 +521,7 @@ export async function revokeDesktop(c: Context, id: string) {
       c.actor.id,
     );
     await tx.$executeRawUnsafe(
-      "UPDATE assistant_desktop_tasks SET status='CANCELED',stage='电脑连接已断开',pending=NULL,planning_id=NULL,updated_at=now() WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])",
+      "UPDATE assistant_desktop_tasks SET status='CANCELED',stage='电脑连接已断开',pending=NULL,planning_id=NULL,file_copy_phase=NULL,updated_at=now() WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])",
       id,
       c.actor.id,
       active,
@@ -544,7 +554,7 @@ export async function setDesktopAuthorization(
     );
     if (!enabled)
       await tx.$executeRawUnsafe(
-        "UPDATE assistant_desktop_tasks SET status='PAUSED',stage=CASE WHEN browser_only THEN '本机授权已撤销，请在小序桌面端重新允许浏览器任务' ELSE '跨窗口授权已撤销，请在本机选择窗口后继续' END,authorization_id=NULL,pending=NULL,planning_id=NULL,updated_at=now() WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])",
+        "UPDATE assistant_desktop_tasks SET status='PAUSED',stage=CASE WHEN browser_only THEN '本机授权已撤销，请在小序桌面端重新允许浏览器任务' ELSE '跨窗口授权已撤销，请在本机选择窗口后继续' END,authorization_id=NULL,pending=NULL,planning_id=NULL,file_copy_phase=NULL,updated_at=now() WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])",
         deviceId,
         c.actor.id,
         active,
@@ -581,24 +591,67 @@ export async function queueDesktopTask(
       ? notepadAction(b.instruction)
       : undefined;
   // A previously issued request retains its original execution mode on retry.
-  const capability =
-    requestedAction &&
-    (await one(
-      db,
-      `SELECT d.authorization_id,CASE WHEN t.id IS NOT NULL THEN t.native_action IS NOT NULL
+  const capability = await one(
+    db,
+    `SELECT d.name,d.platform,d.authorization_id,t.file_copy_flow AS existing_copy,CASE WHEN t.id IS NOT NULL THEN t.native_action IS NOT NULL
        ELSE $4::text IS NULL AND d.native_actions AND d.authorization_id IS NOT NULL END AS use_native
      FROM assistant_desktop_devices d LEFT JOIN assistant_desktop_tasks t
        ON t.device_id=d.id AND t.user_id=d.user_id AND t.request_id=$3::uuid
      WHERE d.id=$1::uuid AND d.user_id=$2::bigint`,
-      b.deviceId,
-      c.actor.id,
-      b.requestId,
-      b.model ?? null,
-    ));
-  const nativeAction = capability?.use_native ? requestedAction : undefined;
-  const model = nativeAction
-    ? null
-    : await resolveAgentModel(b.model, "assistant_desktop");
+    b.deviceId,
+    c.actor.id,
+    b.requestId,
+    b.model ?? null,
+  );
+  const mac = capability?.platform === "macos";
+  if (
+    mac &&
+    (previousId ||
+      b.localBrowser ||
+      !desktopFileCopyIntent(b.instruction, "macos"))
+  )
+    fail(
+      "MACOS_FILE_COPY_ONLY",
+      "此 Mac 客户端支持 Finder 文件复制。请写明源文件或源目录里的文件，以及已有目标目录。",
+      400,
+    );
+  if (!mac && desktopFileCopyIntent(b.instruction, "macos"))
+    fail(
+      "DEVICE_PLATFORM_MISMATCH",
+      "这条指令使用 Mac 路径，请选择对应的 Mac 电脑",
+      400,
+    );
+  const winCopy =
+    !mac &&
+    !previousId &&
+    !b.localBrowser &&
+    !!desktopFileCopyIntent(b.instruction);
+  const namedDevice =
+    (mac || winCopy) && desktopFileCopyDeviceName(b.instruction);
+  if (
+    namedDevice &&
+    namedDevice.toLowerCase() !== capability?.name.trim().toLowerCase()
+  )
+    fail(
+      "DEVICE_NAME_MISMATCH",
+      "指令里的电脑名称和所选设备不同，请重新核对目标电脑",
+      409,
+    );
+  if (!mac && !winCopy && mentionsDesktopFileCopy(b.instruction))
+    fail(
+      "FILE_COPY_PATHS_REQUIRED",
+      "请在电脑操作中单独发送复制指令，写明源文件或源目录里的文件，以及已有目标目录。",
+      400,
+    );
+  const nativeAction = mac
+    ? "copy_finder_files"
+    : capability?.use_native
+      ? requestedAction
+      : undefined;
+  const model =
+    nativeAction || (winCopy && capability?.existing_copy !== false)
+      ? null
+      : await resolveAgentModel(b.model, "assistant_desktop");
   if (model && !model.vision)
     fail("VISION_REQUIRED", "操作电脑需要选择支持看图的助理能力", 400);
   return db.$transaction(async (tx) => {
@@ -619,9 +672,12 @@ export async function queueDesktopTask(
         existing.device_id !== b.deviceId ||
         (existing.previous_task_id ?? null) !== previousId ||
         existing.instruction !== b.instruction ||
-        (existing.native_action
-          ? b.model !== undefined && existing.model_ref !== b.model
-          : existing.model_ref !== (model?.id ?? null)) ||
+        (!existing.file_copy_flow &&
+          (existing.native_action
+            ? existing.native_action !== "copy_finder_files" &&
+              b.model !== undefined &&
+              existing.model_ref !== b.model
+            : existing.model_ref !== (model?.id ?? null))) ||
         existing.browser_only !== !!b.localBrowser
       )
         fail("REQUEST_CONFLICT", "任务标识已被其他请求使用", 409);
@@ -629,13 +685,25 @@ export async function queueDesktopTask(
     }
     const d = await one(
       tx,
-      "SELECT id,authorization_id,native_actions,window_continuations,retained_task_id,engine_seen_at>now()-interval '20 seconds' AS engine_ready,local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds' FOR UPDATE",
+      "SELECT id,platform,file_copy_shortcuts,authorization_id,native_actions,window_continuations,retained_task_id,engine_seen_at>now()-interval '20 seconds' AS engine_ready,local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds' FOR UPDATE",
       b.deviceId,
       c.actor.id,
     );
     if (!d) fail("DEVICE_OFFLINE", "请先打开本机助手并连接电脑", 409);
-    if (d.native_actions !== null && !d.engine_ready)
+    if ((mac || d.native_actions !== null) && !d.engine_ready)
       fail("DEVICE_ENGINE_UNAVAILABLE", engineUnavailable, 409);
+    if (winCopy && (!d.file_copy_shortcuts || !d.engine_ready))
+      fail(
+        "FILE_COPY_UPDATE_REQUIRED",
+        "请更新并打开 Windows 桌面端，连接后重新发送文件复制指令",
+        409,
+      );
+    if (winCopy && !d.authorization_id)
+      fail(
+        "AUTHORIZATION_CHANGED",
+        "请先在 Windows 桌面端允许设备操作，再发送文件复制指令",
+        409,
+      );
     const previous =
       previousId &&
       d.window_continuations &&
@@ -659,7 +727,11 @@ export async function queueDesktopTask(
       );
     if (
       nativeAction &&
-      (!d.native_actions || d.authorization_id !== capability?.authorization_id)
+      (!(mac
+        ? d.platform === "macos" && d.file_copy_shortcuts
+        : d.native_actions) ||
+        !d.authorization_id ||
+        d.authorization_id !== capability?.authorization_id)
     )
       fail(
         "AUTHORIZATION_CHANGED",
@@ -683,7 +755,7 @@ export async function queueDesktopTask(
       fail("DESKTOP_BUSY", "这台电脑已有任务，请完成或停止后再发送", 409);
     const row = await one(
       tx,
-      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only,native_action,authorization_id,previous_task_id,window_id,window_name,application) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8,$9,$10::uuid,$11::uuid,$12::uuid,$13,$14) RETURNING *",
+      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only,native_action,authorization_id,previous_task_id,window_id,window_name,application,file_copy_flow) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8,$9,$10::uuid,$11::uuid,$12::uuid,$13,$14,$15) RETURNING *",
       randomUUID(),
       b.deviceId,
       c.actor.id,
@@ -701,11 +773,12 @@ export async function queueDesktopTask(
             : "请在本机助手选择窗口并允许本次任务",
       !!b.localBrowser,
       nativeAction ?? null,
-      nativeAction || previous ? d.authorization_id : null,
+      nativeAction || previous || winCopy ? d.authorization_id : null,
       previousId,
       previous?.window_id ?? null,
       previous?.window_name ?? "",
       previous?.application ?? "",
+      winCopy,
     );
     return desktopTaskView(row!);
   });
@@ -778,6 +851,141 @@ async function controlNotepad(
   return desktopTaskView(result!);
 }
 
+export async function controlMacFileCopy(
+  c: Context,
+  deviceId: string,
+  taskId: string,
+  input: unknown,
+) {
+  requireAssistant(c);
+  parse(z.string().uuid(), taskId);
+  const b = parse(
+    z
+      .object({
+        action: z.enum([
+          "start",
+          "permit_copy",
+          "copied",
+          "permit_paste",
+          "complete",
+          "handoff",
+        ]),
+        authorizationId: z.string().uuid(),
+        attemptId: z.string().uuid(),
+        note: z.string().trim().max(300).optional(),
+      })
+      .strict(),
+    input,
+  );
+  return db.$transaction(async (tx) => {
+    // Lock in the same order as revocation. An already issued keystroke is never reissued.
+    const device = await one(
+      tx,
+      `SELECT id,engine_seen_at>now()-interval '20 seconds' AS ready FROM assistant_desktop_devices
+       WHERE id=$1::uuid AND user_id=$2::bigint AND platform='macos' AND file_copy_shortcuts
+         AND authorization_id=$3::uuid AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`,
+      deviceId,
+      c.actor.id,
+      b.authorizationId,
+    );
+    const task =
+      device &&
+      (await one(
+        tx,
+        `SELECT *,delivered_at>now()-interval '30 seconds' AS delivered FROM assistant_desktop_tasks
+       WHERE id=$1::uuid AND device_id=$2::uuid AND user_id=$3::bigint AND native_action='copy_finder_files'
+         AND authorization_id=$4::uuid AND NOT browser_only AND previous_task_id IS NULL FOR UPDATE`,
+        taskId,
+        deviceId,
+        c.actor.id,
+        b.authorizationId,
+      ));
+    if (!task || !desktopFileCopyIntent(task.instruction, "macos"))
+      fail(
+        "NATIVE_TASK_CHANGED",
+        "Finder 任务或本机授权已变化，请核对后继续",
+        409,
+      );
+    const transitions = {
+      start: [null, null, "RUNNING", "正在核对 Finder 源文件与目标目录"],
+      permit_copy: [
+        null,
+        "copy_permitted",
+        "RUNNING",
+        "正在 Finder 中复制已核验的文件",
+      ],
+      copied: [
+        "copy_permitted",
+        "copied",
+        "RUNNING",
+        "已核验 Finder 复制的文件，正在准备目标目录",
+      ],
+      permit_paste: [
+        "copied",
+        "paste_permitted",
+        "RUNNING",
+        "正在 Finder 目标目录粘贴文件",
+      ],
+      complete: [
+        "paste_permitted",
+        "pasted",
+        "DONE",
+        "已核验文件复制到指定的 Finder 目录",
+      ],
+      handoff: [
+        null,
+        null,
+        "NEEDS_USER",
+        assistantPublicText(b.note || "请核对 Finder 任务后继续"),
+      ],
+    } as const;
+    const [from, phase, status, stage] = transitions[b.action];
+    if (b.action === "start") {
+      if (task.status !== "WAITING" || !task.delivered || !device!.ready)
+        fail("NATIVE_TASK_CHANGED", "请由已接单的 Mac 客户端开始任务", 409);
+      if (task.file_copy_attempts.includes(b.attemptId))
+        fail("NATIVE_TASK_CHANGED", "该次执行已结束，请重新核对任务", 409);
+    } else if (
+      task.status !== "RUNNING" ||
+      task.planning_id !== b.attemptId ||
+      (b.action !== "handoff" && task.file_copy_phase !== from)
+    ) {
+      fail("NATIVE_TASK_CHANGED", "Finder 执行步骤已变化，请核对后继续", 409);
+    }
+    const acknowledged = b.action === "copied" || b.action === "complete";
+    const total = desktopStepReceipts(task).confirmedSteps;
+    const history = acknowledged
+      ? [
+          ...task.history,
+          {
+            step: task.step + 1,
+            action: "key",
+            result: "ok",
+            description: stage,
+            ...(total === undefined ? {} : { confirmedTotal: total + 1 }),
+          },
+        ].slice(-12)
+      : task.history;
+    const row = await one(
+      tx,
+      `UPDATE assistant_desktop_tasks SET status=$2,stage=$3,file_copy_phase=$4,planning_id=$5::uuid,
+         started_at=CASE WHEN $6::boolean THEN now() ELSE started_at END,
+         file_copy_attempts=CASE WHEN $6 THEN array_append(file_copy_attempts,$5::uuid) ELSE file_copy_attempts END,
+         window_name='Finder',application='Finder',
+         step=step+$7::int,history=$8::jsonb,updated_at=now() WHERE id=$1::uuid RETURNING *`,
+      taskId,
+      status,
+      stage,
+      phase,
+      status === "RUNNING" ? b.attemptId : null,
+      b.action === "start",
+      Number(acknowledged),
+      JSON.stringify(history),
+    );
+    return desktopTaskView(row!);
+  });
+}
+
 export async function desktopControl(
   c: Context,
   taskId: string,
@@ -826,7 +1034,20 @@ export async function desktopControl(
     return desktopTaskView(old);
   if (!active.includes(old.status)) return desktopTaskView(old);
   if (old.native_action && b.action === "allow")
-    fail("FORBIDDEN", "此任务需要支持记事本操作的本机桌面端和设备授权", 403);
+    fail("FORBIDDEN", "此任务需要已配对的本机客户端和设备授权", 403);
+  if (
+    old.file_copy_flow &&
+    b.action === "allow" &&
+    (!old.authorization_id ||
+      old.authorization_id !== b.authorizationId ||
+      !b.windowId ||
+      !/^explorer(?:\.exe)?$/iu.test(b.application ?? ""))
+  )
+    fail(
+      "AUTHORIZATION_CHANGED",
+      "文件复制需要在本机授权的资源管理器窗口中开始",
+      409,
+    );
   if (
     old.previous_task_id &&
     b.action === "allow" &&
@@ -880,7 +1101,7 @@ export async function desktopControl(
     b.action === "resume"
       ? await one(
           db,
-          "SELECT authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
+          "SELECT platform,file_copy_shortcuts,authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
           old.device_id,
           c.actor.id,
         )
@@ -899,15 +1120,27 @@ export async function desktopControl(
       );
     if (!resumeDevice?.online)
       fail("DEVICE_OFFLINE", "请先恢复所选电脑的连接", 409);
+    if (
+      old.file_copy_flow &&
+      (!resumeDevice.file_copy_shortcuts || !resumeDevice.authorization_id)
+    )
+      fail(
+        "AUTHORIZATION_CHANGED",
+        "请更新 Windows 桌面端并记住本机操作授权，再继续复制",
+        409,
+      );
     if (resumeDevice.native_actions !== null && !resumeDevice.engine_ready)
       fail("DEVICE_ENGINE_UNAVAILABLE", engineUnavailable, 409);
     if (
       old.native_action &&
-      (!resumeDevice.native_actions || !resumeDevice.authorization_id)
+      (!(old.native_action === "copy_finder_files"
+        ? resumeDevice.platform === "macos" && resumeDevice.file_copy_shortcuts
+        : resumeDevice.native_actions) ||
+        !resumeDevice.authorization_id)
     )
       fail(
         "AUTHORIZATION_CHANGED",
-        "请在本机打开最新版桌面端并记住操作授权，再继续记事本任务",
+        "请在本机打开最新版桌面端并记住操作授权，再继续本机任务",
         409,
       );
     // An explicit continue may upgrade an old, never-started task. A previous
@@ -975,7 +1208,7 @@ export async function desktopControl(
   // Resuming discards an unexecuted pending command. Local executor never replays uncertain inputs.
   const row = await one(
     db,
-    "UPDATE assistant_desktop_tasks SET status=$3,stage=$4,planning_id=NULL,pending=NULL,window_name=COALESCE($5,window_name),application=COALESCE($6,application),window_id=CASE WHEN $3='RUNNING' THEN $8::uuid ELSE window_id END,authorization_id=CASE WHEN $3='RUNNING' OR ($3='WAITING' AND native_action IS NOT NULL) THEN $9::uuid ELSE authorization_id END,delivered_at=CASE WHEN $3='WAITING' THEN NULL ELSE delivered_at END,started_at=CASE WHEN $3='RUNNING' THEN now() ELSE started_at END,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND status=$7 AND ($10::uuid IS NULL OR planning_id=$10::uuid) AND ($3<>'RUNNING' OR EXISTS(SELECT 1 FROM assistant_desktop_devices d WHERE d.id=device_id AND d.revoked_at IS NULL AND d.token_hash IS NOT NULL AND d.expires_at>now() AND ($9::uuid IS NULL OR d.authorization_id=$9::uuid) AND (previous_task_id IS NULL OR (assistant_desktop_tasks.authorization_id=$9::uuid AND window_id=$8::uuid AND application=$6 AND d.window_continuations AND d.retained_task_id=previous_task_id)) AND (NOT browser_only OR d.local_browser_seen_at>now()-interval '20 seconds'))) RETURNING *",
+    "UPDATE assistant_desktop_tasks SET status=$3,stage=$4,planning_id=NULL,pending=NULL,file_copy_phase=NULL,window_name=COALESCE($5,window_name),application=COALESCE($6,application),window_id=CASE WHEN $3='RUNNING' THEN $8::uuid ELSE window_id END,authorization_id=CASE WHEN $3='RUNNING' OR ($3='WAITING' AND (native_action IS NOT NULL OR file_copy_flow)) THEN $9::uuid ELSE authorization_id END,delivered_at=CASE WHEN $3='WAITING' THEN NULL ELSE delivered_at END,started_at=CASE WHEN $3='RUNNING' THEN now() ELSE started_at END,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND status=$7 AND ($10::uuid IS NULL OR planning_id=$10::uuid) AND ($3<>'RUNNING' OR EXISTS(SELECT 1 FROM assistant_desktop_devices d WHERE d.id=device_id AND d.revoked_at IS NULL AND d.token_hash IS NOT NULL AND d.expires_at>now() AND ($9::uuid IS NULL OR d.authorization_id=$9::uuid) AND (previous_task_id IS NULL OR (assistant_desktop_tasks.authorization_id=$9::uuid AND window_id=$8::uuid AND application=$6 AND d.window_continuations AND d.retained_task_id=previous_task_id)) AND (NOT browser_only OR d.local_browser_seen_at>now()-interval '20 seconds'))) RETURNING *",
     taskId,
     c.actor.id,
     status,
@@ -984,7 +1217,7 @@ export async function desktopControl(
     b.action === "allow" ? b.application : null,
     old.status,
     b.windowId || null,
-    (old.native_action && b.action === "resume"
+    ((old.native_action || old.file_copy_flow) && b.action === "resume"
       ? resumeDevice?.authorization_id
       : b.authorizationId) || null,
     b.attemptId || null,
@@ -1007,13 +1240,29 @@ export async function pollDesktop(
     nativeActions?: boolean;
     windowContinuations?: boolean;
     desktopExplorer?: boolean;
+    platform?: DesktopPlatform;
+    fileCopyShortcuts?: boolean;
     retainedTaskId?: string | null;
     statusOnly?: boolean;
   } = {},
 ) {
+  const platform = options.platform ?? "windows";
+  if (
+    platform === "macos" &&
+    !options.statusOnly &&
+    (!options.fileCopyShortcuts ||
+      localBrowser ||
+      options.nativeActions ||
+      options.desktopExplorer ||
+      options.windowContinuations)
+  )
+    fail("INVALID_CAPABILITY", "Mac 客户端需要声明 Finder 文件复制能力", 400);
   const confirmedPoll =
     !options.statusOnly &&
-    (localBrowser || !!options.nativeActions || !!options.desktopExplorer);
+    (localBrowser ||
+      !!options.nativeActions ||
+      !!options.desktopExplorer ||
+      !!options.fileCopyShortcuts);
   return db.$transaction(async (tx) => {
     const d = await one(
       tx,
@@ -1023,9 +1272,10 @@ export async function pollDesktop(
          local_browser_seen_at=CASE WHEN $4 THEN now() ELSE local_browser_seen_at END,
          native_actions=CASE WHEN $3 THEN $5::boolean WHEN $6 THEN coalesce(native_actions,false) ELSE native_actions END,
          window_continuations=CASE WHEN NOT $6 THEN $7::boolean ELSE window_continuations END,
+         file_copy_shortcuts=CASE WHEN $6 THEN file_copy_shortcuts ELSE $10::boolean END,
          retained_task_id=CASE WHEN $6 THEN retained_task_id WHEN $7 THEN $8::uuid ELSE NULL END
        WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()
-       RETURNING authorization_id`,
+         AND ($6 OR platform=$9) RETURNING authorization_id`,
       deviceId,
       c.actor.id,
       confirmedPoll,
@@ -1034,6 +1284,8 @@ export async function pollDesktop(
       !!options.statusOnly,
       confirmedPoll && !!options.windowContinuations,
       options.retainedTaskId ?? null,
+      platform,
+      !!options.fileCopyShortcuts,
     );
     if (!d || options.statusOnly)
       return { task: null, authorizationId: d?.authorization_id ?? null };
@@ -1041,14 +1293,17 @@ export async function pollDesktop(
     let row = await one(
       tx,
       `SELECT * FROM assistant_desktop_tasks WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])
-       AND (NOT browser_only OR $4::boolean) AND (native_action IS NULL OR $5::boolean)
-       AND (previous_task_id IS NULL OR $6::boolean) ORDER BY created_at LIMIT 1`,
+       AND (NOT browser_only OR $4::boolean) AND (CASE WHEN $7='macos' THEN native_action='copy_finder_files'
+         ELSE native_action IS DISTINCT FROM 'copy_finder_files' AND (native_action IS NULL OR $5::boolean) END)
+       AND (NOT file_copy_flow OR $8::boolean) AND (previous_task_id IS NULL OR $6::boolean) ORDER BY created_at LIMIT 1`,
       deviceId,
       c.actor.id,
       active,
       localBrowser,
       !!options.nativeActions,
       confirmedPoll && !!options.windowContinuations,
+      platform,
+      !!options.fileCopyShortcuts,
     );
     if (
       row?.status === "WAITING" &&
@@ -1066,6 +1321,21 @@ export async function pollDesktop(
         row.id,
       );
     const task = row ? desktopTaskView(row) : null;
+    if (
+      task &&
+      options.fileCopyShortcuts &&
+      d.authorization_id &&
+      (!row!.authorization_id ||
+        row!.authorization_id === d.authorization_id) &&
+      !task.previousTaskId &&
+      !task.localBrowser &&
+      (platform === "macos"
+        ? task.nativeAction === "copy_finder_files"
+        : row!.file_copy_flow && !task.nativeAction)
+    ) {
+      const fileCopy = desktopFileCopyIntent(task.instruction, platform);
+      if (fileCopy) task.fileCopy = fileCopy;
+    }
     if (
       task &&
       confirmedPoll &&
@@ -1090,7 +1360,7 @@ async function deviceTask(c: Context, deviceId: string, id: string) {
   parse(z.string().uuid(), id);
   const row = await one(
     db,
-    "SELECT t.*,d.authorization_id AS device_authorization_id,d.local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_tasks t JOIN assistant_desktop_devices d ON d.id=t.device_id WHERE t.id=$1::uuid AND t.device_id=$2::uuid AND t.user_id=$3::bigint",
+    "SELECT t.*,d.platform,d.file_copy_shortcuts,d.authorization_id AS device_authorization_id,d.local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_tasks t JOIN assistant_desktop_devices d ON d.id=t.device_id WHERE t.id=$1::uuid AND t.device_id=$2::uuid AND t.user_id=$3::bigint",
     id,
     deviceId,
     c.actor.id,
@@ -1098,16 +1368,69 @@ async function deviceTask(c: Context, deviceId: string, id: string) {
   if (!row) fail("NOT_FOUND", "任务不存在", 404);
   return row;
 }
+function windowsFileCopy(t: Row): boolean {
+  return (
+    t.file_copy_flow &&
+    t.platform === "windows" &&
+    t.file_copy_shortcuts &&
+    !!t.authorization_id &&
+    t.authorization_id === t.device_authorization_id &&
+    !t.native_action &&
+    !t.previous_task_id &&
+    !t.browser_only &&
+    /^explorer(?:\.exe)?$/iu.test(t.application) &&
+    !!desktopFileCopyIntent(t.instruction)
+  );
+}
+
 export async function permitDesktop(
   c: Context,
   deviceId: string,
   id: string,
   input: unknown,
 ) {
-  const b = parse(z.object({ commandId: z.string().uuid() }).strict(), input);
+  const b = parse(
+    z
+      .object({
+        commandId: z.string().uuid(),
+        fileShortcut: z.enum(["copy", "paste"]).optional(),
+      })
+      .strict(),
+    input,
+  );
   const t = await deviceTask(c, deviceId, id);
+  const key = t.pending?.action?.key;
+  if (key === "COPY" || key === "PASTE") {
+    const copy = key === "COPY";
+    if (
+      !windowsFileCopy(t) ||
+      b.fileShortcut !== (copy ? "copy" : "paste") ||
+      t.pending.id !== b.commandId ||
+      Date.now() - new Date(t.pending.createdAt).getTime() >= 120000
+    )
+      return { allowed: false };
+    // Mutating the phase consumes the permit even when its HTTP response is lost.
+    const permit = await one(
+      db,
+      `UPDATE assistant_desktop_tasks t SET file_copy_phase=$5 FROM assistant_desktop_devices d
+       WHERE t.id=$1::uuid AND t.device_id=$2::uuid AND t.user_id=$3::bigint AND t.status='RUNNING'
+         AND t.pending->>'id'=$4 AND t.file_copy_flow AND t.file_copy_phase IS NOT DISTINCT FROM $6::text
+         AND d.id=t.device_id AND d.platform='windows' AND d.file_copy_shortcuts AND d.authorization_id=t.authorization_id
+         AND d.token_hash IS NOT NULL AND d.revoked_at IS NULL AND d.expires_at>now() RETURNING t.id`,
+      id,
+      deviceId,
+      c.actor.id,
+      b.commandId,
+      copy ? "copy_permitted" : "paste_permitted",
+      copy ? null : "at_target",
+    );
+    return { allowed: !!permit };
+  }
   return {
     allowed:
+      !b.fileShortcut &&
+      !t.native_action &&
+      (!t.file_copy_flow || windowsFileCopy(t)) &&
       t.status === "RUNNING" &&
       (!t.authorization_id ||
         t.authorization_id === t.device_authorization_id) &&
@@ -1153,11 +1476,30 @@ export async function acknowledgeDesktop(
     if (!t) fail("NOT_FOUND", "任务不存在", 404);
     if (t.last_ack === b.commandId) return desktopTaskView(t);
     if (t.pending?.id !== b.commandId) return desktopTaskView(t); // A pause/stop won the race; never revive it.
+    const key = t.pending.action.key;
+    if (
+      b.outcome === "ok" &&
+      (key === "COPY" || key === "PASTE") &&
+      (!t.file_copy_flow ||
+        t.file_copy_phase !==
+          (key === "COPY" ? "copy_permitted" : "paste_permitted"))
+    )
+      fail("NATIVE_TASK_CHANGED", "文件快捷键尚未获准，不能确认执行", 409);
+    let phase = t.file_copy_phase;
+    if (b.outcome !== "ok") phase = null;
+    else if (t.file_copy_flow) {
+      if (key === "COPY") phase = "copied";
+      if (key === "PASTE") phase = "pasted";
+      if (t.pending.action.kind === "switch_window" && phase === "copied")
+        phase = "at_target";
+    }
     const status =
       t.status !== "RUNNING"
         ? t.status
         : b.outcome === "ok"
-          ? "RUNNING"
+          ? phase === "pasted"
+            ? "DONE"
+            : "RUNNING"
           : "NEEDS_USER";
     const confirmedBefore = desktopStepReceipts(t).confirmedSteps;
     const history = [
@@ -1181,19 +1523,61 @@ export async function acknowledgeDesktop(
         : null;
     const row = await one(
       tx,
-      "UPDATE assistant_desktop_tasks SET pending=NULL,last_ack=$2::uuid,step=step+1,status=$3,stage=$4,history=$5::jsonb,window_id=COALESCE($6::uuid,window_id),window_name=COALESCE($7,window_name),application=COALESCE($8,application),updated_at=now() WHERE id=$1::uuid RETURNING *",
+      "UPDATE assistant_desktop_tasks SET pending=NULL,last_ack=$2::uuid,step=step+1,status=$3,stage=$4,history=$5::jsonb,window_id=COALESCE($6::uuid,window_id),window_name=COALESCE($7,window_name),application=COALESCE($8,application),file_copy_phase=$9,updated_at=now() WHERE id=$1::uuid RETURNING *",
       id,
       b.commandId,
       status,
-      b.note,
+      phase === "pasted" ? "已核验文件复制到指定的资源管理器目录" : b.note,
       JSON.stringify(history),
       target?.id || null,
       target?.title || null,
       target?.application || null,
+      phase,
     );
     return desktopTaskView(row!);
   });
 }
+async function saveDesktopPlan(
+  c: Context,
+  deviceId: string,
+  id: string,
+  lease: string,
+  requestId: string,
+  action: DesktopAction,
+  targetWindow?: { id: string; title: string; application: string },
+) {
+  const status =
+    action.kind === "done"
+      ? "DONE"
+      : action.kind === "handoff"
+        ? "NEEDS_USER"
+        : "RUNNING";
+  const command =
+    status === "RUNNING"
+      ? {
+          id: randomUUID(),
+          requestId,
+          action,
+          ...(targetWindow ? { targetWindow } : {}),
+          createdAt: new Date().toISOString(),
+        }
+      : null;
+  // A concurrent stop/revoke invalidates the lease. A late model response cannot restart input.
+  const row = await one(
+    db,
+    "UPDATE assistant_desktop_tasks SET status=$3,stage=$4,pending=$5::jsonb,planning_id=NULL,updated_at=now() WHERE id=$1::uuid AND planning_id=$2::uuid AND status='RUNNING' RETURNING *",
+    id,
+    lease,
+    status,
+    action.description,
+    JSON.stringify(command),
+  );
+  return {
+    task: desktopTaskView(row || (await deviceTask(c, deviceId, id))),
+    command: row ? command : null,
+  };
+}
+
 export async function planDesktop(
   c: Context,
   deviceId: string,
@@ -1205,14 +1589,18 @@ export async function planDesktop(
   try {
     const b = parse(desktopObservationSchema, input);
     const old = await deviceTask(c, deviceId, id);
+    const localBrowser = "localBrowser" in b && b.localBrowser;
+    const desktopExplorer = "desktopExplorer" in b && b.desktopExplorer;
+    if ("fileCopy" in b && !old.file_copy_flow)
+      fail("FORBIDDEN", "此任务需要相应的窗口观察和授权", 403);
     if (old.native_action)
-      fail("FORBIDDEN", "此记事本任务只在本机核验窗口", 403);
+      fail("FORBIDDEN", "此任务由已配对的客户端在本机核验", 403);
     if (old.status !== "RUNNING")
       return { task: desktopTaskView(old), command: null };
     if (
       old.browser_only
-        ? !b.localBrowser || !!b.windows || !old.local_browser_available
-        : !!b.localBrowser
+        ? !localBrowser || !!b.windows || !old.local_browser_available
+        : !!localBrowser
     )
       fail(
         "FORBIDDEN",
@@ -1254,12 +1642,12 @@ export async function planDesktop(
         ? desktopExplorerIntent(old.instruction)
         : undefined;
     const explorerIntent =
-      b.desktopExplorer &&
+      desktopExplorer &&
       canSwitchWindow &&
       /^explorer(?:\.exe)?$/iu.test(b.application)
         ? fileCreation
         : undefined;
-    if (b.desktopExplorer && !explorerIntent)
+    if (desktopExplorer && !explorerIntent)
       fail("FORBIDDEN", "当前任务或窗口不属于已授权的桌面资源管理器操作", 403);
     if (
       old.pending?.action?.key === "CTRL_SHIFT_N" &&
@@ -1270,6 +1658,13 @@ export async function planDesktop(
         "桌面目录或资源管理器窗口已变化，请核对后继续",
         409,
       );
+    if (
+      (b.fileShortcut && !old.file_copy_flow) ||
+      (old.file_copy_flow && !windowsFileCopy(old))
+    )
+      fail("FORBIDDEN", "文件快捷键只能用于受支持的本机资源管理器任务", 403);
+    // A repeat poll can recover the command for a locally journalled receipt.
+    // Only an unused permit with fresh evidence can actually send the keystroke.
     if (old.pending)
       return { task: desktopTaskView(old), command: old.pending };
     if (
@@ -1290,14 +1685,69 @@ export async function planDesktop(
     lease = randomUUID();
     const claimed = await one(
       db,
-      "UPDATE assistant_desktop_tasks SET planning_id=$2::uuid,planning_at=now(),stage='正在观察当前窗口',window_name=$3,updated_at=now() WHERE id=$1::uuid AND status='RUNNING' AND pending IS NULL AND authorization_id IS NOT DISTINCT FROM $4::uuid AND window_id IS NOT DISTINCT FROM $5::uuid AND (planning_id IS NULL OR planning_at<now()-interval '3 minutes') RETURNING *",
+      "UPDATE assistant_desktop_tasks SET planning_id=$2::uuid,planning_at=now(),stage='正在观察当前窗口',window_name=$3,updated_at=now() WHERE id=$1::uuid AND status='RUNNING' AND pending IS NULL AND authorization_id IS NOT DISTINCT FROM $4::uuid AND window_id IS NOT DISTINCT FROM $5::uuid AND step=$6 AND file_copy_phase IS NOT DISTINCT FROM $7::text AND (planning_id IS NULL OR planning_at<now()-interval '3 minutes') RETURNING *",
       id,
       lease,
       b.window,
       old.authorization_id,
       old.window_id,
+      old.step,
+      old.file_copy_phase,
     );
     if (!claimed) fail("DESKTOP_PLANNING", "正在分析窗口，请稍候", 409);
+    if (old.file_copy_flow) {
+      const windows = b.windows;
+      if (
+        windows?.length !== 2 ||
+        !windows.every((w) => /^explorer(?:\.exe)?$/iu.test(w.application))
+      )
+        fail(
+          "WINDOW_CHANGED",
+          "文件复制需要核验来源和目标两个资源管理器窗口",
+          409,
+        );
+      let action: DesktopAction;
+      let target: (typeof windows)[number] | undefined;
+      if (!old.file_copy_phase && b.fileShortcut === "copy")
+        action = {
+          kind: "key",
+          key: "COPY",
+          description: "复制已选中的源文件",
+        };
+      else if (old.file_copy_phase === "copied" && !b.fileShortcut) {
+        target = windows.find((w) => w.id !== b.windowId)!;
+        action = {
+          kind: "switch_window",
+          windowId: target.id,
+          description: "切换到指定的目标目录",
+        };
+      } else if (
+        old.file_copy_phase === "at_target" &&
+        b.fileShortcut === "paste"
+      )
+        action = {
+          kind: "key",
+          key: "PASTE",
+          description: "向目标目录粘贴并核验文件",
+        };
+      else
+        action = {
+          kind: "handoff",
+          description:
+            "来源选中项、目标文件列表或本次复制状态未通过核验，请在本机核对后继续",
+        };
+      return await saveDesktopPlan(
+        c,
+        deviceId,
+        id,
+        lease,
+        b.requestId,
+        action,
+        target,
+      );
+    }
+    if (!("image" in b))
+      fail("INVALID_IMAGE", "此操作需要本机授权的窗口画面", 400);
     const settings = await one(
       db,
       "SELECT enabled,api_key_encrypted,verified_at FROM compass_ai_settings WHERE id=1",
@@ -1412,6 +1862,11 @@ export async function planDesktop(
     action.description = assistantPublicText(action.description);
     if (
       action.kind === "key" &&
+      (action.key === "COPY" || action.key === "PASTE")
+    )
+      fail("FORBIDDEN", "文件快捷键必须由本机核验来源和目标", 403);
+    if (
+      action.kind === "key" &&
       action.key === "CTRL_SHIFT_N" &&
       explorerIntent !== "folder"
     )
@@ -1434,36 +1889,15 @@ export async function planDesktop(
         (action.kind === "key" && action.key.startsWith("CTRL_")))
     )
       fail("FORBIDDEN", "本地浏览器任务只能在网页内容区单击、滚动或输入", 403);
-    const status =
-      action.kind === "done"
-        ? "DONE"
-        : action.kind === "handoff"
-          ? "NEEDS_USER"
-          : "RUNNING";
-    const command =
-      status === "RUNNING"
-        ? {
-            id: randomUUID(),
-            requestId: b.requestId,
-            action,
-            ...(targetWindow ? { targetWindow } : {}),
-            createdAt: new Date().toISOString(),
-          }
-        : null;
-    // A concurrent stop/revoke invalidates the lease. A late model response cannot restart input.
-    const row = await one(
-      db,
-      "UPDATE assistant_desktop_tasks SET status=$3,stage=$4,pending=$5::jsonb,planning_id=NULL,updated_at=now() WHERE id=$1::uuid AND planning_id=$2::uuid AND status='RUNNING' RETURNING *",
+    return await saveDesktopPlan(
+      c,
+      deviceId,
       id,
       lease,
-      status,
-      action.description,
-      JSON.stringify(command),
+      b.requestId,
+      action,
+      targetWindow,
     );
-    return {
-      task: desktopTaskView(row || (await deviceTask(c, deviceId, id))),
-      command: row ? command : null,
-    };
   } catch (e) {
     const rawCode =
       e instanceof HttpException

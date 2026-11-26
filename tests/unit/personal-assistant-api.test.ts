@@ -196,6 +196,7 @@ beforeAll(async () => {
     "114_desktop_execution_readiness.sql",
     "115_desktop_window_continuations.sql",
     "116_browser_goal_continuation.sql",
+    "117_desktop_file_shortcuts.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -963,6 +964,29 @@ describe("assistant business tools and private memory", () => {
         webSearch: true,
       }),
     ).rejects.toThrow();
+  });
+  it.each([["windows", true], ["macos", true], ["macos", false]] as const)("routes a chat file copy to the named %s with AI disabled (automatic %s)", async (platform, automatic) => {
+    const deviceId = randomUUID();
+    await fixture.database!.exec("UPDATE compass_ai_settings SET enabled=false, verified_at=NULL");
+    await fixture.database!.query(
+      `INSERT INTO assistant_desktop_devices(id,user_id,name,platform,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,authorization_id,file_copy_shortcuts)
+       VALUES($1,7,'样品室',$2,'s','t',now(),now(),false,$3,true)`,
+      [deviceId, platform, randomUUID()],
+    );
+    const message = platform === "macos"
+      ? "在电脑「样品室」上使用 ⌘C、⌘V 把「~/Documents/样品/说明.txt」复制到「~/Documents/归档」"
+      : String.raw`在电脑「样品室」上使用 Ctrl+C、Ctrl+V 把「D:\样品\说明.txt」复制到「D:\归档」`;
+    const body = { ...input(), message, ...(automatic ? { autoExecution: true } : { desktopDeviceId: deviceId }), model: "chat-only/unavailable" };
+    const reply = await sendAssistant(actor(), body);
+    const taskId = reply.messages.at(-1)?.desktopTaskId;
+    expect(taskId).toEqual(expect.any(String));
+    expect((await sendAssistant(actor(), body)).messages.at(-1)?.desktopTaskId).toBe(taskId);
+    const rows = (await fixture.database!.query(
+      "SELECT id,device_id,native_action,file_copy_flow,model_ref FROM assistant_desktop_tasks",
+    )).rows;
+    expect(rows).toEqual([{ id: taskId, device_id: deviceId, native_action: platform === "macos" ? "copy_finder_files" : null,
+      file_copy_flow: platform === "windows", model_ref: null }]);
+    expect(fetch).not.toHaveBeenCalled();
   });
   it.each([true, false])("dispatches a simple Notepad switch without a chat or vision connection (automatic routing: %s)", async (autoExecution) => {
     const deviceId = randomUUID();

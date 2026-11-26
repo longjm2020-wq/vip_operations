@@ -11,7 +11,7 @@ import {
   isDesktopClient,
   type DesktopClientState,
 } from "./desktop-client";
-import { desktopReceiverProblem } from "./desktop-setup";
+import { desktopReceiverProblem, macCopyExample } from "./desktop-setup";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
 import { AssistantDesktopTaskCard } from "./assistant-desktop-task-card";
 
@@ -76,7 +76,9 @@ export function AssistantDesktopPanel({
   const showComposer =
     !!selected &&
     !desktopReceiverProblem(selected, client) &&
-    (native ? composingOnLocal && !problem : true);
+    (!native ||
+      selected.platform === "macos" ||
+      (composingOnLocal && !problem));
   async function run(key: string, fn: () => Promise<unknown>) {
     if (busy) return;
     setBusy(key);
@@ -103,9 +105,11 @@ export function AssistantDesktopPanel({
         </Space>
       </div>
       <p>
-        {automatic
-          ? "在小序输入框发送「在我的电脑上切换到已打开的记事本窗口」。任务进度会显示在对话里。"
-          : "使用你自己的 Windows 电脑操作网页和应用。首次连接确认一次，之后可直接下达指令。"}
+        {selected?.platform === "macos"
+          ? `在小序输入框写明源文件和目标目录，例如“${macCopyExample}”。结果会显示在这条指令的任务卡中。`
+          : automatic
+            ? "在小序输入框发送「在我的电脑上切换到已打开的记事本窗口」。任务进度会显示在对话里。"
+            : "选择执行任务的电脑。Windows 可操作网页和应用，Mac 可在 Finder 复制文件。"}
       </p>
       {(native || !data?.devices.length) && (
         <Alert
@@ -130,7 +134,7 @@ export function AssistantDesktopPanel({
                     ? "可直接在小序输入框下达本机指令。"
                     : "点击「使用我的电脑」将本机选为执行设备。"
                   : "点击下方按钮，在本机弹窗确认后即可使用。授权会记住，可随时撤销。")
-              : "下载并解压桌面端，打开 XutiDesktop.exe，登录后在「我的电脑」中点击「使用我的电脑」。只需首次确认，之后可从网页或桌面端下达指令。"
+              : "Windows 用户解压桌面端，打开 XutiDesktop.exe，登录后点「使用我的电脑」。Mac 用户在「其他连接方式与客户端更新」生成配对码，输入 Finder 助手后点「开始接单」，选择允许操作的文件夹。"
           }
         />
       )}
@@ -168,13 +172,22 @@ export function AssistantDesktopPanel({
           </>
         )}
         {!native && !data?.devices.length && (
-          <Button
-            href="/downloads/xuti-desktop.zip"
-            download
-            icon={<DownloadOutlined />}
-          >
-            下载 Windows 桌面端
-          </Button>
+          <>
+            <Button
+              href="/downloads/xuti-desktop.zip"
+              download
+              icon={<DownloadOutlined />}
+            >
+              下载 Windows 桌面端
+            </Button>
+            <Button
+              href="/downloads/xuti-finder-macos.zip"
+              download
+              icon={<DownloadOutlined />}
+            >
+              下载 Mac Finder 助手
+            </Button>
+          </>
         )}
       </Space>
       {setupNote && <Alert type="info" showIcon title={setupNote} />}
@@ -187,6 +200,15 @@ export function AssistantDesktopPanel({
         >
           下载新版桌面端
         </Button>
+        {(native || !!data?.devices.length) && (
+          <Button
+            href="/downloads/xuti-finder-macos.zip"
+            download
+            icon={<DownloadOutlined />}
+          >
+            下载 Mac Finder 助手
+          </Button>
+        )}
         <Button
           loading={busy === "pair"}
           disabled={!!busy || disabled}
@@ -205,7 +227,7 @@ export function AssistantDesktopPanel({
           <Alert
             showIcon
             type="info"
-            title="仅粘贴到小序桌面端的电脑任务面板，10分钟内有效"
+            title="请在自己的 Windows 桌面端或 Mac Finder 助手中输入配对码，10 分钟内有效"
             description={
               <>
                 <Typography.Text copyable={{ text: pair.code }} code>
@@ -224,6 +246,7 @@ export function AssistantDesktopPanel({
       {data?.devices.map((d) => (
         <div className="assistant-desktop-item" key={d.id}>
           <strong>{d.name}</strong>
+          {d.platform === "macos" && <Tag>macOS · Finder</Tag>}
           <Tag color={d.online ? "processing" : undefined}>
             {!d.online
               ? "离线"
@@ -235,7 +258,9 @@ export function AssistantDesktopPanel({
                   : "在线 · 接单待确认"}
           </Tag>
           <Tag color={d.crossWindowAuthorized ? "blue" : undefined}>
-            {d.crossWindowAuthorized ? "已记住跨窗口授权" : "逐次允许"}
+            {d.platform === "macos"
+              ? d.crossWindowAuthorized ? "已授权 Finder" : "等待 Finder 授权"
+              : d.crossWindowAuthorized ? "已记住跨窗口授权" : "逐次允许"}
           </Tag>
           {selectedId === d.id && (
             <Tag color="blue">
@@ -286,7 +311,7 @@ export function AssistantDesktopPanel({
                     })
                   }
                 >
-                  撤销跨窗口授权
+                  {d.platform === "macos" ? "撤销 Finder 授权" : "撤销跨窗口授权"}
                 </Button>
               )}
             </Space>
@@ -301,14 +326,16 @@ export function AssistantDesktopPanel({
             <AssistantDesktopTaskCard
               key={task.id}
               task={task}
-              device={data.devices.find((device) => device.id === task.deviceId)}
+              device={data.devices.find(
+                (device) => device.id === task.deviceId,
+              )}
               localDeviceId={localId}
               refresh={refresh}
             />
           ))}
           {data.devices.length > 0 && (
             <p className="assistant-desktop-note">
-              电脑和小序桌面端需保持运行。在任务卡可暂停或停止，紧急停止快捷键见本机「电脑任务」。
+              保持执行设备和客户端运行。可在任务卡暂停或停止，Mac 用户也可在 Finder 助手点「停止接单」。Windows 的紧急停止快捷键见本机「电脑任务」。
               {client?.stopShortcut && `本机快捷键为 ${client.stopShortcut}。`}
               登录、付款、对外发送和删除等操作由你接手。
             </p>

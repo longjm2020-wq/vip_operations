@@ -20,6 +20,7 @@ import { type WorkspaceConfig } from "../../../../../packages/contracts/src/pers
 import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
+import { desktopFileCopyIntent } from "../../../../../packages/contracts/src/desktop-file-copy.js";
 import {
   assistantFollowupAnchor,
   classifyAssistantExecution,
@@ -401,7 +402,9 @@ export async function sendAssistant(
             deviceId: desktopExecution.deviceId,
             requestId: body.requestId,
             instruction: body.message,
-            model: executionModel,
+            model: desktopFileCopyIntent(body.message) || desktopFileCopyIntent(body.message, "macos")
+              ? undefined
+              : executionModel,
             localBrowser: desktopExecution?.localBrowser,
           },
           desktopExecution.previousTaskId

@@ -122,6 +122,7 @@ import {
 import {
   connectAndAuthorizeDesktop,
   desktopReceiverProblem,
+  macCopyExample,
   desktopSetupMessage,
   readNativeWorkbenchDevice,
 } from "./desktop-setup";
@@ -734,6 +735,9 @@ export function PersonalAssistantProvider({
         (!draftRoute.deviceName ||
           draftRoute.deviceName === desktopTarget?.name)));
   const showChatModel = !externalMode && draftIsSite && !desktopOnlyPrompt;
+  const desktopExample = desktopTarget?.platform === "macos"
+    ? macCopyExample
+    : "在我的电脑上打开记事本";
   const composerReady = draftIsPublicSearch
     ? !!data
     : docked
@@ -1885,7 +1889,7 @@ export function PersonalAssistantProvider({
         )}
         placeholder={
           desktopOnlyPrompt
-            ? "告诉我你想完成什么，例如：在我的电脑上打开记事本…"
+            ? `告诉我你想完成什么，例如：${desktopExample}…`
             : data?.ready ||
                 desktopMode ||
                 draftIsPublicSearch ||
@@ -2320,7 +2324,7 @@ export function PersonalAssistantProvider({
                   : "说出问题，查库存、跟项目、看任务，也能记住你的工作偏好。"}
               </p>
               {(desktopOnlyPrompt
-                ? ["在我的电脑上打开记事本"]
+                ? [desktopExample]
                 : [
                     "帮我安排明天下午3点的选款会",
                     "查看我参与的项目进度",

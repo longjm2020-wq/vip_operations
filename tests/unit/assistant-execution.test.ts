@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { desktopFileCopyIntent } from "../../packages/contracts/src/desktop-file-copy.js";
 import {
   classifyAssistantExecution,
   desktopExplorerIntent,
@@ -11,6 +12,23 @@ import {
 } from "../../packages/contracts/src/assistant-execution.js";
 
 describe("workbench execution from direct instructions", () => {
+  it("preserves original file names, platform and the scope of the selected shortcuts", () => {
+    expect(desktopFileCopyIntent("请在 Mac 上用 Command+C 和 Command+V 把「~/样品/Ａ 雪.txt」复制到「~/核对」", "macos")).toEqual({
+      source: "~/样品/Ａ 雪.txt", destination: "~/核对", selection: "file",
+    });
+    expect(desktopFileCopyIntent(String.raw`Copy all files from "D:\样品 室" to D:\核对`)).toEqual({
+      source: String.raw`D:\样品 室`, destination: String.raw`D:\核对`, selection: "files",
+    });
+    const sample = String.raw`把 D:\样品\a.txt 复制到 D:\核对`;
+    for (const raw of [sample + "，并删除源文件", sample + "然后打开终端", "不要" + sample, sample + "吗？",
+      "在 Mac 上" + sample, String.raw`将 D:\样品\..\系统\a 复制到 D:\核对`, String.raw`将 D:\aux.txt 复制到 D:\核对`,
+      String.raw`将 \\share\样品 复制到 D:\核对`, "用 ⌘C、⌘V " + sample]) {
+      expect(desktopFileCopyIntent(raw)).toBeUndefined();
+    }
+    for (const path of ["~/../Private", "/tmp/demo", "~/", "/Users/test/", "~/Data/*", "~/A\nB"]) {
+      expect(desktopFileCopyIntent("copy " + path + " to ~/归档", "macos")).toBeUndefined();
+    }
+  });
   it.each([
     [
       "在我的电脑桌面新建文件夹命名“自动化测试1126”，并在文件夹内新建两个子文件夹和1个记事本，在记事本内写入“自动化测试666”",

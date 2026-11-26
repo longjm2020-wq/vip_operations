@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { test, expect } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
 import { selectAssistantPanel } from "./assistant-controls.js";
 
-test("工作台自动区分记事本连续输入、普通提问与网页任务，回执绑定原窗口", async ({
-  page,
-  request,
-  baseURL,
-}) => {
+async function pairTestReceiver(
+  page: Page,
+  request: APIRequestContext,
+  baseURL: string,
+  name: string,
+  platform?: "macos",
+) {
   const desktop = "/api/v1/my-workspace/assistant/desktop";
   const login = await page.request.post("/api/v1/auth/login", {
     data: { username: "admin", password: process.env.E2E_PASSWORD },
@@ -21,9 +28,8 @@ test("工作台自动区分记事本连续输入、普通提问与网页任务�
     },
   });
   await expect(pairing).toBeOK();
-  const name = "接单回归测试电脑";
   const paired = await request.post(desktop + "/client/pair", {
-    data: { code: (await pairing.json()).data.code, name },
+    data: { code: (await pairing.json()).data.code, name, platform },
   });
   await expect(paired).toBeOK();
   const { token, deviceId } = (await paired.json()).data;
@@ -35,6 +41,29 @@ test("工作台自动区分记事本连续输入、普通提问与网页任务�
     await expect(res).toBeOK();
     return (await res.json()).data;
   };
+  const revoke = () =>
+    page.request.post(desktop + "/devices/" + deviceId + "/revoke", {
+      headers: {
+        Origin: baseURL,
+        "X-CSRF-Token": csrfToken,
+        "Idempotency-Key": randomUUID(),
+      },
+    });
+  return { deviceId, client, revoke };
+}
+
+test("工作台自动区分记事本连续输入、普通提问与网页任务，回执绑定原窗口", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const name = "接单回归测试电脑";
+  const { client, deviceId, revoke } = await pairTestReceiver(
+    page,
+    request,
+    baseURL!,
+    name,
+  );
   try {
     const { authorizationId } = await client("authorization", {
       enabled: true,
@@ -62,7 +91,9 @@ test("工作台自动区分记事本连续输入、普通提问与网页任务�
     await composer.getByRole("button", { name: "发送给个人助理" }).click();
     const panel = page.locator(".assistant-desktop-panel");
     await panel.getByText("操作任务", { exact: true }).click();
-    const card = panel.getByRole("region", { name: "电脑任务：" + instruction });
+    const card = panel.getByRole("region", {
+      name: "电脑任务：" + instruction,
+    });
     await expect(card).toContainText(instruction);
     const { task } = await client("poll", receiving);
     expect(task).toMatchObject({
@@ -152,20 +183,91 @@ test("工作台自动区分记事本连续输入、普通提问与网页任务�
     await textbox.fill(files);
     await client("poll", receiving);
     await composer.getByRole("button", { name: "发送给个人助理" }).click();
-    const filesCard = page.locator(".assistant-desktop-panel").getByRole("region", { name: "电脑任务：" + files });
+    const filesCard = page
+      .locator(".assistant-desktop-panel")
+      .getByRole("region", { name: "电脑任务：" + files });
     await expect(filesCard).toContainText(files);
     const legacy = (await client("poll", receiving)).task;
     expect(legacy.startLocation).toBeUndefined();
-    expect((await client("poll", { ...receiving, desktopExplorer: true })).task).toMatchObject({
-      id: legacy.id, deviceId, status: "WAITING", startLocation: "desktopExplorer",
+    expect(
+      (await client("poll", { ...receiving, desktopExplorer: true })).task,
+    ).toMatchObject({
+      id: legacy.id,
+      deviceId,
+      status: "WAITING",
+      startLocation: "desktopExplorer",
     });
   } finally {
-    await page.request.post(desktop + "/devices/" + deviceId + "/revoke", {
-      headers: {
-        Origin: baseURL!,
-        "X-CSRF-Token": csrfToken,
-        "Idempotency-Key": randomUUID(),
-      },
+    await revoke();
+  }
+});
+
+test("从小序聊天将文件复制交给配对的 Mac，原任务卡显示 Finder 回执", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const name = "Finder 回归测试设备";
+  const { client, deviceId, revoke } = await pairTestReceiver(
+    page,
+    request,
+    baseURL!,
+    name,
+    "macos",
+  );
+  const receiving = { platform: "macos", fileCopyShortcuts: true };
+  try {
+    const { authorizationId } = await client("authorization", {
+      enabled: true,
     });
+    await client("poll", receiving);
+    await page.goto("/my-workspace");
+    await selectAssistantPanel(page, "我的电脑");
+    const panel = page.locator(".assistant-desktop-panel");
+    await panel.getByText("其他连接方式与客户端更新", { exact: true }).click();
+    await expect(
+      panel.getByRole("link", { name: "下载 Mac Finder 助手" }),
+    ).toHaveAttribute("href", "/downloads/xuti-finder-macos.zip");
+    const device = panel
+      .locator(".assistant-desktop-item")
+      .filter({ hasText: name });
+    await expect(device).toContainText("macOS · Finder");
+    await device.getByRole("button", { name: "设为常用电脑" }).click();
+    const source = "~/Documents/样品/说明.txt",
+      destination = "~/Documents/已核对";
+    const instruction = `把「${source}」复制到「${destination}」`;
+    const composer = page.locator(".assistant-compose:visible");
+    await composer.getByRole("textbox").fill(instruction);
+    await client("poll", receiving);
+    await composer.getByRole("button", { name: "发送给个人助理" }).click();
+    const chatCard = page
+      .getByRole("region", { name: "电脑任务：" + instruction })
+      .filter({ visible: true })
+      .first();
+    await expect(chatCard).toContainText(instruction);
+    const { task } = await client("poll", receiving);
+    expect(task).toMatchObject({
+      deviceId,
+      nativeAction: "copy_finder_files",
+      fileCopy: { source, destination, selection: "file" },
+    });
+    const attemptId = randomUUID();
+    for (const action of [
+      "start",
+      "permit_copy",
+      "copied",
+      "permit_paste",
+      "complete",
+    ])
+      await client("tasks/" + task.id + "/file-copy", {
+        action,
+        authorizationId,
+        attemptId,
+      });
+    await expect(chatCard).toContainText("已核验文件复制到指定的 Finder 目录", {
+      timeout: 15000,
+    });
+  } finally {
+    await revoke();
   }
 });

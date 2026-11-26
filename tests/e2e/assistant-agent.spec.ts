@@ -1560,6 +1560,8 @@ test("我的电脑无设备只显示连接入口，旧专用偏好不自动选�
   await expect(
     panel.getByRole("link", { name: /下载 Windows 桌面端/ }),
   ).toBeVisible();
+  await expect(panel.getByRole("link", { name: "下载 Mac Finder 助手" }))
+    .toHaveAttribute("href", "/downloads/xuti-finder-macos.zip");
   await expect(panel.getByText("尚未配置小序专用电脑")).toHaveCount(0);
   await expect(panel.getByText("选择我的电脑", { exact: true })).toHaveCount(0);
   await expect(panel.locator(".assistant-desktop-management")).toHaveCount(0);

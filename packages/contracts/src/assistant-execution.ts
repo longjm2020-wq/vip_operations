@@ -1,4 +1,8 @@
 import { parseVoiceCommand } from "./assistant-voice-commands.js";
+import {
+  desktopFileCopyDeviceName,
+  desktopFileCopyIntent,
+} from "./desktop-file-copy.js";
 import { parseAssistantWebsiteRequest } from "./assistant-web-command.js";
 import type { AssistantMessage } from "./personal-assistant.js";
 
@@ -346,6 +350,10 @@ export function classifyAssistantExecution(
   options?: { inferExternalTargets?: boolean },
 ): AssistantExecution {
   if (desktopExplorerIntent(text)) return { kind: "desktop" };
+  if (desktopFileCopyIntent(text) || desktopFileCopyIntent(text, "macos")) {
+    const deviceName = desktopFileCopyDeviceName(text);
+    return deviceName ? { kind: "desktop", deviceName } : { kind: "desktop" };
+  }
   // A literal may name a device or URL. It belongs to the previous target,
   // and cannot grant a new destination by appearing inside text to enter.
   if (classifyAssistantFollowup(text)) return { kind: "site" };

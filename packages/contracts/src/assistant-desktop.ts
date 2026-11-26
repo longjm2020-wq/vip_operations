@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { DesktopFileCopy, DesktopPlatform } from "./desktop-file-copy.js";
 
 export const desktopDevicePurposes = ["personal", "dedicated"] as const;
 export type DesktopDevicePurpose = (typeof desktopDevicePurposes)[number];
@@ -80,6 +81,8 @@ export const desktopActionSchema = z.discriminatedUnion("kind", [
         "CTRL_A",
         "CTRL_S",
         "CTRL_SHIFT_N",
+        "COPY",
+        "PASTE",
         "CTRL_Z",
       ]),
       description,
@@ -113,7 +116,7 @@ const desktopWindowSchema = z
     application: z.string().trim().min(1).max(80),
   })
   .strict();
-export const desktopObservationSchema = z
+const visualObservationSchema = z
   .object({
     requestId: z.string().uuid(),
     image: z
@@ -128,6 +131,7 @@ export const desktopObservationSchema = z
     localBrowser: z.literal(true).optional(),
     windowId: z.string().uuid().optional(),
     desktopExplorer: z.literal(true).optional(),
+    fileShortcut: z.enum(["copy", "paste"]).optional(),
     windows: z
       .array(desktopWindowSchema)
       .min(1)
@@ -136,8 +140,24 @@ export const desktopObservationSchema = z
       .optional(),
   })
   .strict();
+/** The client needs only locally verified identities for a deterministic file copy. */
+export const desktopObservationSchema = z.union([
+  visualObservationSchema,
+  visualObservationSchema
+    .pick({
+      requestId: true,
+      windowId: true,
+      window: true,
+      application: true,
+      windows: true,
+      fileShortcut: true,
+    })
+    .extend({ fileCopy: z.literal(true) })
+    .strict(),
+]);
 export type DesktopDevice = {
   id: string;
+  platform?: DesktopPlatform;
   name: string;
   online: boolean;
   /** Absent when this client's polling protocol cannot distinguish setup from execution. */
@@ -165,9 +185,12 @@ export type DesktopTask = {
   }[];
   /** Hint for the authorized client's automatic start on its real execution poll. */
   startLocation?: "desktopExplorer";
+  /** Available to file-copy capable native clients on their execution polls. */
+  fileCopy?: DesktopFileCopy;
   window: string;
   scope: "window" | "device";
-  nativeAction?: "open_notepad" | "focus_notepad" | "type_notepad";
+  nativeAction?:
+    "open_notepad" | "focus_notepad" | "type_notepad" | "copy_finder_files";
   nativeText?: string;
   previousTaskId?: string;
   boundWindowId?: string;

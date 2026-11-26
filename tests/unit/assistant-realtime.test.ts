@@ -174,6 +174,7 @@ beforeAll(async () => {
   );
   await f.db.exec(await readFile("packages/database/migrations/115_desktop_window_continuations.sql", "utf8"));
   await f.db.exec(await readFile("packages/database/migrations/116_browser_goal_continuation.sql", "utf8"));
+  await f.db.exec(await readFile("packages/database/migrations/117_desktop_file_shortcuts.sql", "utf8"));
 });
 beforeEach(async () => {
   await f.db!

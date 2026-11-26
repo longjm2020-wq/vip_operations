@@ -71,6 +71,7 @@ vi.mock("../../apps/api/src/modules/analytics/ai.js", () => ({
 import {
   acknowledgeDesktop,
   createDesktopPair,
+  controlMacFileCopy,
   desktopControl,
   desktopTaskView,
   desktopProviderDiagnostic,
@@ -137,6 +138,7 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await fixture.db.exec(await readFile("packages/database/migrations/117_desktop_file_shortcuts.sql", "utf8"));
 });
 beforeEach(async () => {
   fixture.session = true;
@@ -217,6 +219,102 @@ async function shot() {
 }
 
 describe("paired desktop task execution", () => {
+  it("dispatches Finder from chat with one-use permissions and verified native receipts", async () => {
+    const p = await createDesktopPair(actor(), "owner-session");
+    const { deviceId } = await pairDesktop({ code: p.code, name: "测试 Mac", platform: "macos" });
+    const c = actor();
+    const { authorizationId } = await setDesktopAuthorization(c, deviceId, true);
+    const request = { deviceId, requestId: randomUUID(), instruction: "将 ~/Desktop/样品 下的文件复制到 ~/Desktop/归档" };
+    const capabilities = { platform: "macos" as const, fileCopyShortcuts: true };
+    await pollDesktop(c, deviceId, false, { statusOnly: true });
+    await expect(queueDesktopTask(c, request)).rejects.toThrow();
+    await pollDesktop(c, deviceId, false, capabilities);
+    await expect(queueDesktopTask(c, { ...request, instruction: "在本机打开终端" })).rejects.toThrow();
+    await expect(queueDesktopTask(c, { ...request, localBrowser: true })).rejects.toThrow();
+    const task = await queueDesktopTask(c, request);
+    expect(task.nativeAction).toBe("copy_finder_files");
+    expect((await queueDesktopTask(c, request)).id).toBe(task.id);
+    expect((await desktopState(c)).devices[0].platform).toBe("macos");
+    expect((await pollDesktop(c, deviceId, true, { nativeActions: true })).task).toBeNull();
+    let attemptId = randomUUID();
+    const act = (action: string) => controlMacFileCopy(c, deviceId, task.id, { action, attemptId, authorizationId });
+    await expect(act("start")).rejects.toThrow();
+    const work = await pollDesktop(c, deviceId, false, capabilities);
+    expect(work.task?.fileCopy).toEqual({ source: "~/Desktop/样品", destination: "~/Desktop/归档", selection: "files" });
+    await act("start");
+    await expect(act("permit_paste")).rejects.toThrow();
+    await expect(controlMacFileCopy(c, deviceId, task.id, { action: "permit_copy", attemptId, authorizationId: randomUUID() })).rejects.toThrow();
+    await act("permit_copy");
+    await expect(act("permit_copy")).rejects.toThrow();
+    await act("copied");
+    await act("permit_paste");
+    await expect(act("permit_paste")).rejects.toThrow();
+    await desktopControl(c, task.id, { action: "pause" });
+    await expect(act("complete")).rejects.toThrow();
+    await desktopControl(c, task.id, { action: "resume" });
+    await pollDesktop(c, deviceId, false, capabilities);
+    await expect(act("start")).rejects.toThrow();
+    attemptId = randomUUID();
+    await act("start");
+    await expect(act("permit_paste")).rejects.toThrow();
+    await act("permit_copy");
+    await act("copied");
+    await act("permit_paste");
+    expect(await act("complete")).toMatchObject({ status: "DONE", step: 3, confirmedSteps: 3 });
+    await expect(act("complete")).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["COPY", "PASTE"])("rejects an unverified shortcut %s from the visual model", async key => {
+    const { d, t } = await allowed();
+    vi.mocked(fetch).mockResolvedValueOnce(model({ kind: "key", key, description: "执行快捷键" }));
+    await expect(planDesktop(actor(), d.deviceId, t.id, await shot())).rejects.toThrow();
+    expect((await desktopState(actor())).tasks[0]).toMatchObject({ status: "PAUSED", confirmedSteps: 0 });
+  });
+
+  it("dispatches Windows copy, target switch and paste with consumed permits and no model", async () => {
+    const { deviceId } = await paired();
+    const c = actor();
+    const { authorizationId } = await setDesktopAuthorization(c, deviceId, true);
+    const request = { deviceId, requestId: randomUUID(), instruction: String.raw`将路径D:\Desktop\AI0520下的文件复制到D:\Desktop\自动化666\新建文件夹` };
+    await expect(queueDesktopTask(c, request)).rejects.toThrow();
+    const poll = () => pollDesktop(c, deviceId, false, { fileCopyShortcuts: true });
+    await poll();
+    await expect(queueDesktopTask(c, { ...request, instruction: "copy ~/Desktop/a.txt to ~/Desktop/b" })).rejects.toThrow();
+    await expect(queueDesktopTask(c, { ...request, instruction: request.instruction + "，然后打开终端" })).rejects.toThrow();
+    const t = await queueDesktopTask(c, request);
+    // Downgraded clients cannot claim this task.
+    expect((await pollDesktop(c, deviceId, true, { nativeActions: true })).task).toBeNull();
+    expect((await poll()).task?.fileCopy?.selection).toBe("files");
+    const source = { id: randomUUID(), title: "AI0520", application: "explorer" };
+    const target = { id: randomUUID(), title: "新建文件夹", application: "explorer" };
+    await desktopControl(c, t.id, { action: "allow", authorizationId, application: source.application, windowId: source.id, window: source.title }, deviceId);
+    const plan = (w: typeof source, fileShortcut?: string) => planDesktop(c, deviceId, t.id, {
+      fileCopy: true, requestId: randomUUID(), windowId: w.id, window: w.title, application: w.application,
+      windows: [source, target], fileShortcut,
+    });
+    const permit = (commandId: string, fileShortcut?: string) => permitDesktop(c, deviceId, t.id, { commandId, fileShortcut });
+    const ack = (commandId: string) => acknowledgeDesktop(c, deviceId, t.id, { commandId, outcome: "ok", note: "本机已核验" });
+    const copy = (await plan(source, "copy")).command!;
+    expect(copy.action.key).toBe("COPY");
+    expect((await permit(copy.id)).allowed).toBe(false);
+    await expect(ack(copy.id)).rejects.toThrow();
+    expect((await permit(copy.id, "copy")).allowed).toBe(true);
+    expect((await permit(copy.id, "copy")).allowed).toBe(false);
+    await ack(copy.id);
+    const move = (await plan(source)).command!;
+    expect(move.action.windowId).toBe(target.id);
+    expect((await permit(move.id)).allowed).toBe(true);
+    await ack(move.id);
+    const paste = (await plan(target, "paste")).command!;
+    expect(paste.action.key).toBe("PASTE");
+    expect((await permit(paste.id, "copy")).allowed).toBe(false);
+    expect((await permit(paste.id, "paste")).allowed).toBe(true);
+    expect(await ack(paste.id)).toMatchObject({ status: "DONE", confirmedSteps: 3 });
+    expect((await permit(paste.id, "paste")).allowed).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   const desktopFolders =
     "在我的电脑桌面新建文件夹命名“自动化测试1126”，并在文件夹内新建两个子文件夹和1个记事本，在记事本内写入“自动化测试666”";
 

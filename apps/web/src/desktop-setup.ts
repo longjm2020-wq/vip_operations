@@ -9,6 +9,9 @@ import type {
   DesktopState,
 } from "../../../packages/contracts/src/assistant-desktop.js";
 
+export const macCopyExample =
+  "把「~/Documents/样品/说明.txt」复制到「~/Documents/已核对」";
+
 export function desktopReceiverProblem(
   device: DesktopDevice,
   client?: DesktopClientState,
@@ -17,6 +20,11 @@ export function desktopReceiverProblem(
     client?.connected && client.deviceId === device.id ? client : undefined;
   if (local?.engineReady === false && local.engineError)
     return local.engineError;
+  if (
+    device.platform === "macos" &&
+    (!device.online || device.engineReady === false)
+  )
+    return "请在所选 Mac 打开小序 Finder 助手，确认连接并开始接单。";
   if (!device.online) return "所选电脑离线，请打开该电脑的小序桌面端。";
   if (local?.engineReady === false || device.engineReady === false)
     return "桌面端尚未接收任务。请在这台电脑打开「电脑任务」查看原因。";

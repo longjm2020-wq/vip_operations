@@ -6,6 +6,7 @@ import { fail, parse } from "../../core.js";
 import {
   acknowledgeDesktop,
   createDesktopPair,
+  controlMacFileCopy,
   desktopControl,
   desktopIdentity,
   desktopState,
@@ -92,6 +93,8 @@ export class AssistantDesktopController {
             nativeActions: z.literal(true).optional(),
             windowContinuations: z.literal(true).optional(),
             desktopExplorer: z.literal(true).optional(),
+            platform: z.enum(["windows", "macos"]).optional(),
+            fileCopyShortcuts: z.literal(true).optional(),
             retainedTaskId: z.string().uuid().nullable().optional(),
           })
           .strict(),
@@ -104,6 +107,8 @@ export class AssistantDesktopController {
           nativeActions: b.nativeActions,
           windowContinuations: b.windowContinuations,
           desktopExplorer: b.desktopExplorer,
+          fileCopyShortcuts: b.fileCopyShortcuts,
+          platform: b.platform,
           retainedTaskId: b.retainedTaskId,
         });
   }
@@ -122,6 +127,14 @@ export class AssistantDesktopController {
   ) {
     const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
     return desktopControl(d.c, id, input, d.deviceId);
+  }
+  @Public() @Post("client/tasks/:id/file-copy") async fileCopy(
+    @Req() r: AuthRequest,
+    @Param("id") id: string,
+    @Body() input: unknown,
+  ) {
+    const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
+    return controlMacFileCopy(d.c, d.deviceId, id, input);
   }
   @Public() @Post("client/tasks/:id/plan") async plan(
     @Req() r: AuthRequest,
