@@ -26,13 +26,24 @@ export type CompassBrowserCode =
   | "UNSUPPORTED_PAGE"
   | "DOWNLOAD_FAILED"
   | "CANCELLED";
+type CompassReportOperation =
+  | "FIND_REPORT"
+  | "READ_REPORT_ROW"
+  | "CLICK"
+  | "WAIT_DOWNLOAD"
+  | "SAVE_FILE"
+  | "VALIDATE_FILE";
 export class CompassBrowserError extends Error {
+  readonly operation?: CompassReportOperation;
+
   constructor(
     public readonly code: CompassBrowserCode,
     message: string,
+    options?: ErrorOptions & { operation?: CompassReportOperation },
   ) {
-    super(message);
+    super(message, options);
     this.name = "CompassBrowserError";
+    this.operation = options?.operation;
   }
 }
 export type CompassDownloadedReport = {
@@ -624,6 +635,7 @@ async function downloadFrom(
         new CompassBrowserError(
           "DOWNLOAD_FAILED",
           "罗盘下载按钮没有返回报表文件，可能需要重新登录或人工验证",
+          { operation: "WAIT_DOWNLOAD" },
         ),
       ),
     navTimeout,
@@ -661,6 +673,7 @@ async function saveReport(
     throw new CompassBrowserError(
       "DOWNLOAD_FAILED",
       `「${compassReportTitles[dimension]}」返回的文件不是原始 XLSX 或 CSV 报表`,
+      { operation: "VALIDATE_FILE" },
     );
   }
   const path = resolve(directory, `${dimension}${extension}`);
@@ -669,16 +682,19 @@ async function saveReport(
   try {
     await download.saveAs(path);
     cancelled(signal);
-    if (await download.failure())
+    const failure = await download.failure();
+    if (failure)
       throw new CompassBrowserError(
         "DOWNLOAD_FAILED",
         `「${compassReportTitles[dimension]}」文件下载未完成`,
+        { cause: new Error(failure), operation: "SAVE_FILE" },
       );
     const info = await lstat(path);
     if (!info.isFile() || info.size === 0 || info.size > maxFileSize)
       throw new CompassBrowserError(
         "DOWNLOAD_FAILED",
         "罗盘报表为空或超过100MB，已停止导入",
+        { operation: "VALIDATE_FILE" },
       );
     const handle = await open(path, "r");
     try {
@@ -700,6 +716,7 @@ async function saveReport(
         throw new CompassBrowserError(
           "DOWNLOAD_FAILED",
           "罗盘返回登录页或错误响应，未取得有效原始报表",
+          { operation: "VALIDATE_FILE" },
         );
     } finally {
       await handle.close();
@@ -710,11 +727,28 @@ async function saveReport(
   }
 }
 
-async function originalReportFileName(row: Locator, dimension: CompassDimension): Promise<string | undefined> {
-  const candidates = (await row.innerText()).split(/[\r\n\t]+/).map(value => value.trim());
-  for (const node of await row.locator("[title]").filter({ visible: true }).all()) candidates.push((await node.getAttribute("title") ?? "").trim());
-  const candidate = candidates.find(value => reportName(dimension).test(value) && /\.(?:xlsx|csv)$/i.test(value));
-  return candidate ? basename(candidate).slice(0, 255) : undefined;
+async function originalReportFileName(
+  row: Locator,
+  rowText: string,
+  dimension: CompassDimension,
+): Promise<string | undefined> {
+  const expectedName = reportName(dimension);
+  const matchingName = (candidates: string[]) =>
+    candidates.map((value) => value.trim()).find(
+      (value) => expectedName.test(value) && /\.(?:xlsx|csv)$/i.test(value),
+    );
+  const visibleName = matchingName(rowText.split(/[\r\n\t]+/));
+  if (visibleName) return basename(visibleName).slice(0, 255);
+
+  // The row and title are optional naming hints. Read them before clicking
+  // because the download can replace the row or navigate its frame.
+  const titles = await row
+    .locator("[title]")
+    .filter({ visible: true })
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("title") || ""))
+    .catch(() => []);
+  const titledName = matchingName(titles);
+  return titledName ? basename(titledName).slice(0, 255) : undefined;
 }
 
 /** Original downloads only. The caller must still validate every sheet/date/row. */
@@ -750,8 +784,10 @@ export async function downloadCompassReports(
   );
   downloadDirectories.add(directory);
   const files: CompassDownloadedReport[] = [];
+  let operation: CompassReportOperation = "FIND_REPORT";
   try {
     for (const dimension of dimensions) {
+      operation = "FIND_REPORT";
       await onProgress(
         `正在取得「${compassReportTitles[dimension]}」原始报表`,
         dimension,
@@ -779,10 +815,12 @@ export async function downloadCompassReports(
       let file: CompassDownloadedReport | null = null;
       while (Date.now() < deadline) {
         cancelled(signal);
+        operation = "FIND_REPORT";
         throwState(await currentState(target));
         const rows = await loadedReportRows(target, dimension, signal, deadline - Date.now());
         let pending = false;
         for (const row of rows) {
+          operation = "READ_REPORT_ROW";
           const text = await row.innerText();
           // A forced generation must not return the unchanged previous task.
           // New timestamps/task rows, or a pending task becoming complete,
@@ -799,13 +837,17 @@ export async function downloadCompassReports(
           }
           const control = await usableControl(row, downloadAction);
           if (!control) continue;
+          const visibleFileName = await originalReportFileName(row, text, dimension);
           await onProgress(`正在下载「${compassReportTitles[dimension]}」原始文件`, dimension, "DOWNLOADING");
+          operation = "CLICK";
+          const download = await downloadFrom(target, control, signal);
+          operation = "SAVE_FILE";
           file = await saveReport(
-            await downloadFrom(target, control, signal),
+            download,
             dimension,
             directory,
             signal,
-            await originalReportFileName(row, dimension),
+            visibleFileName,
           );
           const fileRange = compassVisibleRange(file.fileName);
           if (
@@ -819,6 +861,7 @@ export async function downloadCompassReports(
           break;
         }
         if (file) break;
+        operation = "FIND_REPORT";
         if (!generated && !pending) {
           await onProgress(
             `正在生成「${compassReportTitles[dimension]}」，等待平台准备文件`,
@@ -874,6 +917,7 @@ export async function downloadCompassReports(
     throw new CompassBrowserError(
       "DOWNLOAD_FAILED",
       "罗盘报表下载未完成，已保留现有数据，请查看平台任务或登录状态",
+      { cause: error, operation },
     );
   }
 }

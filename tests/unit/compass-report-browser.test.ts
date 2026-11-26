@@ -92,6 +92,29 @@ async function fixture(html: string, download = originalCsv, transportFileName?:
 }
 
 describe("Compass official browser reports", () => {
+  it.each(["style.csv", "transport.data"])(
+    "saves the original report when dispatch removes its row and the transport supplies %s",
+    async (transportName) => {
+      const visibleName = "我的报表_按款号（近30天）_20260911-20261010.csv";
+      const html = reportPage()
+        .replace(compassReportTitles.style, `<span title="${visibleName}">${compassReportTitles.style}</span>`)
+        .replace(
+          '<a download href="/style.csv">下载</a>',
+          `<a download href="/style.csv" onclick="event.preventDefault();const trigger = this.cloneNode(false);trigger.removeAttribute('onclick');document.body.append(trigger);this.closest('tr').remove();trigger.click();trigger.remove();">下载</a>`,
+        );
+      const page = await fixture(html, originalCsv, transportName);
+      page.setDefaultTimeout(3000);
+      const files = await downloadCompassReports(page, ["style"], targetStart, targetEnd, () => {}, undefined, { maxWaitMs: 5000 });
+      try {
+        expect(await page.locator("#style").count()).toBe(0);
+        expect(files[0].fileName).toBe(transportName === "style.csv" ? transportName : visibleName);
+        expect(await readFile(files[0].path, "utf8")).toBe(originalCsv);
+      } finally {
+        await cleanupCompassDownloads(files);
+      }
+    },
+    15000,
+  );
   it("uses the visible original filename when the download transport supplies a generic filename", async () => {
     const fileName = "我的报表_按款号（近30天）_20260911-20261010.csv";
     const page = await fixture(reportPage().replace(compassReportTitles.style, fileName), originalCsv, "transport.data");

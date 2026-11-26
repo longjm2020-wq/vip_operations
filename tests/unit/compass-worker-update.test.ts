@@ -7,7 +7,6 @@ const helpers = vi.hoisted(() => ({
   ready: true,
   verify: vi.fn(), finish: vi.fn(), expire: vi.fn(), decrypt: vi.fn(), encrypt: vi.fn(), draftDecrypt: vi.fn(), draftEncrypt: vi.fn(),
   read: vi.fn(), begin: vi.fn(), append: vi.fn(), importFinish: vi.fn(), check: vi.fn(), open: vi.fn(), download: vi.fn(), cleanup: vi.fn(), diagnostics: vi.fn(), collect: vi.fn(), restore: vi.fn(), playwrightState: vi.fn(),
-  BrowserError: class extends Error { constructor(public code: string, message: string) { super(message); } },
   StaleReportError: class extends Error {
     constructor(public actualStartDate: string, public actualEndDate: string, public expectedStartDate: string, public expectedEndDate: string) { super("报表日期不匹配"); }
   },
@@ -20,13 +19,14 @@ vi.mock("../../apps/api/src/modules/analytics/service.js", () => ({ beginImport:
 vi.mock("../../apps/worker/src/compass-browser-state.js", () => ({ compassEncryptionReady: () => helpers.ready, decryptCompassState: helpers.decrypt, encryptCompassState: helpers.encrypt, decryptCompassLoginDraft: helpers.draftDecrypt, encryptCompassLoginDraft: helpers.draftEncrypt }));
 vi.mock("../../apps/worker/src/compass-browser-session.js", () => ({ collectCompassBrowserState: helpers.collect, restoreCompassBrowserState: helpers.restore, compassPlaywrightState: helpers.playwrightState }));
 vi.mock("../../apps/worker/src/compass-report-import.js", () => ({ readCompassDownload: helpers.read, StaleCompassReportError: helpers.StaleReportError }));
-vi.mock("../../apps/worker/src/compass-report-browser.js", () => ({
-  compassSourceUrl: "https://vis.vip.com/index.php",
+vi.mock("../../apps/worker/src/compass-report-browser.js", async (original) => ({
+  ...(await original<typeof import("../../apps/worker/src/compass-report-browser.js")>()),
   compassPageDiagnostics: helpers.diagnostics,
   checkCompassLogin: helpers.check, openCompassReports: helpers.open, downloadCompassReports: helpers.download,
-  cleanupCompassDownloads: helpers.cleanup, CompassBrowserError: helpers.BrowserError,
+  cleanupCompassDownloads: helpers.cleanup,
 }));
 import { processCompassLogin, processCompassUpdate, checkpointCompassLoginDraft, scopedCompassLoginDraft, compassLoginDiagnostic } from "../../apps/worker/src/compass-browser-update.js";
+import { CompassBrowserError } from "../../apps/worker/src/compass-report-browser.js";
 
 const state = { cookies: [], origins: [{ origin: "https://vis.vip.com", localStorage: [] }] };
 let authorized: boolean, jobStatus: string, claim: string, dimensions: CompassDimension[], version: number, enabled: boolean;
@@ -195,6 +195,42 @@ describe("private login draft checkpoints", () => {
 });
 
 describe("background update orchestration", () => {
+  it("logs the report operation and underlying failure category without exposing raw details", async () => {
+    dimensions = ["style"];
+    const cause = new Error("locator.click: Timeout 10000ms exceeded; overlay intercepts pointer events; ?token=PRIVATE_FIXTURE");
+    cause.name = "TimeoutError";
+    helpers.download.mockRejectedValueOnce(new CompassBrowserError(
+      "DOWNLOAD_FAILED",
+      "罗盘报表下载未完成，已保留现有数据，请查看平台任务或登录状态",
+      { cause, operation: "CLICK" },
+    ));
+    await processCompassUpdate(createBrowser().launch);
+
+    expect(jobStatus).toBe("PARTIAL");
+    expect(helpers.download).toHaveBeenCalledTimes(1);
+    expect(helpers.begin).not.toHaveBeenCalled();
+    const warnings = vi.mocked(console.warn).mock.calls.map(([value]) => JSON.parse(String(value)));
+    expect(warnings).toContainEqual(expect.objectContaining({
+      event: "compass_update_failed",
+      jobId: "41",
+      dimension: "article",
+      stage: "DOWNLOAD",
+      operation: "CLICK",
+      category: "TIMEOUT",
+      hostname: "vis.vip.com",
+      errorType: "TimeoutError",
+      intercepted: true,
+    }));
+    const saved = database.db.$executeRawUnsafe.mock.calls.find(([sql]) =>
+      String(sql).startsWith("UPDATE compass_update_jobs SET status=$3"),
+    );
+    expect(saved?.slice(3, 6)).toEqual([
+      "PARTIAL",
+      "罗盘报表下载未完成，已保留现有数据，请查看平台任务或登录状态",
+      JSON.stringify(["style"]),
+    ]);
+    expect(JSON.stringify([warnings, saved])).not.toMatch(/PRIVATE_FIXTURE|locator\.click/);
+  });
   const progressSnapshots = () => database.db.$executeRawUnsafe.mock.calls
     .filter(([sql]) => String(sql).startsWith("UPDATE compass_update_jobs SET note=$3,progress="))
     .map(call => JSON.parse(String(call[4])));
@@ -445,7 +481,7 @@ describe("background update orchestration", () => {
   it("does not overwrite disconnected or replaced state after a late login failure", async () => {
     helpers.download.mockImplementation(async () => {
       jobStatus = "FAILED"; enabled = false; version++; sessionStatus = "DISCONNECTED";
-      throw new helpers.BrowserError("LOGIN_REQUIRED", "fixture expired login");
+      throw new CompassBrowserError("LOGIN_REQUIRED", "fixture expired login");
     });
     await processCompassUpdate(createBrowser().launch);
     expect(jobStatus).toBe("FAILED");
@@ -455,7 +491,7 @@ describe("background update orchestration", () => {
   });
 
   it("checks the saved version before marking an expired login, preserving a newer valid session", async () => {
-    helpers.download.mockImplementation(async () => { version++; throw new helpers.BrowserError("LOGIN_REQUIRED", "fixture expired login"); });
+    helpers.download.mockImplementation(async () => { version++; throw new CompassBrowserError("LOGIN_REQUIRED", "fixture expired login"); });
     await processCompassUpdate(createBrowser().launch);
     expect(jobStatus).toBe("LOGIN_REQUIRED");
     expect(sessionStatus).toBe("READY");
@@ -466,7 +502,7 @@ describe("background update orchestration", () => {
   });
 
   it("preserves verification-required work for user handling instead of marking it complete", async () => {
-    helpers.open.mockRejectedValue(new helpers.BrowserError("HUMAN_VERIFICATION", "fixture requires manual verification"));
+    helpers.open.mockRejectedValue(new CompassBrowserError("HUMAN_VERIFICATION", "fixture requires manual verification"));
     await processCompassUpdate(createBrowser().launch);
     expect(jobStatus).toBe("VERIFICATION_REQUIRED");
     expect(sessionStatus).toBe("VERIFICATION_REQUIRED");

@@ -19,6 +19,7 @@ const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 const launch = () => chromium.launch({ headless: true });
 const rejectedCompassHosts = new WeakMap<BrowserContext, string>();
 type CompassLoginStage = "OPEN_LOGIN" | "WAITING_ACTION" | "APPLY_ACTION" | "VERIFY_LOGIN" | "VERIFY_REUSE" | "SAVE_SESSION" | "CAPTURE_FRAME";
+type CompassUpdateStage = "OPEN_REPORTS" | "DOWNLOAD" | "PARSE" | "IMPORT" | "FINALIZE";
 
 export function compassLoginDiagnostic(error: unknown, stage: CompassLoginStage, pageUrl: string, rejectedHost?: string) {
   const value = error instanceof Error ? error : null;
@@ -319,7 +320,8 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
   let browser: Browser | undefined;
   const files: Awaited<ReturnType<typeof downloadCompassReports>> = [];
   let diagnosticContext: BrowserContext | undefined, diagnosticPage: Page | undefined;
-  let updateStage = "OPEN_REPORTS";
+  let updateStage: CompassUpdateStage = "OPEN_REPORTS";
+  let activeDimension: CompassDimension | null = null;
   let sessionVersion: number | undefined;
   const close = () => void browser?.close().catch(() => {});
   const timer = setTimeout(close, Math.max(1, Number(job.deadline_ms) - Date.now()));
@@ -371,6 +373,7 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
     const missing = compassDimensions.filter(dimension => !existing.completedDimensions.includes(dimension));
     for (const dimension of missing) {
       updateStage = "DOWNLOAD";
+      activeDimension = dimension;
       await progress(`正在查找${compassLabels[dimension]}目标区间报表`, dimension, { stage: "FINDING" });
       let downloaded = await downloadCompassReports(page, [dimension], start, end, downloadProgress, signal);
       files.push(...downloaded);
@@ -382,6 +385,7 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
       try { parsed = await readCompassDownload(file, start, end); }
       catch (error) {
         if (!(error instanceof StaleCompassReportError)) throw error;
+        updateStage = "DOWNLOAD";
         await progress(`${compassLabels[dimension]}原文件为 ${error.actualStartDate} 至 ${error.actualEndDate}，正在重新生成本次区间报表（仅重试一次）`, dimension, { stage: "PREPARING" });
         await cleanupCompassDownloads(downloaded);
         downloaded = await downloadCompassReports(page, [dimension], start, end, downloadProgress, signal, { forceGenerate: true });
@@ -390,6 +394,7 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
         if (downloaded.length !== 1 || file?.dimension !== dimension) throw Error("重新生成后未取得任务对应的原始报表");
         // A second stale report, or any malformed content, stops this dimension.
         await progress(`正在解析重新生成的${compassLabels[dimension]}原始报表`, dimension, { stage: "PARSING" });
+        updateStage = "PARSE";
         parsed = await readCompassDownload(file, start, end);
       }
       const { report, fileHash } = parsed;
@@ -417,19 +422,36 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
     }
     await guard();
     updateStage = "FINALIZE";
+    activeDimension = null;
     await progress("三张报表已处理，正在进行本次目标区间的最终来源核验", undefined, {}, "VERIFYING_SOURCES");
     await db.$executeRawUnsafe("UPDATE compass_session SET encrypted_state=$1,checked_at=now(),note='' WHERE id=1 AND enabled AND status='READY' AND state_version=$2", encryptCompassState(await collectCompassBrowserState(context)), saved.state_version);
     await finishCompassUpdate(String(job.id), token);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    const diagnostic = compassLoginDiagnostic(error, "VERIFY_LOGIN", diagnosticPage?.url() ?? "", diagnosticContext ? rejectedCompassHosts.get(diagnosticContext) : undefined);
-    const operation = /locator\.click/.test(message) ? "CLICK" : /locator\.innerText/.test(message) ? "VISIBLE_TEXT" : /getByRole/.test(message) ? "ROLE" : /download\.saveAs/.test(message) ? "SAVE_FILE" : /page\.(?:goto|reload)/.test(message) ? "NAVIGATE" : "OTHER";
-    console.warn(JSON.stringify({ event: "compass_update_failed", stage: updateStage, category: diagnostic.category, hostname: diagnostic.hostname, operation, intercepted: /intercepts pointer events/.test(message), ambiguous: /strict mode violation/.test(message), errorType: error instanceof Error && ["Error", "TypeError", "RangeError", "TimeoutError"].includes(error.name) ? error.name : "OTHER", pages: diagnosticPage ? await compassPageDiagnostics(diagnosticPage) : null, loads: diagnosticContext ? compassLoadDiagnostics(diagnosticContext) : null }));
-    const code = error instanceof CompassBrowserError ? error.code : "FAILED";
+    const browserError = error instanceof CompassBrowserError ? error : undefined;
+    const cause = browserError?.cause instanceof Error ? browserError.cause : error;
+    const causeMessage = cause instanceof Error ? cause.message : "";
+    const diagnostic = compassLoginDiagnostic(cause, "VERIFY_LOGIN", diagnosticPage?.url() ?? "", diagnosticContext ? rejectedCompassHosts.get(diagnosticContext) : undefined);
+    const operation = browserError?.operation ??
+      (/locator\.click/.test(causeMessage) ? "CLICK" : /locator\.innerText/.test(causeMessage) ? "VISIBLE_TEXT" : /getByRole/.test(causeMessage) ? "ROLE" : /download\.saveAs/.test(causeMessage) ? "SAVE_FILE" : /page\.(?:goto|reload)/.test(causeMessage) ? "NAVIGATE" : "OTHER");
+    console.warn(JSON.stringify({
+      event: "compass_update_failed",
+      jobId: String(job.id),
+      dimension: activeDimension,
+      stage: updateStage,
+      category: operation === "WAIT_DOWNLOAD" && diagnostic.category === "READ_FAILED" ? "TIMEOUT" : diagnostic.category,
+      hostname: diagnostic.hostname,
+      operation,
+      intercepted: /intercepts pointer events/.test(causeMessage),
+      ambiguous: /strict mode violation/.test(causeMessage),
+      errorType: cause instanceof Error && ["Error", "TypeError", "RangeError", "TimeoutError"].includes(cause.name) ? cause.name : "OTHER",
+      pages: diagnosticPage ? await compassPageDiagnostics(diagnosticPage) : null,
+      loads: diagnosticContext ? compassLoadDiagnostics(diagnosticContext) : null,
+    }));
+    const code = browserError?.code ?? "FAILED";
     const needsLogin = code === "LOGIN_REQUIRED" || code === "HUMAN_VERIFICATION";
     const state = code === "HUMAN_VERIFICATION" ? "VERIFICATION_REQUIRED" : needsLogin ? "LOGIN_REQUIRED" : "FAILED";
     const sources = await verifyCompassUpdateSources(start, end).catch(() => ({ completedDimensions: [] as CompassDimension[], sourceIds: {} }));
-    const note = error instanceof CompassBrowserError ? error.message : error instanceof Error && /报表|日期|维度|权限|停止|超时|行|列|原始|100MB/.test(error.message) ? error.message.slice(0, 300) : "后台更新未完成，请重试；已完整导入的维度保留，未完成维度不替换";
+    const note = browserError?.message ?? (error instanceof Error && /报表|日期|维度|权限|停止|超时|行|列|原始|100MB/.test(error.message) ? error.message.slice(0, 300) : "后台更新未完成，请重试；已完整导入的维度保留，未完成维度不替换");
     await db.$transaction(async tx => {
       const current = await one(tx, "SELECT 1 FROM compass_update_jobs WHERE id=$1::bigint AND claim_token=$2::uuid AND status='RUNNING' FOR UPDATE", job.id, token);
       if (!current) return;
