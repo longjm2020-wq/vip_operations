@@ -21,6 +21,6 @@ try {
     Write-Output $_.Exception.ToString()
     throw
 }
-$message = 'Explorer Ctrl+C / Ctrl+V: passed. Two fixture files were copied by Explorer, verified byte-for-byte, and retained in the source. The nested directory was excluded.'
+$message = 'Explorer Ctrl+C / Ctrl+V passed for an existing target and a newly named folder on a redirected Desktop. The two file-only fixtures and complete nested tree were verified, including empty directories, same-task resume and duplicate prevention.'
 Write-Output $message
 Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $message

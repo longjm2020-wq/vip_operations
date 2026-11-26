@@ -18,6 +18,8 @@ public class ExplorerCopySmoke {
     [StructLayout(LayoutKind.Sequential)] struct StationFlags { public int inherit, reserved, flags; }
     [DllImport("user32.dll", SetLastError=true)] static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
     [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("shell32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)]
+    static extern int SHSetKnownFolderPath(ref Guid folder,uint flags,IntPtr token,string path);
 
     public static string UnavailableDesktop() {
         if(Process.GetCurrentProcess().SessionId==0)return "runner is in Windows service session 0";
@@ -87,6 +89,17 @@ public class ExplorerCopySmoke {
         session=Activator.CreateInstance(copyType,new object[]{spec,"copy all files from "+source+" to "+target});
         Console.WriteLine("Opening source and target in Explorer");
         await (Task)Call("Open",own,check);
+        await RunShortcuts();
+        foreach(var pair in files) {
+            if(!File.ReadAllBytes(Path.Combine(target,pair.Key)).SequenceEqual(pair.Value) ||
+                !File.ReadAllBytes(Path.Combine(source,pair.Key)).SequenceEqual(pair.Value))
+                throw new Exception("The copied and retained fixture contents must match");
+        }
+        if(Directory.GetFileSystemEntries(target).Length!=files.Count || !File.Exists(Path.Combine(nested,"excluded.txt")))
+            throw new Exception("Explorer copied unexpected items");
+        await Compound(fixture,own,source);
+    }
+    async Task RunShortcuts() {
         var from=copyType.GetProperty("SourceWindow").GetValue(session,null);
         var to=copyType.GetProperty("DestinationWindow").GetValue(session,null);
         Console.WriteLine("Verifying and selecting the source files");
@@ -102,13 +115,59 @@ public class ExplorerCopySmoke {
         await (Task)Call("PrepareSwitchedWindow",to,check);
         Console.WriteLine("Dispatching PASTE with verified clipboard metadata");
         await Shortcut(to,"PASTE","paste");
-        foreach(var pair in files) {
-            if(!File.ReadAllBytes(Path.Combine(target,pair.Key)).SequenceEqual(pair.Value) ||
-                !File.ReadAllBytes(Path.Combine(source,pair.Key)).SequenceEqual(pair.Value))
-                throw new Exception("The copied and retained fixture contents must match");
-        }
-        if(Directory.GetFileSystemEntries(target).Length!=files.Count || !File.Exists(Path.Combine(nested,"excluded.txt")))
-            throw new Exception("Explorer copied unexpected items");
+    }
+    static void MustBlock(Action act,string reason) {
+        try {act();}
+        catch(Exception error) {if(error.GetBaseException().GetType().Name=="InputNotSent")return;throw;}
+        throw new Exception(reason);
+    }
+    async Task Compound(string fixture,IntPtr own,string source) {
+        var redirected=Directory.CreateDirectory(Path.Combine(fixture,"redirected-desktop")).FullName;
+        var original=Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var desktopId=new Guid("B4BFCC3A-DB2C-424C-B029-7FE99A87C641");
+        Marshal.ThrowExceptionForHR(SHSetKnownFolderPath(ref desktopId,0,IntPtr.Zero,redirected));
+        try {
+            if(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)!=redirected)
+                throw new Exception("The disposable Desktop redirection was not observed");
+            string name="自动化112601",dest=Path.Combine(redirected,name),receiptPath=Path.Combine(fixture,"receipt.txt");
+            string instruction="在我的电脑桌面新建文件夹\""+name+"\"，并将路径"+source+"下的内容复制进来。";
+            var spec=new Dictionary<string,object>{{"selection","contents"},{"source",source},{"destination",name},{"destinationKind","newDesktopFolder"}};
+            Func<string> read=()=>File.Exists(receiptPath)?File.ReadAllText(receiptPath):"";
+            Action<string> write=value=>File.WriteAllText(receiptPath,value);
+            Func<string,object> fresh=scope=>Activator.CreateInstance(copyType,new object[]{spec,instruction,scope,read,write});
+            Directory.CreateDirectory(Path.Combine(source,"nested","empty"));
+            string hidden=Path.Combine(source,"hidden.txt");File.WriteAllText(hidden,"fixture");
+            File.SetAttributes(hidden,FileAttributes.Hidden);
+            MustBlock(()=>fresh("A"),"Hidden input was silently omitted");
+            File.SetAttributes(hidden,FileAttributes.Normal);File.Delete(hidden);
+            if(Directory.Exists(dest))throw new Exception("Invalid source created a desktop folder");
+            Directory.CreateDirectory(dest);
+            MustBlock(()=>fresh("A"),"Preexisting destination was accepted");
+            Directory.Delete(dest);
+            session=fresh("A");
+            await (Task)Call("Open",own,check);
+            if(Directory.Exists(dest))throw new Exception("A destination was created before authorization");
+            Console.WriteLine("Creating the verified desktop target after authorization");
+            await (Task)Call("PrepareAuthorizedDestination",own,check);
+            MustBlock(()=>fresh("other-task"),"Another task adopted a desktop folder");
+            Directory.Move(dest,dest+"-saved");Directory.CreateDirectory(dest);
+            MustBlock(()=>fresh("A"),"Replacement destination was adopted");
+            Directory.Delete(dest);Directory.Move(dest+"-saved",dest);
+            Console.WriteLine("Resuming in the original desktop target without another mkdir");
+            session=fresh("A");
+            await (Task)Call("Open",own,check);
+            await (Task)Call("PrepareAuthorizedDestination",own,check);
+            await RunShortcuts();
+            foreach(var path in Directory.GetFiles(source,"*",SearchOption.AllDirectories)) {
+                string relative=path.Substring(source.Length+1);
+                if(!File.ReadAllBytes(path).SequenceEqual(File.ReadAllBytes(Path.Combine(dest,relative))))
+                    throw new Exception("A nested or root file was not correctly copied");
+            }
+            if(!Directory.Exists(Path.Combine(dest,"nested","empty")) || Directory.GetFileSystemEntries(redirected).Length!=1)
+                throw new Exception("Empty directory missing or duplicate desktop folder");
+            MustBlock(()=>fresh("A"),"A paste was replayable after successful transfer");
+            Console.WriteLine("Compound desktop file copy passed: redirected Desktop, exclusive create, same-task resume, full tree and no duplicate paste");
+        } finally {Marshal.ThrowExceptionForHR(SHSetKnownFolderPath(ref desktopId,0,IntPtr.Zero,original));}
     }
     public void Run(string fixture) {
         Exception failure=null;

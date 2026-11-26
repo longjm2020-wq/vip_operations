@@ -601,7 +601,10 @@ sealed class AssistantForm : Form {
             if(S(resumed,"status")!="WAITING")throw new Exception("原任务状态已变化，请核对后继续。");
             task=resumed;state="WAITING";autoAttemptedId="";ShowTaskControls();return;
         }
-        var copyTask=fileTask ? new Native.ExplorerCopy(D(task["fileCopy"]),S(task,"instruction")) : null;
+        const string folderReceipt="file-copy-folder.bin";
+        var copyTask=fileTask ? new Native.ExplorerCopy(D(task["fileCopy"]),S(task,"instruction"),id+":"+grant,
+            ()=>File.Exists(Path.Combine(folder,folderReceipt))?ReadProtected(folderReceipt):"",
+            value=>SaveProtected(folderReceipt,value)) : null;
         if(copyTask!=null) {
             status.Text="正在核对复制来源和目标目录。";
             await copyTask.Open(Handle,()=>CheckStart(id,connectionToken,version,grant));
@@ -633,6 +636,8 @@ sealed class AssistantForm : Form {
         CheckStart(id,connectionToken,version,grant);
         if(S(result,"status")!="RUNNING") throw new Exception("任务已暂停或停止，请刷新后核对。");
         approvedId = id; activeAuthorizationId=grant;
+        if(copyTask!=null)await copyTask.PrepareAuthorizedDestination(Handle,()=>CheckStart(id,connectionToken,version,grant));
+        CheckStart(id,connectionToken,version,grant);
         if(!Native.IsForeground(selected) && !Native.SetForegroundWindow(selected.Handle)) throw new Exception("无法激活操作窗口，请手动切换后继续。");
         await Task.Delay(700);
         CheckStart(id,connectionToken,version,grant);
@@ -696,7 +701,7 @@ sealed class AssistantForm : Form {
         string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
             string retainedTaskId=continuation==null?null:continuation.RetainedTaskId(authorizationId);
-            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, retainedTaskId });
+            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, desktopFolderCopy=true, retainedTaskId });
             if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
