@@ -888,6 +888,13 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
 .assistant-desktop-task p {
   margin: 8px 0;
 }
+.assistant-desktop-attachments {
+  overflow-wrap: anywhere;
+}
+.assistant-desktop-attachments p + p {
+  color: var(--app-secondary);
+  font-size: 12px;
+}
 .assistant-desktop-task-meta,
 .assistant-desktop-task-hint {
   color: var(--app-secondary);

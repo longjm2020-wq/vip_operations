@@ -155,6 +155,7 @@ beforeAll(async () => {
   await fixture.db.exec(await readFile("packages/database/migrations/123_desktop_folder_batch_notes.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/083_assistant_agent.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/124_desktop_folder_attachment.sql", "utf8"));
+  await fixture.db.exec(await readFile("packages/database/migrations/125_desktop_folder_attachments.sql", "utf8"));
 });
 beforeEach(async () => {
   fixture.session = true;

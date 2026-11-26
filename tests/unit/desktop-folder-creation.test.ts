@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   desktopFolderAttachmentRequest,
+  desktopFolderAttachmentFollowup,
   desktopFolderAttachmentSchema,
+  desktopFolderAttachmentsSchema,
+  desktopFolderBatchAttachmentRequest,
   desktopFolderCompoundRequest,
   desktopFolderCreationPlan,
   desktopFolderCreationPlanSchema,
@@ -10,11 +13,13 @@ import {
   desktopFolderNotesSteps,
   desktopFolderSteps,
   looksLikeDesktopFolderAttachment,
+  looksLikeDesktopFolderBatchAttachment,
   looksLikeDesktopFolderCompound,
   looksLikeDesktopFolderCreation,
   looksLikeDesktopFolderNotes,
 } from "../../packages/contracts/src/desktop-folder-creation.js";
 import {
+  assistantFollowupAnchor,
   classifyAssistantExecution,
   desktopExplorerIntent,
   shouldSearchAssistantPublicWeb,
@@ -150,6 +155,294 @@ describe("Windows Desktop folder creation plans", () => {
         folderNames: [name],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("typed multi-file distribution to new or existing folders", () => {
+  const folders =
+    '在我的电脑桌面新建父文件夹"测试自动化666"，并在文件内新建100个子文件夹，命名规则按"XUTI-01……XUTI-n"';
+  const copy = "把这些图片复制进每一个子文件夹";
+  const screenshot = folders + "，然后" + copy;
+  const createSteps = ["ensure_directories", "copy_attachments", "verify"];
+  const copySteps = ["copy_attachments", "verify"];
+
+  it("compiles the screenshot into verified folders before distributing all chosen images", () => {
+    const plan = desktopFolderBatchAttachmentRequest(screenshot);
+    expect(plan).toEqual({
+      plan: {
+        parentName: "测试自动化666",
+        folderNames: Array.from(
+          { length: 100 },
+          (_, i) => `XUTI-${String(i + 1).padStart(2, "0")}`,
+        ),
+      },
+      deviceName: undefined,
+      steps: createSteps,
+      source: "image",
+      quantity: "multiple",
+      mode: "create",
+    });
+    expect(looksLikeDesktopFolderBatchAttachment(screenshot)).toBe(true);
+    expect(desktopFolderCreationPlan(screenshot)).toBeUndefined();
+    expect(desktopFolderSteps("create_folders_with_attachments")).toEqual(
+      plan?.steps,
+    );
+    expect(classifyAssistantExecution(screenshot)).toEqual({ kind: "desktop" });
+  });
+
+  it.each([
+    [
+      "在桌面「海报组✨」下新建三个子目录：『春、夏』、商品 B、夏日2",
+      "把所附文件分发到这些目录，保留原文件名",
+    ].join("；"),
+    [
+      "- 在桌面「海报组✨」下创建三个子目录：『春、夏』、商品 B、夏日2",
+      "- 把附件一起复制到每个子目录，不打开窗口",
+    ].join("\n"),
+    [
+      "一、在桌面新建文件夹「海报组✨」",
+      "二、在文件夹内新建三个子目录：『春、夏』、商品 B、夏日2",
+      "三、将所附文件分发到这些目录。",
+    ].join("\r\n"),
+  ])(
+    "preserves exact named targets across connector and layout variants: %s",
+    (text) => {
+      expect(desktopFolderBatchAttachmentRequest(text)).toMatchObject({
+        mode: "create",
+        steps: createSteps,
+        source: "attachment",
+        quantity: "selected",
+        plan: {
+          parentName: "海报组✨",
+          folderNames: ["春、夏", "商品 B", "夏日2"],
+        },
+      });
+    },
+  );
+
+  it("retains a single existing child or a whole explicit batch without assuming what '附件' refers to", () => {
+    const explicit =
+      "在设备「出样电脑」上把附件复制到桌面『样衣归档』下的子文件夹「核对完成」";
+    expect(desktopFolderBatchAttachmentRequest(explicit)).toEqual({
+      plan: { parentName: "样衣归档", folderNames: ["核对完成"] },
+      deviceName: "出样电脑",
+      steps: copySteps,
+      source: "attachment",
+      quantity: "selected",
+      mode: "existing",
+    });
+    expect(desktopFolderAttachmentRequest(explicit)?.steps).toEqual([
+      "copy_attachment",
+      "verify",
+    ]);
+    expect(
+      desktopFolderBatchAttachmentRequest(
+        "这些图片一起复制到桌面样品下的两个子目录（A、B）",
+      ),
+    ).toMatchObject({
+      plan: { parentName: "样品", folderNames: ["A", "B"] },
+      steps: copySteps,
+      source: "image",
+      quantity: "multiple",
+      mode: "existing",
+    });
+    expect(
+      desktopFolderBatchAttachmentRequest(
+        "把这张图复制到桌面『样衣归档』下的子文件夹「核对完成」",
+      ),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "把这些附件复制到桌面“样品”下的子文件夹（春款、夏款、秋款），每个文件夹一份",
+      ["春款", "夏款", "秋款"],
+      "multiple",
+    ],
+    ["把附件复制到桌面“样品”里的“春款”和“夏款”", ["春款", "夏款"], "selected"],
+    [
+      "把它们复制到桌面“样品”里的“春款”和“夏款”，每个文件夹各一份",
+      ["春款", "夏款"],
+      "multiple",
+    ],
+    ["把这几份复制到桌面“样品”下的子文件夹（秋款）", ["秋款"], "multiple"],
+    ["将选中的文件分发到桌面“样品”里的“冬款”", ["冬款"], "selected"],
+  ] as const)(
+    "uses the named screenshot/example targets and selected uploads: %s",
+    (text, children, quantity) => {
+      expect(desktopFolderBatchAttachmentRequest(text)).toMatchObject({
+        plan: { parentName: "样品", folderNames: children },
+        steps: copySteps,
+        source: "attachment",
+        quantity,
+      });
+    },
+  );
+
+  it("retains explicit source counts and only treats strongly singular phrases as a single reference", () => {
+    expect(
+      desktopFolderBatchAttachmentRequest(
+        folders + "，然后把两张图片复制到每个子文件夹",
+      ),
+    ).toMatchObject({
+      source: "image",
+      quantity: "multiple",
+      attachmentCount: 2,
+    });
+    expect(
+      desktopFolderBatchAttachmentRequest(
+        screenshot + "，两张图片各一份，保留原文件名",
+      ),
+    ).toMatchObject({
+      source: "image",
+      quantity: "multiple",
+      attachmentCount: 2,
+    });
+    expect(
+      desktopFolderBatchAttachmentRequest(
+        folders + "，然后把这张图复制进每个子目录",
+      ),
+    ).toMatchObject({
+      source: "image",
+      quantity: "single",
+    });
+    expect(
+      desktopFolderBatchAttachmentRequest(
+        folders + "，然后把两张图片复制到每个子文件夹，三张图片各一份",
+      ),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    screenshot.replace("100个", "101个"),
+    screenshot + "，然后运行脚本",
+    screenshot + "，并覆盖同名文件",
+    folders + "，然后把这些图片复制到其他电脑",
+    folders + "，然后一起复制到每个子目录",
+    folders + "，然后把这些图片放进去",
+    "把所有图片复制到桌面『样品』下所有子目录",
+    "把这些图片复制到桌面『样品』下的两个子目录：A、a",
+    "把这些图片复制到桌面『样品』下的两个子目录（A、B），并打开图片",
+    "把这些图片复制到桌面『样品』下的子目录：A、B，上传到网盘",
+    "把这些附件复制到桌面“样品”里的“春款”，然后执行命令",
+  ])(
+    "clarifies any incomplete or unsafe clause before either action: %s",
+    (text) => {
+      expect(looksLikeDesktopFolderBatchAttachment(text)).toBe(true);
+      expect(desktopFolderBatchAttachmentRequest(text)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    [copy, { source: "image", quantity: "multiple" }],
+    [
+      "把附件放进每一个子文件夹",
+      { source: "attachment", quantity: "selected" },
+    ],
+    [
+      "把这些附件复制到刚才建好的每个子目录",
+      { source: "attachment", quantity: "multiple" },
+    ],
+    [
+      "把这张图复制到刚才建好的每个子目录",
+      { source: "image", quantity: "single" },
+    ],
+    [
+      "将这两张图片分发到这些目录",
+      { source: "image", quantity: "multiple", attachmentCount: 2 },
+    ],
+  ])(
+    "extracts a relative request without inventing the target plan: %s",
+    (text, selected) => {
+      expect(desktopFolderAttachmentFollowup(text)).toEqual(selected);
+      expect(desktopFolderBatchAttachmentRequest(text)).toBeUndefined();
+      expect(looksLikeDesktopFolderBatchAttachment(text)).toBe(true);
+      expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
+      expect(
+        desktopFolderAttachmentFollowup("怎么" + text + "？"),
+      ).toBeUndefined();
+    },
+  );
+
+  it("checks unique attachment IDs, Windows names and total bytes", () => {
+    const first = {
+      id: "bc14c94d-507d-4c4e-bcd9-fa693e9f9beb",
+      name: "5.jpeg",
+      bytes: 18,
+      sha256: "a".repeat(64),
+    };
+    const second = {
+      id: "26761939-6c82-4ad3-a25a-ec8e7d3b2b7e",
+      name: "4.jpeg",
+      bytes: 28,
+      sha256: "b".repeat(64),
+    };
+    const files = [first, second];
+    expect(desktopFolderAttachmentsSchema.parse(files)).toEqual(files);
+    expect(
+      desktopFolderAttachmentsSchema.safeParse([
+        first,
+        { ...second, id: first.id },
+      ]).success,
+    ).toBe(false);
+    expect(
+      desktopFolderAttachmentsSchema.safeParse([
+        first,
+        { ...second, name: "5.JPEG" },
+      ]).success,
+    ).toBe(false);
+    expect(
+      desktopFolderAttachmentsSchema.safeParse(
+        files.map((file) => ({ ...file, bytes: 50 * 1024 * 1024 })),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("only lets folder callers opt into attachment-bearing desktop anchors", () => {
+    const now = new Date().toISOString();
+    const user = {
+      id: "request",
+      role: "user" as const,
+      text: screenshot,
+      createdAt: now,
+      attachments: [
+        {
+          id: "file",
+          name: "5.jpeg",
+          mime: "image/jpeg",
+          size: 20,
+          source: "upload" as const,
+          createdAt: now,
+        },
+      ],
+    };
+    const reply = {
+      id: "reply",
+      role: "assistant" as const,
+      text: "已提交",
+      createdAt: now,
+    };
+    expect(
+      assistantFollowupAnchor([user, { ...reply, desktopTaskId: "task" }]),
+    ).toBeUndefined();
+    expect(
+      assistantFollowupAnchor(
+        [user, { ...reply, desktopTaskId: "task" }],
+        undefined,
+        true,
+      ),
+    ).toEqual({
+      kind: "desktop",
+      requestId: "request",
+      taskId: "task",
+    });
+    expect(
+      assistantFollowupAnchor(
+        [user, { ...reply, browserTaskId: "task" }],
+        undefined,
+        true,
+      ),
+    ).toBeUndefined();
   });
 });
 

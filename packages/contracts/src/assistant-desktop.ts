@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { DesktopFileCopy, DesktopPlatform } from "./desktop-file-copy.js";
-import type { DesktopFolderAttachment, DesktopFolderCreationPlan, DesktopFolderStep } from "./desktop-folder-creation.js";
+import { maxDesktopFolderAttachments, type DesktopFolderAttachment, type DesktopFolderAttachmentItem, type DesktopFolderCreationPlan, type DesktopFolderStep } from "./desktop-folder-creation.js";
 
 export const desktopDevicePurposes = ["personal", "dedicated"] as const;
 export type DesktopDevicePurpose = (typeof desktopDevicePurposes)[number];
@@ -34,7 +34,7 @@ export const desktopTaskSchema = z
     deviceId: z.string().uuid(),
     requestId: z.string().uuid(),
     instruction: z.string().trim().min(2).max(4000),
-    attachmentIds: z.array(z.string().uuid()).max(1).optional(),
+    attachmentIds: z.array(z.string().uuid()).max(maxDesktopFolderAttachments).optional(),
     localBrowser: z.literal(true).optional(),
     model: z
       .string()
@@ -183,7 +183,7 @@ export type DesktopTask = {
   confirmedSteps?: number;
   recentSteps?: {
     step: number;
-    action: "click" | "scroll" | "type" | "key" | "switch_window" | "wait" | "file_copy" | "locate_wecom" | "create_folders" | "create_notes" | "create_folders_and_notes" | "copy_attachment";
+    action: "click" | "scroll" | "type" | "key" | "switch_window" | "wait" | "file_copy" | "locate_wecom" | "create_folders" | "create_notes" | "create_folders_and_notes" | "copy_attachment" | "copy_attachments";
     result: "ok" | "blocked" | "uncertain";
     fileShortcut?: "copy" | "paste";
     verifiedAfterPaste?: true;
@@ -204,10 +204,11 @@ export type DesktopTask = {
   folderSteps?: DesktopFolderStep[];
   /** Original upload metadata for the authenticated receiver. */
   folderAttachment?: DesktopFolderAttachment;
+  folderAttachments?: DesktopFolderAttachmentItem[];
   window: string;
   scope: "window" | "device";
   nativeAction?:
-    "open_notepad" | "focus_notepad" | "type_notepad" | "copy_finder_files" | "create_desktop_folders" | "create_folder_notes" | "create_folders_with_notes" | "copy_folder_attachment";
+    "open_notepad" | "focus_notepad" | "type_notepad" | "copy_finder_files" | "create_desktop_folders" | "create_folder_notes" | "create_folders_with_notes" | "copy_folder_attachment" | "copy_folder_attachments" | "create_folders_with_attachments";
   nativeText?: string;
   previousTaskId?: string;
   boundWindowId?: string;

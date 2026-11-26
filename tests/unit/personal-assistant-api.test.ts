@@ -210,6 +210,7 @@ beforeAll(async () => {
     "122_desktop_folder_notes.sql",
     "123_desktop_folder_batch_notes.sql",
     "124_desktop_folder_attachment.sql",
+    "125_desktop_folder_attachments.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -1099,6 +1100,90 @@ describe("assistant business tools and private memory", () => {
     await expect(downloadFolderAttachment(c,deviceId,taskId,next)).rejects.toThrow();
     expect(await controlFolderCreation(c,deviceId,taskId,complete)).toEqual(done);
     expect(await deleteAgentFile(c,file.id)).toEqual({deleted:true});
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  const compoundImages = '在我的电脑桌面新建父文件夹“测试自动化666”，并在文件内新建100个子文件夹，命名规则按“XUTI-01……XUTI-n”，然后把这些图片复制进每一个子文件夹';
+  const existingAttachments = '把这些附件复制到桌面“样品”下的子文件夹（春款、夏款、秋款），每个文件夹一份';
+  const manifestCapabilities = {...attachmentCapabilities, folderAttachments:true};
+  it.each([true, false])("binds the whole selected manifest, enforces the device claim and proves each original digest (automatic %s)", async automatic => {
+    const c = actor(), {deviceId, authorizationId} = await attachmentDevice();
+    await pollDesktop(c, deviceId, false, manifestCapabilities);
+    const files = await Promise.all(["5.jpeg", automatic ? "4.jpeg" : "布料.txt"].map(async (name, index) => {
+      const content = Buffer.from("sample-" + index);
+      const file = await saveAgentFile(c, name, name.endsWith("jpeg") ? "image/jpeg" : "text/plain", content, "upload");
+      return {...file, content, sha256:createHash("sha256").update(content).digest("hex")};
+    }));
+    const folderCount = automatic ? 100 : 3;
+    const request = {...input(), message:automatic ? compoundImages : existingAttachments, desktopDeviceId:deviceId,
+      attachmentIds:files.map(file => file.id), ...(automatic ? {autoExecution:true} : {})};
+    const reply = await sendAssistant(c, request);
+    const id = reply.messages.at(-1)?.desktopTaskId;
+    assert.isString(id);
+    expect(reply.messages.at(-2)?.attachments?.map((file:{id:string}) => file.id)).toEqual(request.attachmentIds);
+    expect((await sendAssistant(c, request)).messages.at(-1)?.desktopTaskId).toBe(id);
+    const queue = (ids:string[]) => queueDesktopTask(c,{deviceId,requestId:request.requestId,instruction:request.message,attachmentIds:ids});
+    await expect(queue([...request.attachmentIds].reverse())).rejects.toMatchObject({response:{error:{message:expect.stringContaining("任务标识")}}});
+    const view = await queue(request.attachmentIds);
+    expect(view.folderCreation?.folderNames).toHaveLength(folderCount);
+    expect(view.folderAttachments?.map(file => file.id)).toEqual(request.attachmentIds);
+    expect((await pollDesktop(c,deviceId,false,attachmentCapabilities)).task).toBeNull();
+    const poll = async () => (await pollDesktop(c,deviceId,false,manifestCapabilities)).task!;
+    const delivery = await poll();
+    expect(delivery.nativeAction).toBe(automatic ? "create_folders_with_attachments" : "copy_folder_attachments");
+    expect(delivery.folderSteps).toEqual([...(automatic ? ["ensure_directories"] : []), "copy_attachments","verify"]);
+    const first = {authorizationId, attemptId:delivery.folderCreationAttemptId};
+    await expect(downloadFolderAttachment(c, deviceId,id,{...first,fileId:files[0].id})).rejects.toThrow();
+    await controlFolderCreation(c,deviceId,id,{action:"start",...first});
+    for (const file of files) {
+      expect(await downloadFolderAttachment(c,deviceId,id,{...first,fileId:file.id})).toEqual(file.content);
+      await expect(deleteAgentFile(c,file.id)).rejects.toMatchObject({response:{error:{message:expect.stringContaining("仍被任务使用")}}});
+    }
+    for (const query of [first, {...first, fileId:randomUUID()}, {...first, authorizationId:randomUUID(),fileId:files[1].id}])
+      await expect(downloadFolderAttachment(c,deviceId,id,query)).rejects.toThrow();
+    await expect(downloadFolderAttachment(actor("8"),deviceId,id,{...first,fileId:files[1].id})).rejects.toThrow();
+    await desktopControl(c,id,{action:"pause"});
+    await expect(deleteAgentFile(c,files[1].id)).rejects.toMatchObject({response:{error:{message:expect.stringContaining("仍被任务使用")}}});
+    await expect(downloadFolderAttachment(c,deviceId,id,{...first,fileId:files[0].id})).rejects.toThrow();
+    await desktopControl(c,id,{action:"resume"});
+    const next = {authorizationId, attemptId:(await poll()).folderCreationAttemptId};
+    await controlFolderCreation(c,deviceId,id,{action:"start",...next});
+    await expect(downloadFolderAttachment(c,deviceId,id,{...first,fileId:files[0].id})).rejects.toThrow();
+    const hashes = files.map(file => file.sha256);
+    const complete = {action:"complete",...next,verifiedCount:folderCount,sha256s:hashes};
+    for (const invalid of [{...complete,sha256s:undefined}, {...complete,sha256s:hashes.slice(1)}, {...complete,sha256s:[...hashes].reverse()},
+      {...complete,sha256:hashes[0]}, {...complete,verifiedCount:1}])
+      await expect(controlFolderCreation(c,deviceId,id,invalid)).rejects.toThrow();
+    const done = await controlFolderCreation(c,deviceId,id,complete);
+    expect(done).toMatchObject({status:"DONE",confirmedSteps:1,recentSteps:[{action:"copy_attachments",result:"ok"}]});
+    expect(await controlFolderCreation(c,deviceId,id,complete)).toEqual(done);
+    await expect(downloadFolderAttachment(c,deviceId,id,{...next,fileId:files[1].id})).rejects.toThrow();
+    if (automatic) {
+      const followup = await sendAssistant(c, {...input(reply.version),message:"把这些附件复制到刚才建好的每个子目录",
+        autoExecution:true,desktopDeviceId:deviceId,attachmentIds:[files[1].id]});
+      const followId = followup.messages.at(-1)?.desktopTaskId;
+      assert.isString(followId);
+      const row = (await fixture.database!.query("SELECT native_action,folder_source_task_id,folder_creation FROM assistant_desktop_tasks WHERE id=$1", [followId])).rows[0];
+      expect(row).toMatchObject({native_action:"copy_folder_attachments",folder_source_task_id:id,folder_creation:delivery.folderCreation});
+      await desktopControl(c,followId,{action:"stop"});
+    }
+    for (const file of files) expect(await deleteAgentFile(c,file.id)).toEqual({deleted:true});
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("explains wrong selection, invalid scopes, duplicate Windows names and older receivers before dispatch", async () => {
+    const c = actor(), {deviceId} = await attachmentDevice();
+    const text = async (name:string, owner=c) => saveAgentFile(owner,name,"text/plain",Buffer.from("note"),"upload");
+    const files = await Promise.all([text("Sample.txt"),text("sample.TXT"),text("foreign.txt",actor("8"))]);
+    const send = (message:string, ids:string[]) => sendAssistant(c,{...input(),autoExecution:true,desktopDeviceId:deviceId,message,attachmentIds:ids});
+    await expect(send(existingAttachments,[files[0].id])).rejects.toMatchObject({response:{error:{message:expect.stringContaining("更新")}}});
+    await pollDesktop(c,deviceId,false,manifestCapabilities);
+    await expect(send(compoundImages,[files[0].id])).rejects.toMatchObject({response:{error:{message:expect.stringContaining("图片")}}});
+    await expect(send(existingAttachments.replace("这些附件","这两份附件"),[files[0].id])).rejects.toMatchObject({response:{error:{message:expect.stringMatching(/2 份文件.*1 份/)}}});
+    await expect(send(existingAttachments,[files[0].id,files[1].id])).rejects.toMatchObject({response:{error:{message:expect.stringMatching(/sample.TXT.*同名/i)}}});
+    await expect(send(existingAttachments,[files[0].id,files[0].id])).rejects.toMatchObject({response:{error:{message:expect.stringContaining("重复")}}});
+    await expect(send(existingAttachments,[files[0].id,files[2].id])).rejects.toMatchObject({response:{error:{message:expect.stringContaining("当前账号")}}});
+    await expect(send(compoundImages+"，再打开图片",[files[0].id])).rejects.toMatchObject({response:{error:{message:expect.stringContaining("子文件夹")}}});
+    expect((await fixture.database!.query("SELECT * FROM assistant_desktop_tasks")).rows).toHaveLength(0);
+    expect((await readAssistant(c)).version).toBe(0);
     expect(fetch).not.toHaveBeenCalled();
   });
   it("refuses missing, foreign or ambiguous files and malformed targets without queuing foreground work", async () => {

@@ -6,26 +6,27 @@ import type { AssistantMessage } from "../../../../../packages/contracts/src/per
 export type FolderSourceAnchor = AssistantFollowupAnchor & { stopped?: AssistantFollowupAnchor };
 
 export function folderSourceAnchor(messages: AssistantMessage[], voiceSessionId?: string): FolderSourceAnchor | undefined {
-  const latest = assistantFollowupAnchor(messages, voiceSessionId);
+  const latest = assistantFollowupAnchor(messages, voiceSessionId, true);
   if (latest?.kind !== "desktop" || !desktopFolderNotesIntent(messages.at(-2)!.text)) return latest;
-  const before = assistantFollowupAnchor(messages.slice(0, -2), voiceSessionId);
+  const before = assistantFollowupAnchor(messages.slice(0, -2), voiceSessionId, true);
   return before?.kind === "desktop" ? { ...before, stopped: latest } : undefined;
 }
 
-// Only the server's original completion receipt can supply paths for a relative note request.
+// Resolve relative folder references from the original creation receipt and its current device grant.
 export async function verifiedFolderSource(
   tx: Tx, userId: string, anchor: FolderSourceAnchor, deviceId?: string, requestId?: string,
 ) {
   if (anchor.kind !== "desktop") return;
-  const source = await one(tx, `SELECT t.id,t.device_id,t.authorization_id,t.folder_creation,d.folder_notes,
+  const source = await one(tx, `SELECT t.id,t.device_id,d.name AS device_name,t.authorization_id,t.folder_creation,d.folder_notes,d.folder_attachments,
       d.engine_seen_at>now()-interval '20 seconds' AND d.last_seen_at>now()-interval '20 seconds' AS online
     FROM assistant_desktop_tasks t JOIN assistant_desktop_devices d ON d.id=t.device_id AND d.user_id=t.user_id
     WHERE t.id=$1::uuid AND t.request_id=$2::uuid AND t.user_id=$3::bigint
       AND ($4::uuid IS NULL OR t.device_id=$4::uuid)
-      AND t.native_action IN ('create_desktop_folders','create_folders_with_notes')
+      AND t.native_action IN ('create_desktop_folders','create_folders_with_notes','create_folders_with_attachments')
       AND t.status='DONE' AND t.step>0 AND t.last_ack IS NOT NULL
       AND t.history->-1 @> jsonb_build_object('step',t.step,'action',
-        CASE WHEN t.native_action='create_folders_with_notes' THEN 'create_folders_and_notes' ELSE 'create_folders' END,'result','ok')
+        CASE t.native_action WHEN 'create_folders_with_notes' THEN 'create_folders_and_notes'
+          WHEN 'create_folders_with_attachments' THEN 'copy_attachments' ELSE 'create_folders' END,'result','ok')
       AND d.platform='windows' AND d.authorization_id=t.authorization_id AND d.revoked_at IS NULL
       AND d.token_hash IS NOT NULL AND d.expires_at>now()
       AND ($6::uuid IS NULL OR EXISTS(SELECT 1 FROM assistant_desktop_tasks stopped
@@ -39,6 +40,7 @@ export async function verifiedFolderSource(
     anchor.stopped?.taskId ?? null, anchor.stopped?.requestId ?? null);
   if (!source) return;
   const plan = desktopFolderCreationPlanSchema.safeParse(source.folder_creation);
-  if (plan.success) return { id: source.id as string, deviceId: source.device_id as string,
-    authorizationId: source.authorization_id as string, plan: plan.data, capable: !!source.folder_notes, online: !!source.online };
+  if (plan.success) return { id: source.id as string, deviceId: source.device_id as string, deviceName: source.device_name as string,
+    authorizationId: source.authorization_id as string, plan: plan.data, capable: !!source.folder_notes,
+    manifestFoldersCapable: !!source.folder_attachments, online: !!source.online };
 }

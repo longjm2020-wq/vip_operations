@@ -106,6 +106,7 @@ export class AssistantDesktopController {
             folderNotes: z.literal(true).optional(),
             folderBatchNotes: z.literal(true).optional(),
             folderAttachment: z.literal(true).optional(),
+            folderAttachments: z.literal(true).optional(),
             desktopFolderCopy: z.literal(true).optional(),
             retainedTaskId: z.string().uuid().nullable().optional(),
           })
@@ -127,6 +128,7 @@ export class AssistantDesktopController {
           folderNotes: b.folderNotes,
           folderBatchNotes: b.folderBatchNotes,
           folderAttachment: b.folderAttachment,
+          folderAttachments: b.folderAttachments,
           desktopFolderCopy: b.desktopFolderCopy,
           platform: b.platform,
           retainedTaskId: b.retainedTaskId,

@@ -4,10 +4,13 @@ import {
   desktopFileCopyIntent,
 } from "./desktop-file-copy.js";
 import {
+  desktopFolderBatchAttachmentRequest,
+  desktopFolderAttachmentFollowup,
   desktopFolderAttachmentRequest,
   desktopFolderCompoundRequest,
   desktopFolderCreationRequest,
   looksLikeDesktopFolderAttachment,
+  looksLikeDesktopFolderBatchAttachment,
   looksLikeDesktopFolderCompound,
   looksLikeDesktopFolderCreation,
   looksLikeDesktopFolderNotes,
@@ -133,6 +136,7 @@ export function shouldSearchAssistantPublicWeb(
     searchCredentials.test(instruction) ||
     followupOperation.test(instruction) ||
     looksLikeDesktopFolderAttachment(text) ||
+    looksLikeDesktopFolderBatchAttachment(text) ||
     looksLikeDesktopFolderCompound(text) ||
     looksLikeDesktopFolderCreation(text) ||
     looksLikeDesktopFolderNotes(text) ||
@@ -333,6 +337,7 @@ export function canConsiderAssistantFollowup(text: string): boolean {
 export function assistantFollowupAnchor(
   messages: AssistantMessage[],
   voiceSessionId?: string,
+  allowDesktopAttachments = false,
 ): AssistantFollowupAnchor | undefined {
   const user = messages.at(-2),
     reply = messages.at(-1);
@@ -341,7 +346,7 @@ export function assistantFollowupAnchor(
     reply?.role !== "assistant" ||
     user.source === "team" ||
     reply.source === "team" ||
-    user.attachments?.length ||
+    (user.attachments?.length && !(allowDesktopAttachments && reply.desktopTaskId)) ||
     user.source !== reply.source ||
     (voiceSessionId
       ? user.source !== "voice" ||
@@ -386,9 +391,9 @@ export function classifyAssistantExecution(
   text: string,
   options?: { inferExternalTargets?: boolean },
 ): AssistantExecution {
-  const folderCreation = desktopFolderAttachmentRequest(text) ?? desktopFolderCompoundRequest(text) ?? desktopFolderCreationRequest(text);
+  const folderCreation = desktopFolderBatchAttachmentRequest(text) ?? desktopFolderAttachmentRequest(text) ?? desktopFolderAttachmentFollowup(text) ?? desktopFolderCompoundRequest(text) ?? desktopFolderCreationRequest(text);
   if (folderCreation?.deviceName) return { kind: "desktop", deviceName: folderCreation.deviceName };
-  if (folderCreation || looksLikeDesktopFolderAttachment(text) || looksLikeDesktopFolderCompound(text) || looksLikeDesktopFolderCreation(text) || looksLikeDesktopFolderNotes(text)) return { kind: "desktop" };
+  if (folderCreation || looksLikeDesktopFolderAttachment(text) || looksLikeDesktopFolderBatchAttachment(text) || looksLikeDesktopFolderCompound(text) || looksLikeDesktopFolderCreation(text) || looksLikeDesktopFolderNotes(text)) return { kind: "desktop" };
   if (desktopExplorerIntent(text)) return { kind: "desktop" };
   if (desktopFileCopyIntent(text) || desktopFileCopyIntent(text, "macos")) {
     const deviceName = desktopFileCopyDeviceName(text);

@@ -27,6 +27,25 @@ export type DesktopFolderAttachment = z.infer<
   typeof desktopFolderAttachmentSchema
 >;
 
+export const maxDesktopFolderAttachments = 6;
+export const maxDesktopFolderAttachmentsBytes = 80 * 1024 * 1024;
+export const desktopFolderAttachmentsSchema = z
+  .array(desktopFolderAttachmentSchema.extend({ id: z.string().uuid() }))
+  .min(1)
+  .max(maxDesktopFolderAttachments)
+  .refine(
+    (files) =>
+      new Set(files.map((file) => file.id.toLowerCase())).size ===
+        files.length &&
+      new Set(files.map((file) => file.name.toUpperCase())).size ===
+        files.length &&
+      files.reduce((bytes, file) => bytes + file.bytes, 0) <=
+        maxDesktopFolderAttachmentsBytes,
+  );
+export type DesktopFolderAttachmentItem = z.infer<
+  typeof desktopFolderAttachmentsSchema
+>[number];
+
 export const desktopFolderCreationPlanSchema = z
   .object({
     parentName: folderNameSchema,
@@ -47,7 +66,11 @@ export type DesktopFolderCreationPlan = z.infer<
 >;
 
 export type DesktopFolderStep =
-  "ensure_directories" | "ensure_same_name_text" | "copy_attachment" | "verify";
+  | "ensure_directories"
+  | "ensure_same_name_text"
+  | "copy_attachment"
+  | "copy_attachments"
+  | "verify";
 
 type DesktopFolderRequest = {
   plan: DesktopFolderCreationPlan;
@@ -68,6 +91,10 @@ export function desktopFolderSteps(
       return ["ensure_directories", "ensure_same_name_text", "verify"];
     case "copy_folder_attachment":
       return ["copy_attachment", "verify"];
+    case "copy_folder_attachments":
+      return ["copy_attachments", "verify"];
+    case "create_folders_with_attachments":
+      return ["ensure_directories", "copy_attachments", "verify"];
   }
 }
 
@@ -106,6 +133,18 @@ export const folderAttachmentGuidance = {
     "请更新所选 Windows 电脑的小序桌面端并重新连接，以便在后台批量复制聊天附件。",
 } as const;
 
+export const folderBatchAttachmentGuidance = {
+  format:
+    "请写明桌面父文件夹与子文件夹名称或编号范围，并说明将本条附件复制到哪些子文件夹。新建子文件夹后，可接着写「把这些图片复制到每个子文件夹」。其他操作请分开下达。",
+  attachment: "请随这条消息附上要分发的文件，最多 6 份，合计不超过 80MB。",
+  count: "指令里指定的文件数量与这条消息中的附件数量不一致，请核对后重试。",
+  image: "这条指令指定了图片，请只附上要分发的图片。",
+  collision: "附件中存在同名文件，请先区分文件名后再一起发送。",
+  platform: folderAttachmentGuidance.platform,
+  update:
+    "请更新所选 Windows 电脑的小序桌面端并重新连接，以便在后台批量分发附件。",
+} as const;
+
 const politePrefix = /^(?:小序[，,、\s]*)?(?:(?:请你?|帮我|替我|麻烦你?)\s*)*/u;
 const backgroundPrefix =
   /^(?:(?:在)?后台(?:静默)?(?:运行|执行|处理)?|静默(?:运行|执行|处理))[，,：:\s]*/u;
@@ -125,7 +164,7 @@ const parentCommand = new RegExp(
   "u",
 );
 const underParent = new RegExp(
-  String.raw`^(?:的\s*)?(?:(?:文件夹|目录)\s*(${nameToken})|(${nameToken})\s*(?:文件夹|目录))\s*(?:里(?:面)?|下(?:面)?|内|中)\s*`,
+  String.raw`^(?:的\s*)?(?:(?:文件夹|目录)\s*(${nameToken})|(${nameToken})\s*(?:文件夹|目录)?)\s*(?:里(?:面)?|下(?:面)?|内|中)\s*`,
   "u",
 );
 const childCommand =
@@ -189,6 +228,7 @@ function joinFolderClauses(text: string) {
     .map((line) => line.trim())
     .filter(Boolean);
   const labels = lines.map((line) => numberedClause.exec(line));
+  const bullets = lines.map((line) => /^[-*•]\s+/u.exec(line));
   const opening = lines[0]?.replace(politePrefix, "") ?? "";
   const preamble =
     backgroundPrefix.test(opening) &&
@@ -197,7 +237,9 @@ function joinFolderClauses(text: string) {
       : 0;
   const ordered =
     !wrapsLiteral &&
-    (labels.every((label) => label === null) ||
+    ((labels.every((label) => label === null) &&
+      (bullets.every((bullet) => bullet === null) ||
+        bullets.slice(preamble).every(Boolean))) ||
       labels
         .slice(preamble)
         .every(
@@ -208,7 +250,9 @@ function joinFolderClauses(text: string) {
         ));
   const command = lines
     .map((line, index) => {
-      const clause = line.slice(labels[index]?.[0].length ?? 0);
+      const clause = line.slice(
+        labels[index]?.[0].length ?? bullets[index]?.[0].length ?? 0,
+      );
       return index < lines.length - 1
         ? clause.replace(/[。；;，,]$/u, "")
         : clause;
@@ -466,11 +510,18 @@ const attachmentComputerScope =
   /^在\s*(?:我的电脑|这台电脑|本机|本地(?:电脑)?|Windows(?:电脑)?)(?:上|中|里)?\s*[，,：:]?\s*/iu;
 const imageReference = String.raw`(?:这(?:一)?张(?:图(?:片|像)?|照片|截[图屏])|这(?:个|幅)图(?:片|像)?|(?:当前|本条|上述|附件)图片|(?:随附|上传)(?:的)?图片)`;
 const attachmentReference = String.raw`(?:这(?:一)?(?:个|份)(?:附件|文件|文档)|(?:这|本)条(?:消息)?(?:里|中|附上)?的?(?:附件|文件)|(?:当前|随附|上传)(?:的)?(?:附件|文件)|附件)`;
-const attachmentCopy = String.raw`(?:分别|逐一|批量)?\s*(?:复制|拷贝|分发)`;
+const attachmentCopy = String.raw`(?:分别|逐一|批量|一起|一并|全部|都)?\s*(?:复制|拷贝|分发)`;
 const attachmentDestination = String.raw`(?:到|至|进(?:入)?)\s*(.+)`;
-function attachmentCopyCommand(reference: string) {
+function attachmentCopyCommand(
+  reference: string,
+  implicitSource = false,
+  placement = false,
+) {
+  const operation = placement
+    ? `${attachmentCopy}|(?:一起|一并)?\\s*放`
+    : attachmentCopy;
   return new RegExp(
-    String.raw`^(?:(?:把|将)\s*(${reference})\s*${attachmentCopy}|\s*${attachmentCopy}\s*(${reference}))\s*${attachmentDestination}$`,
+    String.raw`^(?:(?:把|将)${implicitSource ? "?" : ""}\s*(${reference})\s*(?:${operation})|\s*(?:${operation})\s*(${reference}))\s*${attachmentDestination}$`,
     "u",
   );
 }
@@ -480,13 +531,58 @@ const attachmentCommand = attachmentCopyCommand(
 const possibleAttachmentCommand = attachmentCopyCommand(
   `${imageReference}|${attachmentReference}|(?:这些|全部|所有)(?:图片|图|附件|文件)|(?:本条|这条)(?:消息的?)?(?:全部|所有)(?:图片|附件|文件)`,
 );
+const attachmentParent = String.raw`(?:(?:的\s*)?(?:父)?(?:文件夹|目录)\s*)?(${nameToken})\s*(?:(?:下(?:面)?|里(?:面)?|中|内(?:部)?)(?:的)?|的)\s*`;
 const attachmentTargets = new RegExp(
-  String.raw`^(?:(?:的\s*)?(?:父)?(?:文件夹|目录)\s*)?(${nameToken})\s*(?:(?:下(?:面)?|里(?:面)?|中|内(?:部)?)(?:的)?|的)\s*(?:以下|指定的?)?\s*(?:(${clauseNumber})\s*个\s*)?(?:子文件夹|子目录)\s*(.*)$`,
+  String.raw`^${attachmentParent}(?:以下|指定的?)?\s*(?:(${clauseNumber})\s*个\s*)?(?:子文件夹|子目录)\s*(.*)$`,
   "u",
 );
-const attachmentCopySuffix =
-  /(?:[，,、；;]\s*(?:(?:每(?:一)?个(?:子文件夹|文件夹|子目录|目录)?|各(?:个)?(?:子文件夹|文件夹|子目录|目录)?)\s*(?:(?:各|都)?(?:放|复制|拷贝|放入)?\s*)?(?:一|1|１)份|保留(?:图片|附件|文件)?(?:的)?(?:原(?:始)?(?:文件名|名称)|原名)))+$/u;
+const quotedAttachmentTargets = new RegExp(
+  String.raw`^${attachmentParent}((?:${quotedName})(?:\s*(?:、|[，,]|和|与|及)\s*(?:${quotedName}))*\s*)$`,
+  "u",
+);
+const attachmentCopyModifier = String.raw`(?:(?:每(?:一)?个(?:子文件夹|文件夹|子目录|目录)?|各(?:个)?(?:子文件夹|文件夹|子目录|目录)?)\s*(?:(?:各|都)?(?:放|复制|拷贝|放入)?\s*)?(?:一|1|１)份|保留(?:图片|附件|文件)?(?:的)?(?:原(?:始)?(?:文件名|名称)|原名))`;
+const attachmentCopySuffix = new RegExp(
+  String.raw`(?:[，,、；;]\s*${attachmentCopyModifier})+$`,
+  "u",
+);
 const desktopClientSurface = /桌面(?:端|版|浏览器|网页|应用)/u;
+const batchAttachmentNoun = String.raw`(?:附件|文件|文档|图(?:片|像)?|照片|截图)`;
+const numberedAttachment = String.raw`(?:这|上述|所附)?\s*(?:${clauseNumber})\s*(?:张|幅|个|份)\s*${batchAttachmentNoun}`;
+const explicitAttachmentQuantity = new RegExp(
+  String.raw`^(?:这|上述|所附)?\s*(${clauseNumber})\s*(?:张|幅|个|份)`,
+  "u",
+);
+const collectiveAttachment = String.raw`(?:(?:(?:这|本)条(?:消息)?(?:的|内的)?\s*)?(?:这些|全部|所有|这批|这组)\s*${batchAttachmentNoun}|这(?:一)?批\s*${batchAttachmentNoun}|它们|这几份(?:附件|文件|文档)?)`;
+const selectedAttachment = String.raw`(?:(?:所附|所选|选中(?:的)?|当前(?:的)?|随附(?:的)?|上传(?:的)?|(?:这|本)条(?:消息)?(?:的|内的)?)?\s*(?:附件|图片|文件)|附上的(?:附件|图片|文件))`;
+const collectiveAttachmentLiteral = new RegExp(
+  String.raw`^${collectiveAttachment}$`,
+  "u",
+);
+const selectedAttachmentLiteral = new RegExp(
+  String.raw`^${selectedAttachment}$`,
+  "u",
+);
+const batchAttachmentReference = `${numberedAttachment}|${collectiveAttachment}|${selectedAttachment}`;
+const batchAttachmentCommand = attachmentCopyCommand(
+  batchAttachmentReference,
+  true,
+  true,
+);
+const anyAttachmentCommand = attachmentCopyCommand(
+  `${imageReference}|${attachmentReference}|${batchAttachmentReference}`,
+  true,
+  true,
+);
+const referencedChildTargets =
+  /^(?:刚(?:刚|才)?(?:新建|创建|建好)的\s*)?(?:(?:每(?:一)?个|各(?:个)?|所有|全部|这些|上述(?:的)?)\s*)(?:刚(?:刚|才)?(?:新建|创建|建好)的\s*)?(?:子文件夹|子目录|文件夹|目录)(?:里(?:面)?|中|内|下)?$/u;
+const batchAttachmentCopySuffix = new RegExp(
+  String.raw`(?:[，,、；;]\s*(?:${attachmentCopyModifier}|(?:每(?:一)?张|各(?:个)?(?:图片|附件|文件))\s*各?\s*(?:放|复制)?\s*[一1１]份|(?:${clauseNumber})\s*(?:张|个|份)\s*${batchAttachmentNoun}\s*各\s*[一1１]份|每(?:一)?个(?:子文件夹|文件夹|子目录|目录)(?:里|中|内)?\s*(?:都有|都放)?\s*(?:${clauseNumber})\s*(?:张|个|份)\s*${batchAttachmentNoun}(?:\s*各\s*[一1１]份)?))+$`,
+  "u",
+);
+const attachmentCompoundBoundary = new RegExp(
+  String.raw`(?:[，,。；;]\s*(?:${compoundConnector})?|${compoundConnector})(?=(?:请(?:你)?\s*)?(?:把|将|复制|拷贝|分发|一起|一并|${batchAttachmentReference}))`,
+  "gu",
+);
 
 function readAttachmentCopy(text: string) {
   const clauses = joinFolderClauses(text);
@@ -524,10 +620,14 @@ export function looksLikeDesktopFolderAttachment(text: string): boolean {
   const request = readAttachmentCopy(text);
   const copy = request && possibleAttachmentCommand.exec(request.command);
   if (!copy) return false;
-  const destinations = copy[3].replace(quotation, "");
+  return looksLikeDesktopAttachmentDestination(copy[3]);
+}
+
+function looksLikeDesktopAttachmentDestination(target: string): boolean {
+  const destinations = target.replace(quotation, "");
   if (desktopClientSurface.test(destinations)) return false;
   return (
-    desktopPrefix.test(copy[3]) ||
+    desktopPrefix.test(target) ||
     (!/(?:浏览器|网盘|网站|云端|站内)/u.test(destinations) &&
       /(?:子文件夹|子目录)/u.test(destinations))
   );
@@ -540,19 +640,37 @@ export function desktopFolderAttachmentRequest(
   if (!request?.ordered) return;
   const copy = attachmentCommand.exec(request.command);
   if (!copy) return;
-  if (desktopClientSurface.test(copy[3].replace(quotation, ""))) return;
-  const scope = desktopPrefix.exec(copy[3]);
-  if (!scope) return;
-  const targets = attachmentTargets.exec(copy[3].slice(scope[0].length));
-  if (!targets) return;
+  const plan = explicitAttachmentTargets(copy[3]);
+  if (!plan) return;
+  return {
+    plan,
+    deviceName: request.deviceName,
+    steps: ["copy_attachment", "verify"],
+    source: attachmentSource(copy[1] ?? copy[2]),
+  };
+}
 
-  const count = countFolders(targets[2]);
-  const list = targets[3].replace(attachmentCopySuffix, "").trim();
+function explicitAttachmentTargets(destination: string) {
+  if (desktopClientSurface.test(destination.replace(quotation, ""))) return;
+  const scope = desktopPrefix.exec(destination);
+  if (!scope) return;
+  const scoped = destination
+    .slice(scope[0].length)
+    .replace(attachmentCopySuffix, "")
+    .trim();
+  const targets = attachmentTargets.exec(scoped);
+  const quoted = targets ? null : quotedAttachmentTargets.exec(scoped);
+  const parent = targets?.[1] ?? quoted?.[1];
+  const named = targets?.[3] ?? quoted?.[2];
+  if (!parent || named === undefined) return;
+
+  const count = countFolders(targets?.[2]);
+  const list = named.trim();
   const wrapped = /^(?:（(.+)）|\((.+)\))$/u.exec(list);
   const names = wrapped?.[1] ?? wrapped?.[2] ?? list.replace(/^[：:]\s*/u, "");
   const outside = names.replace(quotation, "");
   if (
-    /(?:^|[，,；;]\s*)(?:并|再|然后|且|也)?(?:每(?:一)?个|保留(?:图片|附件|文件)?(?:的)?原|不保留|重命名|改名|另存)/u.test(
+    /(?:^|[，,、；;]\s*)(?:并|再|然后|且|也)?(?:每(?:一)?个|保留(?:图片|附件|文件)?(?:的)?原|不保留|重命名|改名|另存|(?:上传|下载|同步|发送)(?:到|给))/u.test(
       outside,
     )
   )
@@ -561,14 +679,156 @@ export function desktopFolderAttachmentRequest(
   if (!folderNames || (count !== undefined && count !== folderNames.length))
     return;
   const plan = desktopFolderCreationPlanSchema.safeParse({
-    parentName: unquote(targets[1]),
+    parentName: unquote(parent),
     folderNames,
   });
-  if (!plan.success) return;
+  if (plan.success) return plan.data;
+}
+
+type AttachmentSource = "image" | "attachment";
+type FolderAttachmentSelection = {
+  source: AttachmentSource;
+  quantity: "single" | "multiple" | "selected";
+  attachmentCount?: number;
+};
+export type DesktopFolderBatchAttachmentRequest = DesktopFolderRequest &
+  FolderAttachmentSelection & {
+    mode: "existing" | "create";
+  };
+
+function attachmentSource(reference: string): AttachmentSource {
+  return /图|照片|截屏/u.test(reference) ? "image" : "attachment";
+}
+
+function readCompoundAttachment(text: string) {
+  const clauses = joinFolderClauses(text);
+  if (!clauses) return;
+  const outside = clauses.command.replace(quotation, (literal) =>
+    " ".repeat(literal.length),
+  );
+  for (const boundary of outside.matchAll(attachmentCompoundBoundary)) {
+    const folders = clauses.command.slice(0, boundary.index);
+    const files = clauses.command.slice(boundary.index + boundary[0].length);
+    const request = readAttachmentCopy(files);
+    if (!request || !readBatchCommand(folders)) continue;
+    const copy = anyAttachmentCommand.exec(request.command);
+    const partial =
+      /^(?:(?:把|将)\s*)?(?:(?:所附|这些|这张|这份|这个|上传的|附上的).{0,24}?(?:图片|图|附件|文件)|一起|一并|它们|这几份).{0,15}?(?:复制|分发|放到|放进|拷贝|粘贴)/u.test(
+        request.command,
+      );
+    if (copy || partial)
+      return {
+        folders,
+        copy,
+        ordered: clauses.ordered,
+        fileDeviceName: request.deviceName,
+      };
+  }
+}
+
+export function looksLikeDesktopFolderBatchAttachment(text: string): boolean {
+  if (readCompoundAttachment(text)) return true;
+  if (desktopFolderAttachmentFollowup(text)) return true;
+  const request = readAttachmentCopy(text);
+  const copy = request && batchAttachmentCommand.exec(request.command);
+  return !!copy && looksLikeDesktopAttachmentDestination(copy[3]);
+}
+
+function attachmentDelivery(target: string) {
+  const trimmed = target.replace(batchAttachmentCopySuffix, "");
+  const removed = target.slice(trimmed.length);
+  const quantities = Array.from(
+    removed.matchAll(
+      new RegExp(
+        String.raw`(${clauseNumber})\s*(?:张|个|份)\s*${batchAttachmentNoun}`,
+        "gu",
+      ),
+    ),
+    (count) => countFolders(count[1]),
+  );
+  return { target: trimmed.trim(), quantities };
+}
+
+function attachmentSelection(
+  copy: RegExpExecArray,
+): (FolderAttachmentSelection & { target: string }) | undefined {
+  const reference = copy[1] ?? copy[2];
+  const source = attachmentSource(reference);
+  const delivery = attachmentDelivery(copy[3]);
+  const count = countFolders(explicitAttachmentQuantity.exec(reference)?.[1]);
+  const isCollective = collectiveAttachmentLiteral.test(reference);
+  const isSelected = !isCollective && selectedAttachmentLiteral.test(reference);
+  const quantity = isSelected
+    ? "selected"
+    : isCollective || (count !== undefined && count > 1)
+      ? "multiple"
+      : "single";
+  const attachmentCount = count ?? delivery.quantities[0];
+  if (
+    (attachmentCount !== undefined &&
+      (!attachmentCount || attachmentCount > maxDesktopFolderAttachments)) ||
+    delivery.quantities.some((item) => item !== attachmentCount) ||
+    (quantity === "single" &&
+      attachmentCount !== undefined &&
+      attachmentCount !== 1) ||
+    (quantity === "multiple" && attachmentCount === 1)
+  )
+    return;
   return {
-    plan: plan.data,
-    deviceName: request.deviceName,
-    steps: ["copy_attachment", "verify"],
-    source: /图|照片|截屏/u.test(copy[1] ?? copy[2]) ? "image" : "attachment",
+    target: delivery.target,
+    source,
+    quantity,
+    ...(attachmentCount === undefined ? {} : { attachmentCount }),
+  };
+}
+
+export function desktopFolderAttachmentFollowup(
+  text: string,
+): (FolderAttachmentSelection & { deviceName?: string }) | undefined {
+  const request = readAttachmentCopy(text);
+  if (!request?.ordered) return;
+  const copy = anyAttachmentCommand.exec(request.command);
+  const delivery = copy && attachmentSelection(copy);
+  if (!delivery || !referencedChildTargets.test(delivery.target)) return;
+  return {
+    source: delivery.source,
+    quantity: delivery.quantity,
+    ...(delivery.attachmentCount === undefined
+      ? {}
+      : { attachmentCount: delivery.attachmentCount }),
+    ...(request.deviceName ? { deviceName: request.deviceName } : {}),
+  };
+}
+
+export function desktopFolderBatchAttachmentRequest(
+  text: string,
+): DesktopFolderBatchAttachmentRequest | undefined {
+  const compound = readCompoundAttachment(text);
+  const existing = compound ? undefined : readAttachmentCopy(text);
+  if (
+    compound ? !compound.ordered || compound.fileDeviceName : !existing?.ordered
+  )
+    return;
+  const copy =
+    compound?.copy ??
+    (existing && batchAttachmentCommand.exec(existing.command));
+  if (!copy) return;
+  const delivery = attachmentSelection(copy);
+  if (!delivery) return;
+  const { target, ...selection } = delivery;
+  const folders = compound
+    ? desktopFolderCreationRequest(compound.folders)
+    : undefined;
+  if (compound && (!folders || !referencedChildTargets.test(target))) return;
+  const plan = folders?.plan ?? explicitAttachmentTargets(target);
+  if (!plan) return;
+  return {
+    plan,
+    deviceName: folders?.deviceName ?? existing?.deviceName,
+    steps: compound
+      ? ["ensure_directories", "copy_attachments", "verify"]
+      : ["copy_attachments", "verify"],
+    ...selection,
+    mode: compound ? "create" : "existing",
   };
 }

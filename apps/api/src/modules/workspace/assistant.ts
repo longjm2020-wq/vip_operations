@@ -1,3 +1,4 @@
+import { folderAttachmentIntent, validateFolderAttachmentFiles, validateFolderAttachmentSelection } from "./desktop-attachment.js";
 import { bailianChatReady, bailianChatConnection } from "./bailian-chat.js";
 import {
   agentaiConnection,
@@ -21,8 +22,8 @@ import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import { desktopFileCopyIntent, mentionsDesktopFileCopy } from "../../../../../packages/contracts/src/desktop-file-copy.js";
-import { desktopFolderAttachmentRequest, desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent,
-  folderAttachmentGuidance, looksLikeDesktopFolderAttachment, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
+import { desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent,
+  folderBatchAttachmentGuidance, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   assistantFollowupAnchor,
   classifyAssistantExecution,
@@ -175,13 +176,9 @@ export async function sendAssistant(
   requireAssistant(c);
   const body = parse(assistantSendSchema, input);
   const autoExecution = body.autoExecution === true;
-  const folderAttachment = desktopFolderAttachmentRequest(body.message);
-  if (autoExecution || body.desktopDeviceId) {
-    if (!folderAttachment && looksLikeDesktopFolderAttachment(body.message))
-      fail("INVALID_FOLDER_ATTACHMENT", folderAttachmentGuidance.format, 400);
-    if (folderAttachment && body.attachmentIds.length !== 1)
-      fail("FOLDER_ATTACHMENT_REQUIRED", folderAttachmentGuidance.attachment, 400);
-  }
+  const folderAttachment = !body.explicitChat && (autoExecution || body.desktopDeviceId)
+    ? folderAttachmentIntent(body.message, body.attachmentIds.length) : undefined;
+  if (folderAttachment) validateFolderAttachmentSelection(folderAttachment, body.attachmentIds);
   if (
     body.browserExecution &&
     (body.attachmentIds.length ||
@@ -193,11 +190,13 @@ export async function sendAssistant(
       "浏览器任务请直接描述操作；附件和资料查询请切换回网站内",
       400,
     );
+  if (body.attachmentIds.length && !folderAttachment && !body.explicitChat &&
+      (body.desktopDeviceId && !autoExecution || autoExecution && classifyAssistantExecution(body.message).kind === "desktop"))
+    fail("FOLDER_ATTACHMENT_TARGET", folderBatchAttachmentGuidance.format, 400);
   if (
     !autoExecution &&
     body.desktopDeviceId &&
-    ((body.attachmentIds.length && !folderAttachment) ||
-      body.webSearch ||
+    (body.webSearch ||
       (voice && !voice.desktopRequest))
   )
     fail(
@@ -247,13 +246,14 @@ export async function sendAssistant(
     (last.attemptId ?? last.id) === existing.request_id &&
     hash(JSON.stringify({ ...body, requestId: existing.request_id, version: previousVersion })) === existing.request_hash;
   const direct =
-    autoExecution && (!hasAttachments || !!folderAttachment) && !folderNotes
+    autoExecution && (!hasAttachments || !!folderAttachment) && !folderNotes && !folderAttachment?.relative
       ? await resolveAutomaticAssistantExecution(
           c,
           body.message,
           body.desktopDeviceId,
           body.nativeDesktopDeviceId,
           { inferExternalTargets: !searchRequested },
+          body.attachmentIds.length,
         )
       : undefined;
   const explicitSurface = autoExecution
@@ -265,10 +265,10 @@ export async function sendAssistant(
         : undefined;
   const allowFollowup =
     (autoExecution || explicitSurface) &&
-    !hasAttachments &&
+    (!hasAttachments || folderAttachment?.relative) &&
     !body.webSearch &&
     !searchRequested &&
-    (folderNotes || (direct?.kind ?? classifyAssistantExecution(body.message).kind) === "site") &&
+    (folderNotes || folderAttachment?.relative || (direct?.kind ?? classifyAssistantExecution(body.message).kind) === "site") &&
     !parseVoiceCommand(body.message) &&
     !parseAssistantWebsiteRequest(body.message);
   const followup = allowFollowup
@@ -276,7 +276,7 @@ export async function sendAssistant(
         c,
         body.message,
         !voice || voice.sessionId
-          ? folderNotes ? folderSourceAnchor(sameFailedTurn ? existing.messages.slice(0, -1) : existing.messages, voice?.sessionId)
+          ? folderNotes || folderAttachment?.relative ? folderSourceAnchor(sameFailedTurn ? existing.messages.slice(0, -1) : existing.messages, voice?.sessionId)
             : assistantFollowupAnchor(existing.messages, voice?.sessionId)
           : undefined,
         body.desktopDeviceId,
@@ -320,6 +320,7 @@ export async function sendAssistant(
   const usesChat = !publicSearch && siteExecution;
   let s = usesChat || publicSearch ? await settings() : undefined;
   const attachments = await ownedAgentFiles(c, body.attachmentIds);
+  if (folderAttachment) validateFolderAttachmentFiles(folderAttachment, attachments.map(f => ({name:f.name,mime:f.mime,size:f.size})));
   async function prepareChat() {
     const selection = await resolveChatModel(body.model, {
       vision: attachments.some((file) => /^(image|video)\//.test(file.mime)),
@@ -345,7 +346,7 @@ export async function sendAssistant(
   // settings. Keep the task key even if the old queue commit lost its response.
   const folderPlan = execution?.kind === "desktop" && (folderAttachment?.plan ?? desktopFolderCompoundRequest(body.message)?.plan ?? desktopFolderCreationPlan(body.message));
   const retryDesktop = !voice && execution?.kind === "desktop" && !execution.localBrowser &&
-    (folderNotes || folderPlan || mentionsDesktopFileCopy(body.message)) && sameFailedTurn;
+    (folderNotes || folderPlan || folderAttachment?.relative || mentionsDesktopFileCopy(body.message)) && sameFailedTurn;
   const turnId = retryDesktop ? last.id : body.requestId;
   const messages: AssistantMessage[] = [
     ...(await hydrateTeamMessages(c.actor.id, retryDesktop ? existing.messages.slice(-39, -1) : existing.messages.slice(-38))),
@@ -429,7 +430,7 @@ export async function sendAssistant(
             requestId: turnId,
             instruction: body.message,
             ...(folderAttachment ? { attachmentIds: body.attachmentIds } : {}),
-            model: folderNotes || folderPlan || desktopFileCopyIntent(body.message) || desktopFileCopyIntent(body.message, "macos")
+            model: folderNotes || folderAttachment || folderPlan || desktopFileCopyIntent(body.message) || desktopFileCopyIntent(body.message, "macos")
               ? undefined
               : executionModel,
             localBrowser: desktopExecution?.localBrowser,

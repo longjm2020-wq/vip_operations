@@ -190,7 +190,7 @@ sealed class AssistantForm : Form {
     Func<string,Action,Task<WindowChoice>> notepadOverride;
     Func<Action,Action,Task<WindowChoice>> wecomOverride;
     Func<Dictionary<string,object>,Func<Task>,string,Task<int>> executeFolderBatch=Native.CreateDesktopFolders;
-    Func<Dictionary<string,object>,string[],Func<Task>,System.Threading.CancellationToken,Native.FolderAttachment,Task<int>> executeFileScript=(plan,steps,check,stop,source)=>FilePlanRunner.Run(plan,steps,check,stop,null,source);
+    Func<Dictionary<string,object>,string[],Func<Task>,System.Threading.CancellationToken,Native.FolderAttachment[],Task<int>> executeFileScript=(plan,steps,check,stop,sources)=>FilePlanRunner.Run(plan,steps,check,stop,null,sources);
     System.Threading.CancellationTokenSource folderPlanStop;
     long epoch;
     Dictionary<string, object> task;
@@ -784,7 +784,7 @@ sealed class AssistantForm : Form {
         string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
             string retainedTaskId=continuation==null?null:continuation.RetainedTaskId(authorizationId);
-            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, desktopFolderCopy=true, fileCopyVerification=true, backgroundFileCopy=true, folderCreation=true, folderNotes=true, folderBatchNotes=true, folderAttachment=true, wecomApp=true, retainedTaskId });
+            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, desktopFolderCopy=true, fileCopyVerification=true, backgroundFileCopy=true, folderCreation=true, folderNotes=true, folderBatchNotes=true, folderAttachment=true, folderAttachments=true, wecomApp=true, retainedTaskId });
             if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
@@ -995,6 +995,7 @@ sealed class AssistantForm : Form {
         if(!Guid.TryParse(id,out taskGuid) || !Guid.TryParse(attempt,out attemptGuid) || !Guid.TryParse(grant,out grantGuid))
             throw new IOException("附件任务的授权编号无效。");
         string path=Base+"tasks/"+taskGuid+"/folder-attachment?attemptId="+attemptGuid+"&authorizationId="+grantGuid;
+        if(attachment.Id!=null)path+="&fileId="+attachment.Id;
         using(var deadline=System.Threading.CancellationTokenSource.CreateLinkedTokenSource(stop))
         using(var request=new HttpRequestMessage(HttpMethod.Get,path)) {
             deadline.CancelAfter(TimeSpan.FromMinutes(3));request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",connectionToken);
@@ -1044,7 +1045,7 @@ sealed class AssistantForm : Form {
             try {
             var start=await claim();
             task=start;state="RUNNING";
-            status.Text=expectedAction==Native.CopyAttachment?"正在后台分发聊天附件并核验各子目录中的副本，可以继续使用键鼠。":
+            status.Text=Native.CopiesAttachments(expectedAction)?"正在后台分发聊天附件并核验各子目录中的副本，可以继续使用键鼠。":
                 expectedAction==Native.CreateFoldersWithNotes?"正在后台创建并核对子目录和同名文本文件，可以继续使用键鼠。":
                 expectedAction==Native.CreateNotes?"正在各子目录中创建并核对同名文本文件，可以继续使用键鼠。":"正在后台创建并核对文件夹，可以继续使用键鼠。";
             var lease=Stopwatch.StartNew();
@@ -1056,26 +1057,28 @@ sealed class AssistantForm : Form {
             };
             var plan=D(start.ContainsKey("folderCreation")?start["folderCreation"]:null);
             int verified;
-            string verifiedDigest=null;
-            if(expectedAction==Native.CreateFoldersWithNotes || expectedAction==Native.CopyAttachment) {
+            string[] verifiedDigests=null;
+            if(expectedAction==Native.CreateFoldersWithNotes || Native.CopiesAttachments(expectedAction)) {
                 var steps=FilePlanRunner.ReadSteps(start.ContainsKey("folderSteps")?start["folderSteps"]:null);
                 if(!steps.SequenceEqual(Native.FolderSteps(expectedAction)))throw new IOException("任务授权与文件执行脚本不一致。");
                 folderPlanStop=new System.Threading.CancellationTokenSource();
                 try {
-                    Native.FolderAttachment attachment=null;
-                    if(expectedAction==Native.CopyAttachment) {
-                        attachment=new Native.FolderAttachment(D(start.ContainsKey("folderAttachment")?start["folderAttachment"]:null));
+                    Native.FolderAttachment[] sources=null;
+                    if(expectedAction==Native.CopyAttachment)sources=new[]{new Native.FolderAttachment(D(start.ContainsKey("folderAttachment")?start["folderAttachment"]:null))};
+                    else if(Native.CopiesAttachments(expectedAction))sources=Native.FolderAttachment.ReadList(start.ContainsKey("folderAttachments")?start["folderAttachments"]:null);
+                    if(sources!=null)foreach(var attachment in sources) {
                         await DownloadTaskAttachment(attachment,id,attempt,grant,connectionToken,checkpoint,folderPlanStop.Token);
                         await checkpoint();
                     }
-                    verified=await executeFileScript(plan,steps,checkpoint,folderPlanStop.Token,attachment);
-                    if(attachment!=null)verifiedDigest=attachment.Digest;
+                    verified=await executeFileScript(plan,steps,checkpoint,folderPlanStop.Token,sources);
+                    if(sources!=null)verifiedDigests=sources.Select(a=>a.Digest).ToArray();
                 }
                 finally {folderPlanStop.Dispose();folderPlanStop=null;}
             } else verified=await executeFolderBatch(plan,checkpoint,expectedAction);
             check();
             var completion=new Dictionary<string,object>{{"action","complete"},{"authorizationId",grant},{"attemptId",attempt},{"verifiedCount",verified}};
-            if(verifiedDigest!=null)completion["sha256"]=verifiedDigest;
+            if(expectedAction==Native.CopyAttachment)completion["sha256"]=verifiedDigests[0];
+            else if(verifiedDigests!=null)completion["sha256s"]=verifiedDigests;
             var result=await Request(route,completion);
             if(CurrentStart(id,connectionToken,version,grant)) {task=result;state=S(result,"status");status.Text=TaskStage(result);}
         } catch(Exception error) {
@@ -1229,26 +1232,34 @@ sealed class AssistantForm : Form {
                 form.RefreshStatus().GetAwaiter().GetResult();
                 if(form.Authorized||revocations!=1)throw new Exception("Status elevated an unconfirmed local grant");
                 Action newTask=()=>{seed();form.taskId=Guid.NewGuid().ToString();form.task=new Dictionary<string,object>{{"id",form.taskId},{"status","WAITING"},{"stage","Waiting"}};form.state="WAITING";form.armed=false;form.allowing=false;form.working=false;form.manualPauseSent=false;form.manualPausePending=false;form.manualPauseVersion=-1;form.startFailureNote="";form.autoAttemptedId="";form.epoch++;};
-                foreach(string batchAction in new[]{Native.CreateFolders,Native.CreateNotes,Native.CreateFoldersWithNotes,Native.CopyAttachment}) {
+                foreach(string batchAction in new[]{Native.CreateFolders,Native.CreateNotes,Native.CreateFoldersWithNotes,Native.CopyAttachment,Native.CopyAttachments,Native.CreateFoldersWithAttachments}) {
                 newTask();
                 string batchAttempt=Guid.NewGuid().ToString();
                 form.task["nativeAction"]=batchAction;form.task["folderCreationAttemptId"]=batchAttempt;
-                int batchRequests=0,batchExecutions=0;
+                int batchRequests=0,batchExecutions=0,downloads=0;
+                bool plural=batchAction==Native.CopyAttachments || batchAction==Native.CreateFoldersWithAttachments;
+                var fixtures=new[]{
+                    new{id=Guid.NewGuid().ToString(),name="test 文档.txt",bytes=3,sha256="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+                    new{id=Guid.NewGuid().ToString(),name="second.txt",bytes=4,sha256="88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589"}
+                };
                 fake.Reply=req=>{
-                    if(req.Method==HttpMethod.Get && batchAction==Native.CopyAttachment && batchRequests==1) {
+                    if(req.Method==HttpMethod.Get && Native.CopiesAttachments(batchAction) && batchRequests==1) {
                         if(!req.RequestUri.AbsolutePath.EndsWith("/"+form.taskId+"/folder-attachment") || !req.RequestUri.Query.Contains("attemptId="+batchAttempt) ||
                             !req.RequestUri.Query.Contains("authorizationId="+form.authorizationId) || req.Headers.Authorization.Parameter!=form.token)
                             throw new Exception("Attachment download was not bound to task, device and attempt");
-                        return new HttpResponseMessage(HttpStatusCode.OK){Content=new ByteArrayContent(Encoding.ASCII.GetBytes("abc"))};
+                        if(plural && !req.RequestUri.Query.Contains("fileId="+fixtures[downloads].id))throw new Exception("Wrong file in attachment set");
+                        if(!plural && req.RequestUri.Query.Contains("fileId="))throw new Exception("Legacy attachment was requested with fileId");
+                        return new HttpResponseMessage(HttpStatusCode.OK){Content=new ByteArrayContent(Encoding.ASCII.GetBytes(downloads++==0?"abc":"abcd"))};
                     }
                     var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));
                     batchRequests++;
                     if(!req.RequestUri.AbsolutePath.EndsWith("/folder-creation") || S(body,"attemptId")!=batchAttempt || S(body,"authorizationId")!=form.authorizationId)
                         throw new Exception("Folder batch used the wrong authorization, attempt or endpoint");
                     if(batchRequests==1 && S(body,"action")=="start")
-                        return TestResponse(200,form.json.Serialize(new{data=new{id=form.taskId,status="RUNNING",nativeAction=batchAction,folderCreationAttemptId=batchAttempt,folderSteps=Native.FolderSteps(batchAction),folderCreation=new{parentName="test",folderNames=new[]{"A","B"}},folderAttachment=new{name="test 文档.txt",bytes=3,sha256="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}}}));
+                        return TestResponse(200,form.json.Serialize(new{data=new{id=form.taskId,status="RUNNING",nativeAction=batchAction,folderCreationAttemptId=batchAttempt,folderSteps=Native.FolderSteps(batchAction),folderCreation=new{parentName="test",folderNames=new[]{"A","B"}},folderAttachment=fixtures[0],folderAttachments=fixtures}}));
                     if(batchRequests==2 && S(body,"action")=="complete" && S(body,"verifiedCount")=="2" &&
-                        (batchAction==Native.CopyAttachment?S(body,"sha256")=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad":!body.ContainsKey("sha256")))
+                        (plural?((object[])body["sha256s"]).Cast<string>().SequenceEqual(fixtures.Select(f=>f.sha256)):!body.ContainsKey("sha256s")) &&
+                        (batchAction==Native.CopyAttachment?S(body,"sha256")==fixtures[0].sha256:!body.ContainsKey("sha256")))
                         return TestResponse(200,"{\"data\":{\"status\":\"DONE\"}}");
                     throw new Exception("Unexpected folder batch request");
                 };
@@ -1261,9 +1272,10 @@ sealed class AssistantForm : Form {
                     if(form.manualPausePending || S(plan,"parentName")!="test")throw new Exception("Background batch lost its plan or paused on foreground input");
                     return 2;
                 };
-                form.executeFileScript=(plan,steps,checkpoint,stop,attachment)=>{
-                    if(!steps.SequenceEqual(Native.FolderSteps(batchAction)) || (attachment!=null)!=(batchAction==Native.CopyAttachment) ||
-                        (attachment!=null && Encoding.ASCII.GetString(attachment.Content)!="abc"))throw new Exception("Unexpected executable batch or attachment");
+                form.executeFileScript=(plan,steps,checkpoint,stop,sources)=>{
+                    if(!steps.SequenceEqual(Native.FolderSteps(batchAction)) || (sources!=null)!=Native.CopiesAttachments(batchAction) ||
+                        (sources!=null && (sources.Length!=(plural?2:1) || Encoding.ASCII.GetString(sources[0].Content)!="abc" ||
+                            (plural && Encoding.ASCII.GetString(sources[1].Content)!="abcd"))))throw new Exception("Unexpected executable batch or attachment");
                     return form.executeFolderBatch(plan,checkpoint,batchAction);
                 };
                 form.StartTask(true).GetAwaiter().GetResult();

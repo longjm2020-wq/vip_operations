@@ -1,20 +1,20 @@
 {
-  "version": "1.2.19",
+  "version": "1.2.20",
   "platform": "win-x64",
-  "sha256": "4da056e1d4cff6192b3b769b43be3e94a80f1c64985c514a83fd6ba200d6ee1c",
+  "sha256": "ce5a94022ba2dc4facc81c7014ff55042e55447f3ac132e2fae2f0fe6bf591c1",
   "sources": {
-    "apps/desktop/XutiDesktop.cs": "85c37008c6469a7e4589f483420f9d835c88ab6d77ecdb34f7911f0c51acca61",
+    "apps/desktop/XutiDesktop.cs": "060fbdc1d02b1713349ed41449beb2be55a32c35de7fd6ac2d6dca7a7628e2bf",
     "apps/desktop/DesktopExplorer.cs": "36c1b7afd22364f0d810315ce8d6486991dc9759b808ef1bae6b2840dad8f156",
     "apps/desktop/ExplorerCopy.cs": "df589684e65bbc8fd33eaafbca2026d302294cc03cb0c5df5c59cb9ba434b367",
-    "apps/desktop/FolderCreation.cs": "42b211154ef7cea897a248b8cdb546f8f2f189babcb63938eb66a750199f6448",
-    "apps/desktop/FolderAttachment.cs": "647973bc0d18df083b73c41d7f0b583737c53a0b7dd2aa4a418301c5a8873680",
-    "apps/desktop/FilePlanRunner.cs": "affcaf5c391d6def003ad15eda9c661511a6de7aa03769603a49fb017b0c0598",
+    "apps/desktop/FolderCreation.cs": "e5278f43abfe32c32b32a9cde2000a2f0c91e1f9aa7c1515efa4660d74a88ec9",
+    "apps/desktop/FolderAttachment.cs": "77b7752514d0fffa4077cff706019bd95fee7a2c885968ed68e4de038c4df26c",
+    "apps/desktop/FilePlanRunner.cs": "4ecf4269c658f3bcc50efdacf66cb6bcc5df1692c3a4e6b170adb56abd24eb61",
     "apps/desktop/WeCom.cs": "fbf8f1f75a494dd258e3cce1096d168074ecc0b6770c5354829075ced69f1e87",
     "apps/desktop/DesktopShell.cs": "9971dd142efb05944f12f14ea02991168d4671125c389ad4265689e2447c2a31",
     "apps/desktop/app.manifest": "c58b06b9ed978a75dddc988e2e2fcde120675c3ac0554cc1e45b20076f3ee68d",
     "apps/desktop/启动小序.cmd": "4ea0d09b231966f86284ea78560ef38fa6ad7eb56d3312ba7f391fe3795e75ef",
-    "apps/desktop/README.txt": "30398488d4b0bda7e3e4a909c8cab3e8e35f1731cfe729b655662fdd46865ca0",
-    "apps/desktop/version.json": "0a9282f3d28836c0bcd462ea7b0c0afd6e44fe7bcbcf956dbaddd77ceea3a7c6",
+    "apps/desktop/README.txt": "8f2f498c900d519eff052e525e928a9a7ae3e1c1a4808c053cd2e139e5c2e5aa",
+    "apps/desktop/version.json": "defc9d2272523bfe36c8c26fff18cf6c5f7d702978a6a2ac8f7cc876b34f8425",
     "scripts/build-desktop.mjs": "a94bd92f206fbd10308222a045eb5110779814486308b9a2121a92ef7f01344e",
     "scripts/desktop-artifact.mjs": "9ce3353e3fcc73946c68ba1ab407aea735d86ca3e70c7d99be3c9b958588d1fd"
   }

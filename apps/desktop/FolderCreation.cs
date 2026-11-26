@@ -12,8 +12,10 @@ namespace XutiDesktop {
 static partial class Native {
     internal const string CreateFolders="create_desktop_folders", CreateNotes="create_folder_notes", CreateFoldersWithNotes="create_folders_with_notes";
     internal const string CopyAttachment="copy_folder_attachment";
+    internal const string CopyAttachments="copy_folder_attachments",CreateFoldersWithAttachments="create_folders_with_attachments";
+    internal static bool CopiesAttachments(string action) {return action==CopyAttachment || action==CopyAttachments || action==CreateFoldersWithAttachments;}
     internal static bool IsFolderBatchAction(string action) {
-        return action==CreateFolders || action==CreateNotes || action==CreateFoldersWithNotes || action==CopyAttachment;
+        return action==CreateFolders || action==CreateNotes || action==CreateFoldersWithNotes || CopiesAttachments(action);
     }
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
     static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
@@ -94,6 +96,8 @@ static partial class Native {
         if(action==CreateFolders)return new[]{"ensure_directories","verify"};
         if(action==CreateNotes)return new[]{"ensure_same_name_text","verify"};
         if(action==CopyAttachment)return new[]{"copy_attachment","verify"};
+        if(action==CopyAttachments)return new[]{"copy_attachments","verify"};
+        if(action==CreateFoldersWithAttachments)return new[]{"ensure_directories","copy_attachments","verify"};
         return new[]{"ensure_directories","ensure_same_name_text","verify"};
     }
 
@@ -101,9 +105,11 @@ static partial class Native {
         return ExecuteFilePlan(desktop,plan,FolderSteps(action),checkpoint,op=>{});
     }
 
-    internal static async Task<int> ExecuteFilePlan(string desktop,Dictionary<string,object> plan,string[] steps,Func<Task> checkpoint,Action<string> beforeStep,FolderAttachment attachment=null) {
-        bool copying=FolderSteps(CopyAttachment).SequenceEqual(steps);
-        if(!new[]{CreateFolders,CreateNotes,CreateFoldersWithNotes,CopyAttachment}.Any(a=>FolderSteps(a).SequenceEqual(steps)) || copying!=(attachment!=null))
+    internal static async Task<int> ExecuteFilePlan(string desktop,Dictionary<string,object> plan,string[] steps,Func<Task> checkpoint,Action<string> beforeStep,FolderAttachment[] attachments=null) {
+        bool copying=steps.Contains("copy_attachment") || steps.Contains("copy_attachments");
+        if(!new[]{CreateFolders,CreateNotes,CreateFoldersWithNotes,CopyAttachment,CopyAttachments,CreateFoldersWithAttachments}.Any(a=>FolderSteps(a).SequenceEqual(steps)) ||
+            copying!=(attachments!=null) || (copying && (attachments.Length<1 || attachments.Length>6 || attachments.Any(a=>a.Content==null))) ||
+            (steps.Contains("copy_attachment") && attachments.Length!=1))
             throw new IOException("文件执行脚本包含不支持的操作或顺序。");
         bool allowMissingFolders=steps.Contains("ensure_directories");
         bool includeNotes=steps.Contains("ensure_same_name_text");
@@ -122,7 +128,8 @@ static partial class Native {
         var held=new List<IDisposable>();
         var slots=new SafeFileHandle[names.Length];
         var notes=new SafeFileHandle[names.Length];
-        var copies=copying?new FileStream[names.Length]:null;
+        var copies=copying?new FileStream[names.Length,attachments.Length]:null;
+        byte[] verifyBuffer=copying?new byte[131072]:null;
         string[] folders=names.Select(name=>Path.Combine(parent,name)).ToArray();
         string[] notePaths=names.Select((name,i)=>Path.Combine(folders[i],name+".txt")).ToArray();
         try {
@@ -143,12 +150,12 @@ static partial class Native {
                         notes[i]=PinBatchNote(notePaths[i],false);
                         if(notes[i]!=null)held.Add(notes[i]);
                     }
-                    if(copying) {
-                        copies[i]=attachment.OpenDestination(folders[i],true);
-                        if(copies[i]!=null) {
-                            held.Add(copies[i]);
-                            await attachment.VerifyDestination(copies[i],checkpoint);
-                        }
+                    if(copying)for(int j=0;j<attachments.Length;j++) {
+                        var existing=attachments[j].OpenDestination(folders[i],true);
+                        if(existing==null)continue;
+                        held.Add(existing);
+                        copies[i,j]=existing;
+                        await attachments[j].VerifyDestination(existing,checkpoint,verifyBuffer);
                     }
                 }
             }
@@ -176,14 +183,18 @@ static partial class Native {
                     case "verify":
                         foreach(var slot in slots)ExplorerCopy.FolderId(slot);
                         if(includeNotes)foreach(var note in notes)ExplorerCopy.VerifyBatchNote(note,false);
-                        if(copying)foreach(var copy in copies)await attachment.VerifyDestination(copy,checkpoint);
+                        if(copying)for(int i=0;i<folders.Length;i++)
+                            for(int j=0;j<attachments.Length;j++)await attachments[j].VerifyDestination(copies[i,j],checkpoint,verifyBuffer);
                         return slots.Length;
                     case "copy_attachment":
+                    case "copy_attachments":
                         for(int i=0;i<folders.Length;i++) {
-                            await checkpoint();
-                            if(copies[i]!=null)continue;
-                            copies[i]=await attachment.Publish(folders[i],checkpoint);
-                            held.Add(copies[i]);
+                            for(int j=0;j<attachments.Length;j++) {
+                                await checkpoint();
+                                if(copies[i,j]!=null)continue;
+                                copies[i,j]=await attachments[j].Publish(folders[i],checkpoint,verifyBuffer);
+                                held.Add(copies[i,j]);
+                            }
                         }
                         break;
                 }

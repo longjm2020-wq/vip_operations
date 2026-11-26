@@ -54,6 +54,7 @@ import {
   isNativeDesktopAppCommand,
   shouldSearchAssistantPublicWeb,
 } from "../../../packages/contracts/src/assistant-execution";
+import { desktopFolderAttachmentFollowup } from "../../../packages/contracts/src/desktop-folder-creation";
 import { workbenchDraftTarget, type DraftTarget } from "./assistant-draft-target";
 import {
   AssistantHubContext,
@@ -681,7 +682,7 @@ export function PersonalAssistantProvider({
         : false,
   });
   const data = q.data?.data as AssistantConversation | undefined;
-  const anchorRequest = assistantFollowupAnchor(data?.messages || [])?.requestId;
+  const anchorRequest = assistantFollowupAnchor(data?.messages || [], undefined, true)?.requestId;
   const draftStart = useRef<{ owner: string; anchor?: string } | undefined>(
     undefined,
   );
@@ -1105,9 +1106,11 @@ export function PersonalAssistantProvider({
       currentOwner.current === user.id;
     try {
       if (
-        automatic && !selected && !agent.attachments.length &&
-        draftStart.current && draftStart.current.anchor !== anchorRequest &&
-        (classifyAssistantFollowup(value) || canConsiderAssistantFollowup(value))
+        draftStart.current && draftStart.current.anchor !== anchorRequest && (
+          (automatic && !selected && !agent.attachments.length &&
+            (classifyAssistantFollowup(value) || canConsiderAssistantFollowup(value))) ||
+          (target === "desktop" && agent.attachments.length > 0 && desktopFolderAttachmentFollowup(value))
+        )
       )
         throw new Error(
           "编写这条指令时，对话的操作目标已变化。请核对最近的任务，再重新输入或选择本条目标。",

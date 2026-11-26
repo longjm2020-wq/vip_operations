@@ -50,10 +50,10 @@ async function pairTestReceiver(
         "Idempotency-Key": randomUUID(),
       },
     });
-  const downloadAttachment = (taskId: string, authorizationId: string, attemptId: string) =>
+  const downloadAttachment = (taskId: string, authorizationId: string, attemptId: string, fileId?: string) =>
     request.get(desktop + "/client/tasks/" + taskId + "/folder-attachment", {
       headers: { Authorization: "Bearer " + token },
-      params: { authorizationId, attemptId },
+      params: { authorizationId, attemptId, ...(fileId ? { fileId } : {}) },
     });
   return { deviceId, client, downloadAttachment, revoke };
 }
@@ -675,3 +675,75 @@ for (const mode of ["自动识别", "操作我的电脑"] as const) {
     }
   });
 }
+
+test("批量建目录后按原名分发两张图片，并在下一条消息向同一批目录补发文档", async ({ page, request, baseURL }) => {
+  const deviceName = "多附件接收测试电脑";
+  const { client, deviceId, downloadAttachment, revoke } = await pairTestReceiver(page, request, baseURL!, deviceName);
+  const receiving = { nativeActions: true, folderCreation: true, folderAttachment: true, folderAttachments: true };
+  const folderNames = Array.from({ length: 100 }, (_, i) => "XUTI-" + String(i + 1).padStart(2, "0"));
+  const parentName = "测试自动化666";
+  const instruction = "在我的电脑桌面新建父文件夹“测试自动化666”，并在文件内新建100个子文件夹，命名规则按“XUTI-01……XUTI-n”，然后把这些图片复制进每一个子文件夹";
+  const photos = await Promise.all(["5.jpeg", "4.jpeg"].map(async (name, i) => ({
+    name, mimeType: "image/jpeg",
+    buffer: await sharp({ create: { width: 5, height: 3, channels: 3, background: i ? "#974325" : "#347638" } }).jpeg().toBuffer(),
+  })));
+  const documents = [
+    { name: "样品资料.txt", mimeType: "text/plain", buffer: Buffer.from("春款样品") },
+    { name: "说明.md", mimeType: "text/markdown", buffer: Buffer.from("# 核对说明") },
+  ];
+  try {
+    const { authorizationId } = await client("authorization", { enabled: true });
+    await client("poll", receiving);
+    await page.goto("/my-workspace");
+    await selectAssistantPanel(page, "我的电脑");
+    await page.locator(".assistant-desktop-item").filter({ hasText: deviceName })
+      .getByRole("button", { name: "设为常用电脑" }).click();
+    const composer = page.locator(".assistant-compose:visible");
+    for (const turn of [
+      { text: instruction, files: photos, action: "create_folders_with_attachments", steps: ["ensure_directories", "copy_attachments", "verify"] },
+      { text: "把这些附件复制到刚才建好的每个子目录", files: documents, action: "copy_folder_attachments", steps: ["copy_attachments", "verify"] },
+    ]) {
+      await composer.getByLabel("上传助理附件").setInputFiles(turn.files);
+      for (const file of turn.files) await expect(composer.locator(".agent-attachments")).toContainText(file.name);
+      await composer.getByRole("textbox").fill(turn.text);
+      if (turn.action === "create_folders_with_attachments") {
+        await composer.locator(".assistant-draft-target").click();
+        await page.getByRole("menuitem", { name: "操作我的电脑", exact: true }).click();
+        const mismatch = turn.text.replace("这些图片", "三张图片");
+        await composer.getByRole("textbox").fill(mismatch);
+        await client("poll", receiving);
+        await composer.getByRole("button", { name: "发送给个人助理" }).click();
+        await expect(page.getByText(/附件数量不一致|文件数量.*不一致|指令指定.*本条/).first()).toBeVisible();
+        await expect(composer.getByRole("textbox")).toHaveValue(mismatch);
+        await expect(composer.locator(".agent-attachments .ant-tag")).toHaveCount(2);
+        expect((await client("poll", receiving)).task).toBeNull();
+        await composer.getByRole("textbox").fill(turn.text);
+      }
+      await client("poll", receiving);
+      await composer.getByRole("button", { name: "发送给个人助理" }).click();
+      const card = page.getByRole("region", { name: "电脑任务：" + turn.text }).filter({ visible: true }).first();
+      await expect(card).toContainText("2 个附件 × 100 个子目录，共 200 份");
+      for (const file of turn.files) await expect(card.locator(".assistant-desktop-attachments")).toContainText(file.name);
+      const { task } = await client("poll", receiving);
+      expect(task).toMatchObject({ deviceId, nativeAction: turn.action, folderSteps: turn.steps, folderCreation: { parentName, folderNames } });
+      const digests = turn.files.map(file => createHash("sha256").update(file.buffer).digest("hex"));
+      expect(task.folderAttachments).toEqual(turn.files.map((file, i) => ({
+        id: expect.any(String), name: file.name, bytes: file.buffer.length, sha256: digests[i],
+      })));
+      const attemptId = task.folderCreationAttemptId;
+      const route = "tasks/" + task.id + "/folder-creation";
+      await client(route, { authorizationId, attemptId, action: "start" });
+      for (const [i, file] of turn.files.entries()) {
+        const downloaded = await downloadAttachment(task.id, authorizationId, attemptId, task.folderAttachments[i].id);
+        await expect(downloaded).toBeOK();
+        expect(await downloaded.body()).toEqual(file.buffer);
+      }
+      const complete = await client(route, { authorizationId, attemptId, action: "complete", verifiedCount: 100, sha256s: digests });
+      expect(complete.status).toBe("DONE");
+      expect(complete.recentSteps).toEqual([{ step: 1, action: "copy_attachments", result: "ok" }]);
+      await expect(card.getByRole("status")).toContainText("200", { timeout: 15000 });
+    }
+  } finally {
+    await revoke();
+  }
+});

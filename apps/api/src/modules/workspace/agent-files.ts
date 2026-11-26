@@ -663,7 +663,8 @@ export async function deleteAgentFile(c: Context, id: string) {
     if (!file) fail("FILE_NOT_FOUND", "附件不存在或不属于当前账号", 404);
     const busy = await one(tx, `SELECT id FROM public.personal_assistant_jobs WHERE user_id=$1::bigint
         AND status IN ('QUEUED','RUNNING') AND input::text LIKE $2
-      UNION ALL SELECT id FROM assistant_desktop_tasks WHERE user_id=$1::bigint AND folder_attachment_id=$3::uuid
+      UNION ALL SELECT id FROM assistant_desktop_tasks WHERE user_id=$1::bigint AND (folder_attachment_id=$3::uuid
+        OR (folder_attachments IS NOT NULL AND folder_attachments @> jsonb_build_array(jsonb_build_object('id', $3::uuid))))
         AND status IN ('WAITING','RUNNING','PAUSED','NEEDS_USER') LIMIT 1`, c.actor.id, `%${id}%`, id);
     if (busy) fail("FILE_BUSY", "文件仍被任务使用，请完成或停止任务后再删除。", 409);
     await tx.$executeRawUnsafe("DELETE FROM public.personal_assistant_files WHERE id=$1::uuid AND user_id=$2::bigint", id, c.actor.id);

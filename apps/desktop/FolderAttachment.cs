@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
@@ -12,12 +13,17 @@ static partial class Native {
     internal sealed class FolderAttachment {
         internal const int MaxBytes=64*1024*1024;
         const int Chunk=128*1024;
-        internal readonly string Name,Digest;
+        internal readonly string Name,Digest,Id;
         internal readonly int Length;
         internal byte[] Content {get;private set;}
-        internal object Descriptor {get {return new{name=Name,bytes=Length,sha256=Digest};}}
+        internal object Descriptor {get {return new{id=Id,name=Name,bytes=Length,sha256=Digest};}}
 
-        internal FolderAttachment(Dictionary<string,object> descriptor) {
+        internal FolderAttachment(Dictionary<string,object> descriptor,bool requireId=false) {
+            if(requireId) {
+                Guid id;
+                if(!Guid.TryParseExact(AssistantForm.S(descriptor,"id"),"D",out id))throw new IOException("任务附件的编号无效。");
+                Id=id.ToString("D");
+            }
             Name=FolderSegment(AssistantForm.S(descriptor,"name"),180);
             Digest=AssistantForm.S(descriptor,"sha256");
             int length;
@@ -25,6 +31,16 @@ static partial class Native {
                 length<1 || length>MaxBytes || !Regex.IsMatch(Digest,@"\A[0-9a-f]{64}\z"))
                 throw new IOException("附件缺少有效的大小或 SHA-256 摘要。");
             Length=length;
+        }
+        internal static FolderAttachment[] ReadList(object raw) {
+            var rows=raw as object[];
+            if(rows==null || rows.Length<1 || rows.Length>6)throw new IOException("每个批量任务需要 1 至 6 份附件。");
+            var files=rows.Select(row=>new FolderAttachment(AssistantForm.D(row),true)).ToArray();
+            if(files.Sum(file=>(long)file.Length)>80*1024*1024 ||
+                files.Select(file=>file.Id).Distinct().Count()!=files.Length ||
+                files.Select(file=>file.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count()!=files.Length)
+                throw new IOException("附件编号、名称出现重复或总大小超过 80 MiB。");
+            return files;
         }
         static string Hex(byte[] hash) {return BitConverter.ToString(hash).Replace("-","").ToLowerInvariant();}
         internal void SetContent(byte[] bytes) {
@@ -44,14 +60,13 @@ static partial class Native {
             try {
                 ExplorerCopy.VerifyBatchNote(handle,false);
                 CheckBatchEntryName(handle,path);
-                return new FileStream(handle,FileAccess.Read,Chunk,false);
+                return new FileStream(handle,FileAccess.Read,4096,false);
             } catch {handle.Dispose();throw;}
         }
-        internal async Task VerifyDestination(FileStream file,Func<Task> checkpoint) {
+        internal async Task VerifyDestination(FileStream file,Func<Task> checkpoint,byte[] buffer) {
             ExplorerCopy.VerifyBatchNote(file.SafeFileHandle,false);
             if(file.Length==Length) {
                 file.Position=0;
-                byte[] buffer=new byte[Chunk];
                 using(var sha=SHA256.Create()) {
                     int count;
                     while((count=file.Read(buffer,0,buffer.Length))>0) {
@@ -64,7 +79,7 @@ static partial class Native {
             }
             throw new IOException("有同名文件的内容与附件不同，请核对已有文件。");
         }
-        internal async Task<FileStream> Publish(string folder,Func<Task> checkpoint) {
+        internal async Task<FileStream> Publish(string folder,Func<Task> checkpoint,byte[] verifyBuffer) {
             string target=Path.Combine(folder,Name);
             string stage=Path.Combine(folder,".xuti-attachment-"+Guid.NewGuid().ToString("N")+".tmp");
             using(var handle=ExplorerCopy.CreateFileW(stage,0x40010000,0,IntPtr.Zero,1,0x80,IntPtr.Zero)) {
@@ -88,7 +103,7 @@ static partial class Native {
                         if(existing==null)throw;
                     }
                     if(existing!=null) {
-                        try {await VerifyDestination(existing,checkpoint);return existing;}
+                        try {await VerifyDestination(existing,checkpoint,verifyBuffer);return existing;}
                         catch {existing.Dispose();throw;}
                     }
                 }

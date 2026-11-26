@@ -1,3 +1,4 @@
+import { folderAttachmentIntent, isAttachmentManifest } from "./desktop-attachment.js";
 import {
   classifyAssistantExecution,
   type AssistantFollowupAnchor,
@@ -8,9 +9,9 @@ import {
 } from "../../../../../packages/contracts/src/assistant-execution.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
 import {
-  desktopFolderAttachmentRequest, desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent,
-  folderAttachmentGuidance, folderCompoundGuidance, folderCreationGuidance, folderNotesGuidance,
-  looksLikeDesktopFolderAttachment, looksLikeDesktopFolderCompound, looksLikeDesktopFolderCreation, looksLikeDesktopFolderNotes,
+  desktopFolderAttachmentFollowup, desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent,
+  folderAttachmentGuidance, folderBatchAttachmentGuidance, folderCompoundGuidance, folderCreationGuidance, folderNotesGuidance,
+  looksLikeDesktopFolderCompound, looksLikeDesktopFolderCreation, looksLikeDesktopFolderNotes,
 } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   desktopFileCopyIntent,
@@ -55,6 +56,16 @@ export async function resolveAssistantFollowup(
   explicitSurface?: "desktop" | "browser",
   requestId?: string,
 ): Promise<AutomaticAssistantExecution | FollowupCandidate | undefined> {
+  const relative = desktopFolderAttachmentFollowup(text);
+  if (relative) {
+    const source = anchor && explicitSurface !== "browser" && await verifiedFolderSource(db, c.actor.id, anchor, preferredDeviceId, requestId);
+    if (!source) return { kind: "clarify", message: "请先在当前对话完成并核验建目录任务，或写明桌面父文件夹名称和子文件夹名称或编号范围。" };
+    if (relative.deviceName && relative.deviceName.toLowerCase() !== source.deviceName.trim().toLowerCase())
+      fail("DEVICE_NAME_MISMATCH", "指令里的电脑名称和原建目录任务的设备不同。", 409);
+    if (!source.online) fail("DEVICE_OFFLINE", "请在原 Windows 电脑重新连接小序桌面端再分发附件。", 409);
+    if (!source.manifestFoldersCapable) fail("FOLDER_ATTACHMENT_UPDATE_REQUIRED", folderBatchAttachmentGuidance.update, 409);
+    return { kind: "desktop", deviceId: source.deviceId, folderSource: anchor };
+  }
   if (desktopFolderNotesIntent(text) || looksLikeDesktopFolderNotes(text)) {
     if (!desktopFolderNotesIntent(text)) return { kind: "clarify", message: folderNotesGuidance.format };
     const source = anchor && explicitSurface !== "browser" && await verifiedFolderSource(db, c.actor.id, anchor, preferredDeviceId, requestId);
@@ -128,14 +139,14 @@ export async function resolveAutomaticAssistantExecution(
   preferredDeviceId?: string,
   nativeDesktopDeviceId?: string,
   options?: Parameters<typeof classifyAssistantExecution>[1],
+  attachmentCount = 0,
 ): Promise<AutomaticAssistantExecution> {
   if (desktopFolderNotesIntent(instruction) || looksLikeDesktopFolderNotes(instruction))
     return { kind: "clarify", message: desktopFolderNotesIntent(instruction) ? folderNotesGuidance.source : folderNotesGuidance.format };
   const windowsCopy = desktopFileCopyIntent(instruction);
   const macCopy = desktopFileCopyIntent(instruction, "macos");
-  const attachment = desktopFolderAttachmentRequest(instruction);
-  if (!attachment && looksLikeDesktopFolderAttachment(instruction))
-    fail("INVALID_FOLDER_ATTACHMENT", folderAttachmentGuidance.format, 400);
+  const attachment = folderAttachmentIntent(instruction, attachmentCount);
+  if (attachment?.relative) return {kind:"clarify",message:"请从当前对话中已核验的建目录任务继续，或写明目标子文件夹。"};
   const compound = desktopFolderCompoundRequest(instruction);
   if (!attachment && !compound && looksLikeDesktopFolderCompound(instruction))
     fail("INVALID_FOLDER_COMPOUND", folderCompoundGuidance.format, 400);
@@ -208,7 +219,7 @@ export async function resolveAutomaticAssistantExecution(
 
   const devices = await rows(
     db,
-    `SELECT id,name,platform,native_actions,desktop_folder_copy,background_file_copy,folder_creation,folder_batch_notes,folder_attachment,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
+    `SELECT id,name,platform,native_actions,desktop_folder_copy,background_file_copy,folder_creation,folder_batch_notes,folder_attachment,folder_attachments,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
             coalesce(last_seen_at > now() - interval '20 seconds', false) AS online
        FROM assistant_desktop_devices
       WHERE user_id = $1::bigint AND token_hash IS NOT NULL
@@ -237,6 +248,8 @@ export async function resolveAutomaticAssistantExecution(
     fail("DEVICE_PLATFORM_MISMATCH", desktopFolderCopyGuidance.platform, 400);
   if (folderPlan && devices[0].platform !== "windows")
     fail("DEVICE_PLATFORM_MISMATCH", attachment ? folderAttachmentGuidance.platform : folderCreationGuidance.platform, 400);
+  if (isAttachmentManifest(attachment?.action) && !devices[0].folder_attachments)
+    fail("FOLDER_ATTACHMENT_UPDATE_REQUIRED", folderBatchAttachmentGuidance.update, 409);
   if (attachment && !devices[0].folder_attachment)
     fail("FOLDER_ATTACHMENT_UPDATE_REQUIRED", folderAttachmentGuidance.update, 409);
   if (compound && !devices[0].folder_batch_notes)
