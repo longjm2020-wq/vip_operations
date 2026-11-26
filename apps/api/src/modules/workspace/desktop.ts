@@ -591,7 +591,7 @@ export async function setDesktopAuthorization(
     );
     if (!enabled)
       await tx.$executeRawUnsafe(
-        "UPDATE assistant_desktop_tasks SET status='PAUSED',stage=CASE WHEN native_action='copy_finder_files' THEN 'Finder 授权已撤销，请在 Mac 的 Finder 助手重新开始接单' WHEN browser_only THEN '本机授权已撤销，请在小序桌面端重新允许浏览器任务' ELSE '跨窗口授权已撤销，请在本机选择窗口后继续' END,authorization_id=NULL,pending=NULL,planning_id=NULL,file_copy_phase=NULL,updated_at=now() WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])",
+        "UPDATE assistant_desktop_tasks SET status='PAUSED',stage=CASE WHEN native_action='copy_finder_files' THEN 'Finder 授权已撤销，请在 Mac 的 Finder 助手重新开始接单' WHEN browser_only THEN '本机授权已撤销，请在小序桌面端重新允许浏览器任务' ELSE '跨窗口授权已撤销，请在本机选择窗口后继续' END,authorization_id=NULL,pending=NULL,planning_id=NULL,file_copy_phase=CASE WHEN file_copy_phase='verify_paste' AND status IN ('NEEDS_USER','PAUSED') THEN file_copy_phase ELSE NULL END,updated_at=now() WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])",
         deviceId,
         c.actor.id,
         active,
@@ -1086,7 +1086,7 @@ export async function desktopControl(
   );
   const old = await one(
     db,
-    "SELECT * FROM assistant_desktop_tasks WHERE id=$1::uuid AND user_id=$2::bigint",
+    "SELECT *,xmin::text AS control_revision FROM assistant_desktop_tasks WHERE id=$1::uuid AND user_id=$2::bigint",
     taskId,
     c.actor.id,
   );
@@ -1157,6 +1157,25 @@ export async function desktopControl(
     return desktopTaskView(old);
   if (b.authorizationId && (b.action !== "allow" || !b.windowId))
     fail("FORBIDDEN", "请在本机确认跨窗口授权", 403);
+  // Older Windows clients post this on every normal exit, even after the last
+  // command has stopped. They cannot run the pending read-only verification.
+  const clientExit =
+    !!deviceId &&
+    b.action === "pause" &&
+    b.note === "小序桌面端已退出，请重新打开并核对窗口后继续" &&
+    Object.keys(b).length === 2;
+  if (
+    old.file_copy_phase === "verify_paste" &&
+    ["NEEDS_USER", "PAUSED"].includes(old.status)
+  ) {
+    if (clientExit || b.action === "handoff") return desktopTaskView(old);
+    if (b.action === "allow")
+      fail(
+        "FILE_COPY_VERIFICATION_REQUIRED",
+        "请在原任务点击继续，先核验原粘贴结果",
+        409,
+      );
+  }
   const status = {
     pause: "PAUSED",
     stop: "CANCELED",
@@ -1168,7 +1187,7 @@ export async function desktopControl(
     b.action === "resume"
       ? await one(
           db,
-          "SELECT platform,file_copy_shortcuts,desktop_folder_copy,background_file_copy,authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
+          "SELECT platform,file_copy_shortcuts,desktop_folder_copy,background_file_copy,file_copy_verification,authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
           old.device_id,
           c.actor.id,
         )
@@ -1206,6 +1225,46 @@ export async function desktopControl(
       );
     if (resumeDevice.native_actions !== null && !resumeDevice.engine_ready)
       fail("DEVICE_ENGINE_UNAVAILABLE", engineUnavailable, 409);
+    if (old.file_copy_phase === "verify_paste") {
+      const original = pasteToVerify(old, true);
+      if (!original || old.authorization_id !== resumeDevice.authorization_id)
+        fail(
+          "AUTHORIZATION_CHANGED",
+          "原粘贴命令或设备授权已变化，请核对目标目录",
+          409,
+        );
+      if (!resumeDevice.file_copy_verification)
+        fail(
+          "FILE_COPY_VERIFICATION_REQUIRED",
+          "请在原 Windows 电脑启动 1.2.14 或更新的桌面端后继续核验",
+          409,
+        );
+      if (old.status === "NEEDS_USER") return desktopTaskView(old);
+      const resumed = await one(
+        db,
+        `UPDATE assistant_desktop_tasks t SET status='NEEDS_USER',stage='等待本机只读核验原粘贴结果',updated_at=now()
+         FROM assistant_desktop_devices d WHERE t.id=$1::uuid AND t.user_id=$2::bigint
+           AND t.status='PAUSED' AND t.xmin::text=$3 AND t.file_copy_phase='verify_paste'
+           AND t.last_ack=$4::uuid AND t.authorization_id=$5::uuid
+           AND d.id=t.device_id AND d.user_id=t.user_id AND d.authorization_id=t.authorization_id
+           AND d.platform='windows' AND d.file_copy_shortcuts AND d.file_copy_verification
+           AND (NOT t.creates_desktop_folder OR d.desktop_folder_copy)
+           AND d.token_hash IS NOT NULL AND d.revoked_at IS NULL AND d.expires_at>now()
+           AND d.engine_seen_at>now()-interval '20 seconds' RETURNING t.*`,
+        taskId,
+        c.actor.id,
+        old.control_revision,
+        original,
+        old.authorization_id,
+      );
+      if (!resumed)
+        fail(
+          "STALE_FILE_VERIFICATION",
+          "原任务或设备状态已变化，请查看任务进度",
+          409,
+        );
+      return desktopTaskView(resumed);
+    }
     if (
       old.native_action &&
       (!(old.native_action === "copy_finder_files"
@@ -1283,7 +1342,30 @@ export async function desktopControl(
   // Resuming discards an unexecuted pending command. Local executor never replays uncertain inputs.
   const row = await one(
     db,
-    "UPDATE assistant_desktop_tasks SET status=$3,stage=$4,planning_id=NULL,pending=NULL,file_copy_phase=NULL,window_name=COALESCE($5,window_name),application=COALESCE($6,application),window_id=CASE WHEN $3='RUNNING' THEN $8::uuid ELSE window_id END,authorization_id=CASE WHEN $3='RUNNING' OR ($3='WAITING' AND (native_action IS NOT NULL OR file_copy_flow)) THEN $9::uuid ELSE authorization_id END,delivered_at=CASE WHEN $3='WAITING' THEN NULL ELSE delivered_at END,started_at=CASE WHEN $3='RUNNING' THEN now() ELSE started_at END,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND (status=$7 OR ($3 IN ('PAUSED','CANCELED') AND status IN ('WAITING','RUNNING','PAUSED','NEEDS_USER'))) AND ($10::uuid IS NULL OR planning_id=$10::uuid) AND ($3<>'RUNNING' OR EXISTS(SELECT 1 FROM assistant_desktop_devices d WHERE d.id=device_id AND d.revoked_at IS NULL AND d.token_hash IS NOT NULL AND d.expires_at>now() AND ($9::uuid IS NULL OR d.authorization_id=$9::uuid) AND (NOT creates_desktop_folder OR (d.platform='windows' AND d.desktop_folder_copy AND d.file_copy_shortcuts AND d.authorization_id=assistant_desktop_tasks.authorization_id AND assistant_desktop_tasks.status='WAITING' AND delivered_at>now()-interval '30 seconds' AND d.engine_seen_at>now()-interval '20 seconds')) AND (previous_task_id IS NULL OR (assistant_desktop_tasks.authorization_id=$9::uuid AND window_id=$8::uuid AND application=$6 AND d.window_continuations AND d.retained_task_id=previous_task_id)) AND (NOT browser_only OR d.local_browser_seen_at>now()-interval '20 seconds'))) RETURNING *",
+    `UPDATE assistant_desktop_tasks SET status=$3,stage=$4,planning_id=NULL,pending=NULL,
+       file_copy_phase=CASE WHEN $3='PAUSED' AND status IN ('PAUSED','NEEDS_USER') AND file_copy_phase='verify_paste'
+                            THEN file_copy_phase ELSE NULL END,
+       window_name=COALESCE($5,window_name),application=COALESCE($6,application),
+       window_id=CASE WHEN $3='RUNNING' THEN $8::uuid ELSE window_id END,
+       authorization_id=CASE WHEN $3='RUNNING' OR ($3='WAITING' AND (native_action IS NOT NULL OR file_copy_flow))
+                             THEN $9::uuid ELSE authorization_id END,
+       delivered_at=CASE WHEN $3='WAITING' THEN NULL ELSE delivered_at END,
+       started_at=CASE WHEN $3='RUNNING' THEN now() ELSE started_at END,updated_at=now()
+     WHERE id=$1::uuid AND user_id=$2::bigint
+       AND (status=$7 OR (NOT $11::boolean AND $3 IN ('PAUSED','CANCELED') AND status IN ('WAITING','RUNNING','PAUSED','NEEDS_USER')))
+       AND (file_copy_phase IS DISTINCT FROM 'verify_paste' OR status NOT IN ('PAUSED','NEEDS_USER')
+            OR (NOT $11::boolean AND $3 IN ('PAUSED','CANCELED')))
+       AND ($10::uuid IS NULL OR planning_id=$10::uuid)
+       AND ($3<>'RUNNING' OR EXISTS(SELECT 1 FROM assistant_desktop_devices d WHERE d.id=device_id
+         AND d.revoked_at IS NULL AND d.token_hash IS NOT NULL AND d.expires_at>now()
+         AND ($9::uuid IS NULL OR d.authorization_id=$9::uuid)
+         AND (NOT creates_desktop_folder OR (d.platform='windows' AND d.desktop_folder_copy AND d.file_copy_shortcuts
+           AND d.authorization_id=assistant_desktop_tasks.authorization_id AND assistant_desktop_tasks.status='WAITING'
+           AND delivered_at>now()-interval '30 seconds' AND d.engine_seen_at>now()-interval '20 seconds'))
+         AND (previous_task_id IS NULL OR (assistant_desktop_tasks.authorization_id=$9::uuid AND window_id=$8::uuid
+           AND application=$6 AND d.window_continuations AND d.retained_task_id=previous_task_id))
+         AND (NOT browser_only OR d.local_browser_seen_at>now()-interval '20 seconds')))
+     RETURNING *`,
     taskId,
     c.actor.id,
     status,
@@ -1296,6 +1378,7 @@ export async function desktopControl(
       ? resumeDevice?.authorization_id
       : b.authorizationId) || null,
     b.attemptId || null,
+    clientExit,
   );
   if (!row && b.action === "allow")
     fail(
@@ -1600,7 +1683,7 @@ export async function permitDesktop(
   );
   return { allowed: !!issued };
 }
-function pasteToVerify(t: Row): string | undefined {
+function pasteToVerify(t: Row, includePaused = false): string | undefined {
   if (
     !t.file_copy_flow ||
     t.background_copy ||
@@ -1621,7 +1704,7 @@ function pasteToVerify(t: Row): string | undefined {
     return t.pending.id;
   const last = t.history?.at(-1);
   if (
-    t.status === "NEEDS_USER" &&
+    (t.status === "NEEDS_USER" || (includePaused && t.status === "PAUSED")) &&
     t.file_copy_phase === "verify_paste" &&
     t.last_ack &&
     !t.pending &&

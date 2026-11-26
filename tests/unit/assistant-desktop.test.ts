@@ -37,7 +37,12 @@ vi.mock("../../packages/database/src/index.js", async (original) => {
     ...real,
     db: {
       $queryRawUnsafe: async (sql: string, ...p: unknown[]) => {
-        if (sql.startsWith("UPDATE assistant_desktop_tasks SET status=$3,")) {
+        if (
+          sql.startsWith("UPDATE assistant_desktop_tasks SET status=$3,") ||
+          sql.startsWith(
+            "UPDATE assistant_desktop_tasks t SET status='NEEDS_USER',stage='等待本机只读核验原粘贴结果'",
+          )
+        ) {
           const beforeUpdate = fixture.beforeControlUpdate;
           fixture.beforeControlUpdate = undefined;
           await beforeUpdate?.();
@@ -333,6 +338,141 @@ describe("paired desktop task execution", () => {
     });
     expect((await r.verify("ok")).step).toBe(9);
     expect((await r.poll()).task).toBeNull();
+  });
+  const exitNotice = {
+    action: "pause",
+    note: "小序桌面端已退出，请重新打开并核对窗口后继续",
+  };
+  it("keeps the original uncertain paste across a normal 1.2.13 exit and first 1.2.14 poll", async () => {
+    const r = await oldUncertainCopy();
+    await r.backfill();
+    await expect(desktopControl(r.c, r.task.id, exitNotice)).rejects.toThrow();
+    await expect(
+      desktopControl(r.c, r.task.id, exitNotice, randomUUID()),
+    ).rejects.toThrow();
+    const exited = await desktopControl(r.c, r.task.id, exitNotice, r.deviceId);
+    expect(exited).toMatchObject({
+      status: "NEEDS_USER",
+      fileCopyProgress: "awaiting_verification",
+      step: 9,
+      stage: "操作已中止，请核对窗口。",
+    });
+    expect((await r.poll()).task?.fileCopyVerification).toEqual({
+      commandId: r.commandId,
+      authorizationId: r.authorizationId,
+    });
+    expect(await r.verify("ok")).toMatchObject({
+      status: "DONE",
+      step: 9,
+      confirmedSteps: 8,
+    });
+  });
+  it("keeps explicit pause effective across exit and resumes only read-only verification on an upgraded client", async () => {
+    const r = await oldUncertainCopy();
+    await r.backfill();
+    const paused = await desktopControl(
+      r.c,
+      r.task.id,
+      { ...exitNotice, note: "你已暂停操作" },
+      r.deviceId,
+    );
+    expect(paused).toMatchObject({ status: "PAUSED", stage: "你已暂停操作" });
+    expect(
+      (await desktopControl(r.c, r.task.id, exitNotice, r.deviceId)).stage,
+    ).toBe("你已暂停操作");
+    await expect(
+      desktopControl(r.c, r.task.id, { action: "resume" }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "FILE_COPY_VERIFICATION_REQUIRED" } },
+    });
+    expect((await r.poll()).task?.fileCopyVerification).toBeUndefined();
+    await expect(r.verify("ok")).rejects.toThrow();
+    expect(
+      await desktopControl(r.c, r.task.id, { action: "resume" }),
+    ).toMatchObject({
+      status: "NEEDS_USER",
+      fileCopyProgress: "awaiting_verification",
+      step: 9,
+    });
+    expect((await r.poll()).task?.fileCopyVerification?.commandId).toBe(
+      r.commandId,
+    );
+    expect(await r.verify("ok")).toMatchObject({
+      status: "DONE",
+      step: 9,
+      confirmedSteps: 8,
+    });
+  });
+  it.each(["pause", "stop", "revoke"])(
+    "keeps a concurrent %s ahead of a read-only resume",
+    async (action) => {
+      const r = await oldUncertainCopy();
+      await r.backfill();
+      await r.poll();
+      await desktopControl(r.c, r.task.id, { action: "pause" });
+      fixture.beforeControlUpdate = async () => {
+        if (action === "revoke")
+          await setDesktopAuthorization(r.c, r.deviceId, false);
+        else await desktopControl(r.c, r.task.id, { action });
+      };
+      await expect(
+        desktopControl(r.c, r.task.id, { action: "resume" }),
+      ).rejects.toThrow();
+      if (action === "revoke") {
+        await setDesktopAuthorization(r.c, r.deviceId, true);
+        await expect(
+          desktopControl(r.c, r.task.id, { action: "resume" }),
+        ).rejects.toThrow();
+      }
+      const task = (await r.poll()).task;
+      expect(task?.fileCopyVerification).toBeUndefined();
+      expect(task?.status ?? "CANCELED").toBe(
+        action === "stop" ? "CANCELED" : "PAUSED",
+      );
+      await expect(r.verify("ok")).rejects.toThrow();
+    },
+  );
+  it("refuses read-only resume from an expired original connection", async () => {
+    const r = await oldUncertainCopy();
+    await r.backfill();
+    await r.poll();
+    await desktopControl(r.c, r.task.id, { action: "pause" });
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_devices SET expires_at=now()-interval '1 second' WHERE id=$1",
+      [r.deviceId],
+    );
+    await expect(
+      desktopControl(r.c, r.task.id, { action: "resume" }),
+    ).rejects.toThrow();
+    await expect(r.verify("ok")).rejects.toThrow();
+    expect((await r.poll()).task).toBeNull();
+  });
+  it("lets a user stop while an unqualified client exit is overtaken by migration", async () => {
+    const r = await oldUncertainCopy();
+    fixture.beforeControlUpdate = async () => {
+      await r.backfill();
+      await desktopControl(r.c, r.task.id, { action: "stop" });
+    };
+    expect(
+      (await desktopControl(r.c, r.task.id, exitNotice, r.deviceId)).status,
+    ).toBe("CANCELED");
+    expect((await r.poll()).task).toBeNull();
+  });
+  it("applies a normal exit pause to ordinary work but preserves a concurrently recorded verification", async () => {
+    const { d, t } = await allowed();
+    expect(
+      (await desktopControl(actor(), t.id, exitNotice, d.deviceId)).status,
+    ).toBe("PAUSED");
+    const r = await oldUncertainCopy();
+    fixture.beforeControlUpdate = async () => {
+      await r.backfill();
+    };
+    expect(
+      (await desktopControl(r.c, r.task.id, exitNotice, r.deviceId)).status,
+    ).toBe("NEEDS_USER");
+    expect((await r.poll()).task?.fileCopyVerification?.commandId).toBe(
+      r.commandId,
+    );
   });
   it.each(["stop", "pause", "revoke"])(
     "never revives a %s against a delayed verification",
