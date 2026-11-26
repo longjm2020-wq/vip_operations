@@ -1,0 +1,15 @@
+{
+  "version": "1.0.0",
+  "platform": "macos-universal",
+  "sha256": "565961612917678b2d2787d1b01e6e2d823aafbdf5e73c445ed916b84d82e15b",
+  "sources": {
+    "apps/desktop-mac/Connection.swift": "1dba4463926775236d9155c803a40f6600a20eedade3225d7632c212d8d050c8",
+    "apps/desktop-mac/CopyPlan.swift": "6beb54eef6d918283fe7e14ea6d46fd97a54e9ac668c8724270a96b53c9c61a3",
+    "apps/desktop-mac/FinderInput.swift": "e314f2b4cc1f4816587525a2f95fe520f9105e923a03cfabdcc1ef853b2f1e2a",
+    "apps/desktop-mac/Info.plist": "556dbe491c8d2c363312a37d5cbe2bc3876401100531f6eaf0212b87adf07f6a",
+    "apps/desktop-mac/MacWorkspace.swift": "aa924ec717b2d047681bf2b5f933299a5a13b07e71847fd30e381b9452660a94",
+    "apps/desktop-mac/SelfTest.swift": "55555a835ea859b9c77a582c5805216f553708831be6d9466592be19c110849c",
+    "apps/desktop-mac/main.swift": "fd2e9350d86b2451850e7e1a7ad5e10ffa3b4722bcb919eb96b3bcb15607aa79",
+    "scripts/mac-finder-artifact.mjs": "911eccf851ba9fe1636e13c988c183223808a324cfe0c3ad2501b5b224d59076"
+  }
+}

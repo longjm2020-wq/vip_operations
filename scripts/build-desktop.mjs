@@ -113,6 +113,7 @@ const args = [
   ].map((n) => `/reference:${n}`),
   path.join(root, "apps/desktop/XutiDesktop.cs"),
   path.join(root, "apps/desktop/DesktopExplorer.cs"),
+  path.join(root, "apps/desktop/ExplorerCopy.cs"),
   path.join(root, "apps/desktop/DesktopShell.cs"),
   versionSource,
 ];

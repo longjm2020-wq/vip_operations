@@ -103,6 +103,7 @@ sealed class WindowChoice {
 }
 sealed class Shot {
     public string ExplorerFolder;
+    public string FileShortcut;
     public Native.PopupMenu Popup;
     public string Image, Controls;
     public int Width, Height;
@@ -172,6 +173,7 @@ sealed class AssistantForm : Form {
     string manualPauseNote="", startFailureNote="", executingKind="";
     string nativeAttemptId="";
     string desktopExplorerTaskId="";
+    Native.ExplorerCopy fileCopy;
     string failureTaskId="", failureDiagnostic="";
     Action<Action> manualPauseDispatch;
     Func<WindowChoice> startWindowOverride;
@@ -509,7 +511,7 @@ sealed class AssistantForm : Form {
         if (taskId.Length == 0 || token.Length == 0) return;
         await Request("tasks/" + taskId + "/control", new { action, note });
     }
-    void LocalPause() { armed = false; epoch++; }
+    void LocalPause() { armed = false; fileCopy=null; epoch++; }
     bool CurrentOperation(string id,string connectionToken,long version) {
         return !closing && id.Length>0 && id==taskId && token==connectionToken && version==epoch;
     }
@@ -589,15 +591,22 @@ sealed class AssistantForm : Form {
         }
         if(captureBlocked)throw new Exception("窗口截取未响应，请重启本机助手后继续此任务。");
         bool browserOnly=BrowserOnly;
-        bool explorerTask=!browserOnly && !BoundTask && grant.Length>0 && S(task,"startLocation")=="desktopExplorer";
+        bool fileTask=task.ContainsKey("fileCopy") && task["fileCopy"]!=null;
+        if(fileTask && (browserOnly || BoundTask || grant.Length==0))throw new Exception("文件快捷键需要已记住授权的本机资源管理器。");
+        bool explorerTask=!fileTask && !browserOnly && !BoundTask && grant.Length>0 && S(task,"startLocation")=="desktopExplorer";
         desktopExplorerTaskId="";
-        if(automatic && explorerTask && state!="WAITING") {
+        if(((automatic && explorerTask) || fileTask) && state!="WAITING") {
             var resumed=await Request("tasks/"+id+"/control",new {action="resume"});
             CheckStart(id,connectionToken,version,grant);
             if(S(resumed,"status")!="WAITING")throw new Exception("原任务状态已变化，请核对后继续。");
             task=resumed;state="WAITING";autoAttemptedId="";ShowTaskControls();return;
         }
-        if(BoundTask) {
+        var copyTask=fileTask ? new Native.ExplorerCopy(D(task["fileCopy"]),S(task,"instruction")) : null;
+        if(copyTask!=null) {
+            status.Text="正在核对复制来源和目标目录。";
+            await copyTask.Open(Handle,()=>CheckStart(id,connectionToken,version,grant));
+            selected=copyTask.SourceWindow;
+        } else if(BoundTask) {
             selected=BoundWindow();
         } else if(browserOnly) {
             selected=automatic?Native.Windows(Handle).FirstOrDefault(w=>Native.LocalBrowserWindows.ContainsKey(w.Handle)):windows.SelectedItem as WindowChoice;
@@ -615,6 +624,7 @@ sealed class AssistantForm : Form {
         CheckStart(id,connectionToken,version,grant);
         if(BoundTask)BoundWindow();
         if(automatic && explorerTask)await Native.CheckDesktopExplorerStart(selected);
+        if(copyTask!=null)await copyTask.CheckStart(selected);
         CheckStart(id,connectionToken,version,grant);
         var payload=new Dictionary<string,object>{{"action","allow"},{"window",selected.Title},{"application",selected.App},{"windowId",selected.Id}};
         if(grant.Length>0) payload["authorizationId"]=grant;
@@ -628,8 +638,13 @@ sealed class AssistantForm : Form {
         CheckStart(id,connectionToken,version,grant);
         Native.ValidateWindow(selected, true);
         if(automatic && explorerTask)await Native.CheckDesktopExplorerStart(selected);
+        if(copyTask!=null) {
+            await copyTask.CheckStart(selected);
+            await copyTask.SelectSourceFiles(()=>CheckStart(id,connectionToken,version,grant));
+        }
         CheckStart(id,connectionToken,version,grant);
         if(explorerTask)desktopExplorerTaskId=id;
+        fileCopy=copyTask;
         armed = true; epoch++; state="RUNNING"; allow.Enabled=false; manualAllow.Enabled=false;
         status.Text = "正在操作；点击、滚轮或按键可接手，移动鼠标不会中断。";
         } catch(Exception ex) {
@@ -681,7 +696,7 @@ sealed class AssistantForm : Form {
         string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
             string retainedTaskId=continuation==null?null:continuation.RetainedTaskId(authorizationId);
-            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, retainedTaskId });
+            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, retainedTaskId });
             if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
@@ -741,7 +756,9 @@ sealed class AssistantForm : Form {
                     throw new Exception("本地网页已切换，请核对当前页面再继续。");
             };
             bool crossWindow=!browserOnly&&!BoundTask&&activeAuthorizationId.Length>0;
-            var available = crossWindow ? Native.ObservationWindows(Handle,selected) : new List<WindowChoice>();
+            var copy=fileCopy;
+            if(copy!=null)await copy.CheckLocation(selected);
+            var available = copy!=null ? copy.Windows(selected) : crossWindow ? Native.ObservationWindows(Handle,selected) : new List<WindowChoice>();
             string explorerFolder=crossWindow && desktopExplorerTaskId==id ? await Native.DesktopExplorerListLocation(selected) : null;
             checkInput();
             // UI Automation and PrintWindow may wait on a hung application. Never capture another window as fallback.
@@ -749,8 +766,18 @@ sealed class AssistantForm : Form {
             if (await Task.WhenAny(capture,Task.Delay(4000)) != capture) { captureBlocked=true; throw new Exception("应用窗口没有响应，请关闭本机助手后重试"); }
             shot = await capture;
             checkInput();
+            if(copy!=null && shot.Popup!=null)throw new Native.InputNotSent("请关闭资源管理器中的菜单，核对文件列表后继续。");
             string requestId=Guid.NewGuid().ToString();
-            var observation=new Dictionary<string,object>{{"requestId",requestId},{"image",shot.Image},{"width",shot.Width},{"height",shot.Height},{"window",selected.Title},{"application",selected.App},{"controls",shot.Controls},{"windowId",selected.Id}};
+            var observation=new Dictionary<string,object>{{"requestId",requestId},{"window",selected.Title},{"application",selected.App},{"windowId",selected.Id}};
+            if(copy!=null)observation["fileCopy"]=true;
+            else {
+                observation["image"]=shot.Image;observation["width"]=shot.Width;
+                observation["height"]=shot.Height;observation["controls"]=shot.Controls;
+            }
+            if(copy!=null && crossWindow && shot.Popup==null) {
+                shot.FileShortcut=await copy.Observe(selected);
+                if(shot.FileShortcut!=null)observation["fileShortcut"]=shot.FileShortcut;
+            }
             if(explorerFolder!=null && shot.Popup==null && String.Equals(explorerFolder,await Native.DesktopExplorerListLocation(selected),StringComparison.OrdinalIgnoreCase)) {
                 shot.ExplorerFolder=explorerFolder;
                 observation["desktopExplorer"]=true;
@@ -777,6 +804,16 @@ sealed class AssistantForm : Form {
             var action = D(command.ContainsKey("action") ? command["action"] : null);
             if(S(command,"requestId")!=requestId) throw new Exception("待执行步骤来自旧画面，请核对窗口后继续");
             Native.ValidateAction(action);
+            if(copy!=null)copy.VerifyOtherAction(action,selected);
+            string key=S(action,"kind")=="key"?S(action,"key"):"";
+            bool copyKey=key=="COPY" || key=="PASTE";
+            var permitBody=new Dictionary<string,object>{{"commandId",commandId}};
+            if(copyKey) {
+                string expected=key=="COPY"?"copy":"paste";
+                if(copy==null || shot.Popup!=null || shot.FileShortcut!=expected || await copy.Observe(selected)!=expected)
+                    throw new Native.InputNotSent("本次文件快捷键未能核对来源选中项、目标或剪贴板，本步未发送。");
+                checkInput();permitBody["fileShortcut"]=expected;
+            }
             WindowChoice target=null;
             if(S(action,"kind")=="switch_window") {
                 if(shot.Popup!=null)throw new Native.InputNotSent("弹出菜单打开时只能操作已核验的当前菜单。");
@@ -786,17 +823,21 @@ sealed class AssistantForm : Form {
                 Native.ValidateWindow(target,false);
             }
             Check(id,version);
-            var permit = await Request("tasks/" + id + "/permit",new {commandId});
+            var permit = await Request("tasks/" + id + "/permit",permitBody);
             if (!permit.ContainsKey("allowed") || !Convert.ToBoolean(permit["allowed"])) throw new Exception("步骤已过期或已暂停，请核对后继续");
             Check(id, version);
             Record(commandId,"uncertain"); // Write-ahead record must succeed before any input.
             if(target!=null) {
                 Check(id,version); Native.ValidateWindow(target,false);
-                if(!Native.SetForegroundWindow(target.Handle)) throw new Exception("无法切换目标窗口，请手动切换后继续。");
+                if(!Native.IsForeground(target) && !Native.SetForegroundWindow(target.Handle)) throw new Exception("无法切换目标窗口，请手动切换后继续。");
                 selected=target;
                 await Task.Delay(500);
                 Check(id,version);
-            } else { executingKind=S(action,"kind");await Native.Execute(selected,shot,action,checkInput,localBrowser); }
+                if(copy!=null)await copy.PrepareSwitchedWindow(target,()=>Check(id,version));
+            } else {
+                if(copy!=null)await copy.CheckLocation(selected);
+                executingKind=S(action,"kind");await Native.Execute(selected,shot,action,checkInput,localBrowser,copy);
+            }
             Record(commandId,"ok");
             await Ack(id,commandId,"ok",S(action,"description"));
             await Task.Delay(600);
@@ -826,6 +867,7 @@ sealed class AssistantForm : Form {
             var fake=new FakeHandler();
             using(var form=new AssistantForm(fake,isolated)) {
                 Native.DesktopExplorerSelfTest(isolated);
+                Native.ExplorerCopy.SelfTest(isolated);
                 System.Threading.SynchronizationContext.SetSynchronizationContext(null);
                 Action seed=()=>{form.token=new string('a',64);form.owner="Isolated self-test";form.deviceId=Guid.NewGuid().ToString();form.authorizationId=Guid.NewGuid().ToString();};
                 seed(); string grant=form.authorizationId;
@@ -1586,6 +1628,7 @@ static partial class Native {
     static string S(Dictionary<string,object> a,string k){return AssistantForm.S(a,k);}
     static int Number(Dictionary<string,object> a,string k,int min,int max) {object value;if(!a.TryGetValue(k,out value)||!(value is int)|| (int)value<min||(int)value>max)throw new Exception("操作坐标或数量无效");return (int)value;}
     static readonly Dictionary<string,ushort[]> Keys = new Dictionary<string,ushort[]> {
+        {"COPY",new ushort[]{17,67}}, {"PASTE",new ushort[]{17,86}},
         {"CTRL_SHIFT_N",new ushort[]{17,16,78}},
         {"ENTER",new ushort[]{13}}, {"TAB",new ushort[]{9}}, {"SHIFT_TAB",new ushort[]{16,9}}, {"ESC",new ushort[]{27}}, {"BACKSPACE",new ushort[]{8}}, {"LEFT",new ushort[]{37}}, {"RIGHT",new ushort[]{39}}, {"UP",new ushort[]{38}}, {"DOWN",new ushort[]{40}}, {"HOME",new ushort[]{36}}, {"END",new ushort[]{35}}, {"PAGEUP",new ushort[]{33}}, {"PAGEDOWN",new ushort[]{34}}, {"CTRL_A",new ushort[]{17,65}}, {"CTRL_S",new ushort[]{17,83}}, {"CTRL_Z",new ushort[]{17,90}}
     };
@@ -1614,7 +1657,13 @@ static partial class Native {
     static void Send(params INPUT[] input) { if(SendInput((uint)input.Length,input,Marshal.SizeOf(typeof(INPUT)))!=input.Length)throw new Exception("应用拒绝输入，请检查窗口权限并自行操作；不要提升助手权限"); }
     static INPUT K(ushort key,uint flags) { return new INPUT{type=1,data=new UNION{key=new KEY{vk=key,flags=flags}}}; }
     static INPUT Mouse(uint flags,uint data=0) { return new INPUT{type=0,data=new UNION{mouse=new MOUSE{flags=flags,mouseData=data}}}; }
-    public static async Task Execute(WindowChoice w,Shot shot,Dictionary<string,object> a,Action check,BrowserWindow localBrowser=null) {
+    static void SendChord(ushort[] keys) {
+        var inputs=new List<INPUT>();
+        foreach(var key in keys)inputs.Add(K(key,0));
+        foreach(var key in keys.Reverse())inputs.Add(K(key,2));
+        Send(inputs.ToArray());
+    }
+    public static async Task Execute(WindowChoice w,Shot shot,Dictionary<string,object> a,Action check,BrowserWindow localBrowser=null,ExplorerCopy copy=null) {
         ValidateAction(a); check();
         if(shot.Popup!=null) {
             string action=S(a,"kind");
@@ -1657,13 +1706,20 @@ static partial class Native {
         if(localBrowser!=null)localBrowser.ValidateLocalAction(kind,S(a,"key"),0,0);
         GuardElement(AutomationElement.FocusedElement); check();
         if(kind=="key") {
+            string key=S(a,"key");
+            if(key=="COPY" || key=="PASTE") {
+                if(copy==null || localBrowser!=null || shot.FileShortcut==null)throw new InputNotSent("此快捷键只在已核对的文件复制任务中开放。");
+                await copy.Execute(w,key,shot.FileShortcut,check);
+                return;
+            }
+            if(copy!=null)copy.VerifyOtherAction(a,w);
             if(S(a,"key")=="CTRL_SHIFT_N") {
                 if(localBrowser!=null || shot.Popup!=null || shot.ExplorerFolder==null)throw new Exception("只能在已核验的桌面文件列表中新建文件夹。");
                 await CheckNewFolderShortcut(w,shot.ExplorerFolder);
                 check();
                 if(!ExplorerListFocused(w))throw new Exception("桌面文件列表已失去焦点，请核对后继续。");
             }
-            ushort[] keys=Keys[S(a,"key")];var inputs=new List<INPUT>();foreach(var key in keys)inputs.Add(K(key,0));foreach(var key in keys.Reverse())inputs.Add(K(key,2));Send(inputs.ToArray());
+            SendChord(Keys[key]);
         } else {
             // Unicode SendInput doesn't interpret text as key shortcuts or executable code.
             foreach(char ch in S(a,"text")) {

@@ -110,20 +110,24 @@ static partial class Native {
         check(); CheckInputDesktop();
         string desktop=UserDesktop();
         if(desktop==null || !Directory.Exists(desktop))throw new Exception("本机的桌面目录不可用，请打开目标文件夹并手动选择资源管理器窗口。");
-        var target=SelectExplorer(own,await ShellFolders(),desktop);
+        return await OpenExplorerDirectory(own,desktop,check);
+    }
+    public static async Task<WindowChoice> OpenExplorerDirectory(IntPtr own,string directory,Action check) {
+        check();CheckInputDesktop();
+        var target=SelectExplorer(own,await ShellFolders(),directory);
         if(target==null) {
             check(); CheckInputDesktop();
-            // The executable and sole argument come from Windows, never the task or model.
-            string argument=desktop.EndsWith("\\",StringComparison.Ordinal) ? desktop+"." : desktop;
+            // Callers supply only the Windows desktop or an explicitly requested, verified physical folder.
+            string argument=directory.EndsWith("\\",StringComparison.Ordinal) ? directory+"." : directory;
             using(Process.Start(new ProcessStartInfo(systemExplorer,"/n,\""+argument+"\""){UseShellExecute=false})) {}
             var elapsed=Stopwatch.StartNew();
             while(elapsed.ElapsedMilliseconds<8000 && target==null) {
                 await Task.Delay(250);check();
-                target=SelectExplorer(own,await ShellFolders(),desktop);
+                target=SelectExplorer(own,await ShellFolders(),directory);
             }
         }
         check();CheckInputDesktop();
-        if(target==null)throw new Exception("尚未核验到显示桌面目录的资源管理器窗口。请在本机打开桌面目录并从此窗口继续。");
+        if(target==null)throw new Exception("尚未核验到指定目录的资源管理器窗口。请在本机打开该目录后继续。");
         ValidateWindow(target,false);
         return target;
     }

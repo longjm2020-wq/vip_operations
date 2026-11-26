@@ -6,6 +6,7 @@ on:
         "apps/desktop/**",
         "scripts/*desktop*.mjs",
         "scripts/test-desktop-caption.ps1",
+        "scripts/test-desktop-file-copy.*",
         ".github/workflows/desktop.yml",
       ]
   pull_request:
@@ -14,6 +15,7 @@ on:
         "apps/desktop/**",
         "scripts/*desktop*.mjs",
         "scripts/test-desktop-caption.ps1",
+        "scripts/test-desktop-file-copy.*",
         ".github/workflows/desktop.yml",
       ]
 jobs:
@@ -33,6 +35,14 @@ jobs:
         run: |
           $desktop = Get-Content -Raw .local/desktop-client-build/latest.json | ConvertFrom-Json
           ./scripts/test-desktop-caption.ps1 -Executable $desktop.executable
+      - name: Verify Explorer copies fixture files with Ctrl+C and Ctrl+V
+        shell: powershell
+        timeout-minutes: 3
+        env:
+          XUTI_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          $desktop = Get-Content -Raw .local/desktop-client-build/latest.json | ConvertFrom-Json
+          ./scripts/test-desktop-file-copy.ps1 -Executable $desktop.executable
       - uses: actions/upload-artifact@v4
         with:
           name: xuti-desktop-win-x64

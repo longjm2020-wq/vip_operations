@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root, verifyDesktopArtifact } from "./desktop-artifact.mjs";
+import { prepareMacFinder } from "./mac-finder-artifact.mjs";
 const { bytes, manifest } = await verifyDesktopArtifact();
 const destination = path.join(root, "apps/web/public/downloads");
 await fs.mkdir(destination, { recursive: true });
@@ -11,3 +12,4 @@ await fs.writeFile(
   JSON.stringify({ version, platform, sha256 }) + "\n",
 );
 console.log(`Prepared verified Windows desktop ${manifest.version} download`);
+await prepareMacFinder();
