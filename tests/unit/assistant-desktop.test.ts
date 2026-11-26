@@ -78,6 +78,7 @@ import {
   createDesktopPair,
   controlMacFileCopy,
   controlBackgroundCopy,
+  controlFolderCreation,
   desktopControl,
   desktopTaskView,
   desktopProviderDiagnostic,
@@ -149,6 +150,7 @@ beforeAll(async () => {
   await fixture.db.exec(await readFile("packages/database/migrations/118_desktop_folder_copy.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/119_desktop_file_copy_verification.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/120_desktop_wecom.sql", "utf8"));
+  await fixture.db.exec(await readFile("packages/database/migrations/121_desktop_folder_creation.sql", "utf8"));
 });
 beforeEach(async () => {
   fixture.session = true;
@@ -229,6 +231,76 @@ async function shot() {
 }
 
 describe("paired desktop task execution", () => {
+  const folderInstruction = '在我的电脑桌面新建文件夹"测试自动化999"，并在文件内新建10个文件夹，命名规则按"XUTI-01......XUTI-n"';
+  const folderCapabilities = { nativeActions: true, folderCreation: true };
+  async function queuedFolderBatch() {
+    const c = actor();
+    const { deviceId } = await paired();
+    const { authorizationId } = await setDesktopAuthorization(c, deviceId, true);
+    await pollDesktop(c, deviceId, false, folderCapabilities);
+    const body = { deviceId, requestId: randomUUID(), instruction: folderInstruction, model: "engine/123456789012345678901234" };
+    const task = await queueDesktopTask(c, body);
+    expect((await queueDesktopTask(c, body)).id).toBe(task.id);
+    const poll = async () => (await pollDesktop(c, deviceId, false, folderCapabilities)).task!;
+    const claim = (attemptId: string, verifiedCount?: number) => controlFolderCreation(c, deviceId, task.id,
+      verifiedCount === undefined ? { action: "start", authorizationId, attemptId } :
+        { action: "complete", authorizationId, attemptId, verifiedCount });
+    return { c, deviceId, task, poll, claim };
+  }
+  it("dispatches one fixed folder batch without a model and accepts one verified receipt", async () => {
+    const { c, deviceId, task, poll, claim } = await queuedFolderBatch();
+    expect(task.nativeAction).toBe("create_desktop_folders");
+    expect((await pollDesktop(c, deviceId, false, { nativeActions: true })).task).toBeNull();
+    const delivery = await poll();
+    expect(delivery.folderCreation).toEqual({ parentName: "测试自动化999", folderNames:
+      Array.from({ length: 10 }, (_, i) => "XUTI-" + String(i + 1).padStart(2, "0")) });
+    const attempt = delivery.folderCreationAttemptId!;
+    expect((await poll()).folderCreationAttemptId).toBe(attempt);
+    await expect(claim(randomUUID())).rejects.toThrow();
+    await expect(claim(attempt, 10)).rejects.toThrow();
+    expect(await claim(attempt)).toMatchObject({ status: "RUNNING", folderCreationAttemptId: attempt, folderCreation: delivery.folderCreation });
+    expect((await claim(attempt)).status).toBe("RUNNING");
+    expect((await poll()).folderCreationAttemptId).toBe(attempt);
+    await expect(claim(attempt, 9)).rejects.toThrow();
+    const done = await claim(attempt, 10);
+    expect(done).toMatchObject({ status: "DONE", confirmedSteps: 1, recentSteps: [{ step: 1, action: "create_folders", result: "ok" }] });
+    expect(await claim(attempt, 10)).toEqual(done);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("invalidates the original folder batch attempt on pause, resume, deauthorization and stop", async () => {
+    const { c, deviceId, task, poll, claim } = await queuedFolderBatch();
+    const attempt = (await poll()).folderCreationAttemptId!;
+    await claim(attempt);
+    await desktopControl(c, task.id, { action: "pause" });
+    await expect(claim(attempt)).rejects.toThrow();
+    await desktopControl(c, task.id, { action: "resume" });
+    const next = (await poll()).folderCreationAttemptId!;
+    expect(next).not.toBe(attempt);
+    await expect(claim(attempt)).rejects.toThrow();
+    await claim(next);
+    await expect(claim(attempt, 10)).rejects.toThrow();
+    await setDesktopAuthorization(c, deviceId, false);
+    await expect(claim(next)).rejects.toThrow();
+    await desktopControl(c, task.id, { action: "stop" });
+    await expect(claim(next, 10)).rejects.toThrow();
+    expect((await pollDesktop(c, deviceId, false, folderCapabilities)).task).toBeNull();
+  });
+  it("requires an authorized Windows batch receiver and refuses invalid plans before consulting a visual model", async () => {
+    const c = actor();
+    const { deviceId } = await paired();
+    const queue = (instruction = folderInstruction) => queueDesktopTask(c, { deviceId, instruction, requestId: randomUUID() });
+    const error = (code: string) => ({ response: { error: { code } } });
+    await pollDesktop(c, deviceId, false, { nativeActions: true });
+    await expect(queue()).rejects.toMatchObject(error("FOLDER_CREATION_UPDATE_REQUIRED"));
+    await pollDesktop(c, deviceId, false, folderCapabilities);
+    await expect(queue()).rejects.toMatchObject(error("AUTHORIZATION_CHANGED"));
+    await setDesktopAuthorization(c, deviceId, true);
+    await expect(queue(folderInstruction.replace("XUTI-n", "XUTI-52"))).rejects.toMatchObject(error("INVALID_FOLDER_CREATION"));
+    await expect(queue(folderInstruction.replace("在我的电脑桌面", "在电脑「另一台」的桌面"))).rejects.toMatchObject(error("DEVICE_NAME_MISMATCH"));
+    const queued = await queue(folderInstruction.replace("测试自动化999", "复制资料"));
+    expect(queued.nativeAction).toBe("create_desktop_folders");
+    expect(fetch).not.toHaveBeenCalled();
+  });
   async function wecomFixture(instruction: string) {
     const d = await paired(), c = actor();
     const {authorizationId} = await setDesktopAuthorization(c,d.deviceId,true);

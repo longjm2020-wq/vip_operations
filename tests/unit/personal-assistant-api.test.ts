@@ -201,6 +201,7 @@ beforeAll(async () => {
     "118_desktop_folder_copy.sql",
     "119_desktop_file_copy_verification.sql",
     "120_desktop_wecom.sql",
+    "121_desktop_folder_creation.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -1019,6 +1020,24 @@ describe("assistant business tools and private memory", () => {
         webSearch: true,
       }),
     ).rejects.toThrow();
+  });
+  it.each([true, false])("routes numbered desktop directories to the Windows batch receiver (automatic %s)", async automatic => {
+    const deviceId = randomUUID();
+    const authorization = randomUUID();
+    await fixture.database!.exec("UPDATE compass_ai_settings SET enabled=false, verified_at=NULL");
+    await fixture.database!.query(
+      `INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,authorization_id,folder_creation)
+       VALUES($1,7,'样品室','s','t',now(),now(),true,$2,true)`, [deviceId, authorization],
+    );
+    const message = '在我的电脑桌面新建文件夹"测试自动化999"，并在文件内新建10个文件夹，命名规则按"XUTI-01......XUTI-n"';
+    const body = { ...input(), message, model: "unavailable/model", desktopDeviceId: deviceId, ...(automatic ? { autoExecution: true } : {}) };
+    const reply = await sendAssistant(actor(), body);
+    const taskId = reply.messages.at(-1)?.desktopTaskId;
+    expect(taskId).toEqual(expect.any(String));
+    expect((await fixture.database!.query(
+      "SELECT id,device_id,authorization_id,native_action,model_ref FROM assistant_desktop_tasks",
+    )).rows).toEqual([{ id: taskId, device_id: deviceId, authorization_id: authorization, native_action: "create_desktop_folders", model_ref: null }]);
+    expect(fetch).not.toHaveBeenCalled();
   });
   it.each([true, false])("submits create-desktop-folder and copy-contents together (automatic %s)", async automatic => {
     const deviceId = randomUUID();

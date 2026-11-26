@@ -1,18 +1,19 @@
 {
-  "version": "1.2.15",
+  "version": "1.2.16",
   "platform": "win-x64",
-  "sha256": "ac54de33726f0bde534eb2aa63df7fc122f983f66a5bb5f44429c790dd630dbf",
+  "sha256": "db04cc9bb6021218807403a5441a16512952604b0c451e2ea7dcaa40a4bb3ede",
   "sources": {
-    "apps/desktop/XutiDesktop.cs": "1df9c4682089c617adf40b0100cfd04d2ca184f65f3878b36a5fa05381d56d00",
+    "apps/desktop/XutiDesktop.cs": "10c008ee94ed4d72c3d5ba6824e2cc98a7a5f9bea95df18b51a6f0161945b503",
     "apps/desktop/DesktopExplorer.cs": "7b5ad17f14342a1006c9832ee9ce88d8597e99b0906a633ad927d6104cd9f0aa",
-    "apps/desktop/ExplorerCopy.cs": "f43f72729d439d8d7eae89dd5a59c6b3990165feaad9f62b15f67e14515bb3d0",
+    "apps/desktop/ExplorerCopy.cs": "54267573277785785748d836e92afbc7eb98c04c35f483beb311c70bba47d717",
+    "apps/desktop/FolderCreation.cs": "3c2b422f70f055ed5399b2db4b1fdb5008a54ff49e1a1a962c7fa83b679cbd4e",
     "apps/desktop/WeCom.cs": "fbf8f1f75a494dd258e3cce1096d168074ecc0b6770c5354829075ced69f1e87",
     "apps/desktop/DesktopShell.cs": "9971dd142efb05944f12f14ea02991168d4671125c389ad4265689e2447c2a31",
     "apps/desktop/app.manifest": "c58b06b9ed978a75dddc988e2e2fcde120675c3ac0554cc1e45b20076f3ee68d",
     "apps/desktop/启动小序.cmd": "4ea0d09b231966f86284ea78560ef38fa6ad7eb56d3312ba7f391fe3795e75ef",
-    "apps/desktop/README.txt": "bdf814e7130352deee60aa18f5dd90a97203b9e5c9503bb7d91d8d03edca4169",
-    "apps/desktop/version.json": "e0f1cfa884f080a4c9441926440e9ece912ed60eb229fa3451fb7507f9623fea",
-    "scripts/build-desktop.mjs": "afbd001ae1e610ecddd6da0a5c743b437797ce3cc5c51b4b89155b45471540e9",
-    "scripts/desktop-artifact.mjs": "85aaffa410dab47abacd47a6363b53023e2f94c1b53f2f2d25ad67a7d845cd29"
+    "apps/desktop/README.txt": "bf864496e3cd1c0dfaa83a1d649aaf27525584e63299f3e05b665c47bbf71eb3",
+    "apps/desktop/version.json": "7c0b2e44c50c46274e5534434bb690a42c462618377f464b18e49942cfd3d1bc",
+    "scripts/build-desktop.mjs": "109611a17c3907b8c44b2b0b28d528b167e4114026bc6ffe619c97843baa2da6",
+    "scripts/desktop-artifact.mjs": "9ef60d4d4a57af47ccdb505b84b3767d386d629a127720654746ffd09ba986ab"
   }
 }

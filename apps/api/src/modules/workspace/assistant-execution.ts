@@ -7,6 +7,7 @@ import {
   isNativeDesktopAppCommand,
 } from "../../../../../packages/contracts/src/assistant-execution.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
+import { desktopFolderCreationPlan, folderCreationGuidance, looksLikeDesktopFolderCreation } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   desktopFileCopyIntent,
   explicitlyRequestsBackgroundCopy, backgroundCopyScope, backgroundCopyUnavailable, requestsBackgroundDesktopExecution,
@@ -115,7 +116,10 @@ export async function resolveAutomaticAssistantExecution(
 ): Promise<AutomaticAssistantExecution> {
   const windowsCopy = desktopFileCopyIntent(instruction);
   const macCopy = desktopFileCopyIntent(instruction, "macos");
-  if (!windowsCopy && !macCopy && requestsBackgroundDesktopExecution(instruction))
+  const folderPlan = desktopFolderCreationPlan(instruction);
+  if (!folderPlan && looksLikeDesktopFolderCreation(instruction))
+    fail("INVALID_FOLDER_CREATION", folderCreationGuidance.format, 400);
+  if (!folderPlan && !windowsCopy && !macCopy && requestsBackgroundDesktopExecution(instruction))
     fail("BACKGROUND_COPY_UNAVAILABLE", backgroundCopyScope, 400);
   if (nativeDesktopDeviceId && isNativeDesktopAppCommand(instruction)) {
     const [device] =
@@ -144,7 +148,7 @@ export async function resolveAutomaticAssistantExecution(
             "请在「我的电脑」核对当前设备、连接和本机跨窗口授权，再重新下达指令。",
         };
   }
-  if (!windowsCopy && looksLikeDesktopFolderCopy(instruction)) {
+  if (!folderPlan && !windowsCopy && looksLikeDesktopFolderCopy(instruction)) {
     if (
       /~\/|\/Users\/|在\s*(?:我的\s*)?Mac(?:OS)?\s*[上中里]?/iu.test(
         instruction,
@@ -172,7 +176,7 @@ export async function resolveAutomaticAssistantExecution(
   if (!deviceName && !preferredDeviceId)
     return {
       kind: "clarify",
-      message: filePlatform
+      message: folderPlan ? folderCreationGuidance.platform : filePlatform
         ? `请在右侧「我的电脑」选择执行复制的 ${filePlatform === "macos" ? "Mac" : "Windows 电脑"}，设为常用电脑后再发送。`
         : target.localBrowser
           ? "请在右侧「我的电脑」连接并选择运行小序桌面端的设备，再在右侧浏览器打开本地网页。"
@@ -181,7 +185,7 @@ export async function resolveAutomaticAssistantExecution(
 
   const devices = await rows(
     db,
-    `SELECT id,name,platform,native_actions,desktop_folder_copy,background_file_copy,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
+    `SELECT id,name,platform,native_actions,desktop_folder_copy,background_file_copy,folder_creation,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
             coalesce(last_seen_at > now() - interval '20 seconds', false) AS online
        FROM assistant_desktop_devices
       WHERE user_id = $1::bigint AND token_hash IS NOT NULL
@@ -208,6 +212,10 @@ export async function resolveAutomaticAssistantExecution(
     };
   if (windowsCopy?.destinationKind && devices[0].platform !== "windows")
     fail("DEVICE_PLATFORM_MISMATCH", desktopFolderCopyGuidance.platform, 400);
+  if (folderPlan && devices[0].platform !== "windows")
+    fail("DEVICE_PLATFORM_MISMATCH", folderCreationGuidance.platform, 400);
+  if (folderPlan && !devices[0].folder_creation)
+    fail("FOLDER_CREATION_UPDATE_REQUIRED", folderCreationGuidance.update, 409);
   if (filePlatform && explicitlyRequestsBackgroundCopy(instruction) && (devices[0].platform !== "windows" || !devices[0].background_file_copy))
     fail("BACKGROUND_COPY_UNAVAILABLE", backgroundCopyUnavailable, 409);
   if (filePlatform && devices[0].platform !== filePlatform)

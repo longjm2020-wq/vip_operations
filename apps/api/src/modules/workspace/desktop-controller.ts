@@ -8,6 +8,7 @@ import {
   createDesktopPair,
   controlMacFileCopy,
   controlBackgroundCopy,
+  controlFolderCreation,
   desktopControl,
   desktopIdentity,
   desktopState,
@@ -100,6 +101,7 @@ export class AssistantDesktopController {
             fileCopyShortcuts: z.literal(true).optional(),
             fileCopyVerification: z.literal(true).optional(),
             backgroundFileCopy: z.literal(true).optional(),
+            folderCreation: z.literal(true).optional(),
             desktopFolderCopy: z.literal(true).optional(),
             retainedTaskId: z.string().uuid().nullable().optional(),
           })
@@ -117,6 +119,7 @@ export class AssistantDesktopController {
           fileCopyShortcuts: b.fileCopyShortcuts,
           fileCopyVerification: b.fileCopyVerification,
           backgroundFileCopy: b.backgroundFileCopy,
+          folderCreation: b.folderCreation,
           desktopFolderCopy: b.desktopFolderCopy,
           platform: b.platform,
           retainedTaskId: b.retainedTaskId,
@@ -151,6 +154,12 @@ export class AssistantDesktopController {
   ) {
     const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
     return controlBackgroundCopy(d.c, d.deviceId, id, input);
+  }
+  @Public() @Post("client/tasks/:id/folder-creation") async folderCreation(
+    @Req() r: AuthRequest, @Param("id") id: string, @Body() input: unknown,
+  ) {
+    const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
+    return controlFolderCreation(d.c, d.deviceId, id, input);
   }
   @Public() @Post("client/tasks/:id/plan") async plan(
     @Req() r: AuthRequest,

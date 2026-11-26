@@ -29,6 +29,7 @@ import {
   type DesktopPlatform,
 } from "../../../../../packages/contracts/src/desktop-file-copy.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
+import { desktopFolderCreationRequest, folderCreationGuidance, looksLikeDesktopFolderCreation } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   assistantFollowupText,
   desktopExplorerIntent,
@@ -309,6 +310,7 @@ const stepReceipt = z.object({
     "switch_window",
     "wait",
     "file_copy",
+    "create_folders",
     "locate_wecom",
   ]),
   fileShortcut: z.enum(["copy", "paste"]).optional(),
@@ -362,7 +364,7 @@ function desktopStepReceipts(
 export function desktopTaskView(row: Row): DesktopTask {
   return {
     id: row.id,
-    ...(row.file_copy_flow || row.native_action === "copy_finder_files"
+    ...(row.file_copy_flow || row.native_action === "copy_finder_files" || row.native_action === "create_desktop_folders"
       ? { requestId: row.request_id }
       : {}),
     deviceId: row.device_id,
@@ -660,7 +662,13 @@ export async function queueDesktopTask(
     b.model ?? null,
   );
   const mac = capability?.platform === "macos";
-  const wecom = !mac && !previousId && !b.localBrowser && desktopWecomIntent(b.instruction);
+  const folderRequest = desktopFolderCreationRequest(b.instruction);
+  const folderPlan = folderRequest?.plan;
+  if ((folderPlan || looksLikeDesktopFolderCreation(b.instruction)) && (!folderPlan || b.localBrowser || previousId))
+    fail("INVALID_FOLDER_CREATION", folderCreationGuidance.format, 400);
+  if (folderPlan && mac)
+    fail("DEVICE_PLATFORM_MISMATCH", folderCreationGuidance.platform, 400);
+  const wecom = !folderPlan && !mac && !previousId && !b.localBrowser && desktopWecomIntent(b.instruction);
   const windowsSpec = desktopFileCopyIntent(b.instruction);
   const explicitBackground = explicitlyRequestsBackgroundCopy(b.instruction);
   if (explicitBackground && mac)
@@ -677,7 +685,7 @@ export async function queueDesktopTask(
     );
   const createsDesktopFolder =
     windowsSpec?.destinationKind === "newDesktopFolder";
-  const compoundRequest = looksLikeDesktopFolderCopy(b.instruction);
+  const compoundRequest = !folderPlan && looksLikeDesktopFolderCopy(b.instruction);
   if (mac && (createsDesktopFolder || compoundRequest))
     fail("DEVICE_PLATFORM_MISMATCH", desktopFolderCopyGuidance.platform, 400);
   if (
@@ -703,10 +711,10 @@ export async function queueDesktopTask(
       400,
     );
   const winCopy = !mac && !previousId && !b.localBrowser && !!windowsSpec;
-  if (explicitBackground && !winCopy)
+  if (explicitBackground && !winCopy && !folderPlan)
     fail("BACKGROUND_COPY_UNAVAILABLE", backgroundCopyScope, 400);
   const namedDevice =
-    (mac || winCopy) && desktopFileCopyDeviceName(b.instruction);
+    folderRequest?.deviceName ?? ((mac || winCopy) && desktopFileCopyDeviceName(b.instruction));
   if (
     namedDevice &&
     namedDevice.toLowerCase() !== capability?.name.trim().toLowerCase()
@@ -716,7 +724,7 @@ export async function queueDesktopTask(
       "指令里的电脑名称和所选设备不同，请重新核对目标电脑",
       409,
     );
-  if (!mac && !winCopy && mentionsDesktopFileCopy(b.instruction))
+  if (!folderPlan && !mac && !winCopy && mentionsDesktopFileCopy(b.instruction))
     fail(
       "FILE_COPY_PATHS_REQUIRED",
       "请在电脑操作中单独发送复制指令，写明源文件或源目录里的文件，以及已有目标目录。",
@@ -724,7 +732,7 @@ export async function queueDesktopTask(
     );
   const nativeAction = mac
     ? "copy_finder_files"
-    : capability?.use_native
+    : folderPlan ? "create_desktop_folders" : capability?.use_native
       ? requestedAction
       : undefined;
   const model =
@@ -753,7 +761,7 @@ export async function queueDesktopTask(
         existing.instruction !== b.instruction ||
         (!existing.file_copy_flow && wecom !== "open" &&
           (existing.native_action
-            ? existing.native_action !== "copy_finder_files" &&
+            ? existing.native_action !== "copy_finder_files" && existing.native_action !== "create_desktop_folders" &&
               b.model !== undefined &&
               existing.model_ref !== b.model
             : existing.model_ref !== (model?.id ?? null))) ||
@@ -764,7 +772,7 @@ export async function queueDesktopTask(
     }
     const d = await one(
       tx,
-      "SELECT id,platform,wecom_app,file_copy_shortcuts,desktop_folder_copy,background_file_copy,authorization_id,native_actions,window_continuations,retained_task_id,engine_seen_at>now()-interval '20 seconds' AS engine_ready,local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds' FOR UPDATE",
+      "SELECT id,platform,wecom_app,file_copy_shortcuts,desktop_folder_copy,background_file_copy,folder_creation,authorization_id,native_actions,window_continuations,retained_task_id,engine_seen_at>now()-interval '20 seconds' AS engine_ready,local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds' FOR UPDATE",
       b.deviceId,
       c.actor.id,
     );
@@ -772,7 +780,11 @@ export async function queueDesktopTask(
     if (wecom && !d.wecom_app) fail("WECOM_UPDATE_REQUIRED", wecomUpdate, 409);
     if (wecom && !d.authorization_id)
       fail("AUTHORIZATION_CHANGED", "请先在这台电脑允许并记住设备授权，小序才能自动定位企业微信。", 409);
-    if (explicitBackground && !d.background_file_copy)
+    if (folderPlan && !d.folder_creation)
+      fail("FOLDER_CREATION_UPDATE_REQUIRED", folderCreationGuidance.update, 409);
+    if (folderPlan && !d.authorization_id)
+      fail("AUTHORIZATION_CHANGED", "请先在所选 Windows 电脑的小序桌面端允许设备操作，再发送建目录任务。", 409);
+    if (explicitBackground && !folderPlan && !d.background_file_copy)
       fail("BACKGROUND_COPY_UNAVAILABLE", backgroundCopyUnavailable, 409);
     if (createsDesktopFolder && !d.desktop_folder_copy)
       fail("DESKTOP_FOLDER_COPY_UPDATE", desktopFolderCopyGuidance.update, 409);
@@ -841,14 +853,14 @@ export async function queueDesktopTask(
       fail("DESKTOP_BUSY", "这台电脑已有任务，请完成或停止后再发送", 409);
     const row = await one(
       tx,
-      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only,native_action,authorization_id,previous_task_id,window_id,window_name,application,file_copy_flow,creates_desktop_folder,background_copy) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8,$9,$10::uuid,$11::uuid,$12::uuid,$13,$14,$15,$16,$17) RETURNING *",
+      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only,native_action,authorization_id,previous_task_id,window_id,window_name,application,file_copy_flow,creates_desktop_folder,background_copy,folder_creation) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8,$9,$10::uuid,$11::uuid,$12::uuid,$13,$14,$15,$16,$17,$18::jsonb) RETURNING *",
       randomUUID(),
       b.deviceId,
       c.actor.id,
       b.requestId,
       b.instruction,
       model?.id ?? null,
-      wecom ? "等待本机定位企业微信窗口" : createsDesktopFolder
+      folderPlan ? "等待本机在后台批量创建并核验文件夹" : wecom ? "等待本机定位企业微信窗口" : createsDesktopFolder
         ? "等待本机在桌面新建文件夹并复制指定内容"
         : previous
           ? "等待本机核对上次操作的窗口"
@@ -869,6 +881,7 @@ export async function queueDesktopTask(
       winCopy,
       createsDesktopFolder,
       winCopy && !!d.background_file_copy && !explicitlyRequestsCopyShortcuts(b.instruction),
+      folderPlan ? JSON.stringify(folderPlan) : null,
     );
     return desktopTaskView(row!);
   });
@@ -1175,6 +1188,8 @@ export async function desktopControl(
   if (b.startupFailure && (!deviceId || b.action !== "handoff"))
     fail("FORBIDDEN", "启动失败只能由本机助手上报", 403);
   const wecom = wecomTask(old);
+  if (old.native_action === "create_desktop_folders" && b.action === "handoff" && !b.attemptId)
+    fail("FOLDER_TASK_CHANGED", "请在当前批量建目录任务中上报执行结果", 409);
   if (b.attemptId && (!b.startupFailure || (!old.native_action && !wecom)))
     fail("FORBIDDEN", "只有本机记事本任务可上报执行尝试", 403);
   // A late startup report must preserve a user's pause or an already settled task.
@@ -1270,7 +1285,7 @@ export async function desktopControl(
     b.action === "resume"
       ? await one(
           db,
-          "SELECT platform,wecom_app,file_copy_shortcuts,desktop_folder_copy,background_file_copy,file_copy_verification,authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
+          "SELECT platform,wecom_app,file_copy_shortcuts,desktop_folder_copy,background_file_copy,folder_creation,file_copy_verification,authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
           old.device_id,
           c.actor.id,
         )
@@ -1289,6 +1304,8 @@ export async function desktopControl(
       );
     if (!resumeDevice?.online)
       fail("DEVICE_OFFLINE", "请先恢复所选电脑的连接", 409);
+    if (old.native_action === "create_desktop_folders" && !resumeDevice.folder_creation)
+      fail("FOLDER_CREATION_UPDATE_REQUIRED", folderCreationGuidance.update, 409);
     if (wecom && !resumeDevice.wecom_app) fail("WECOM_UPDATE_REQUIRED", wecomUpdate, 409);
     if (wecom && (!resumeDevice.authorization_id || (old.authorization_id && resumeDevice.authorization_id !== old.authorization_id)))
       fail("AUTHORIZATION_CHANGED", "请在执行电脑核对企业微信操作授权", 409);
@@ -1490,11 +1507,14 @@ export async function pollDesktop(
     desktopFolderCopy?: boolean;
     fileCopyVerification?: boolean;
     backgroundFileCopy?: boolean;
+    folderCreation?: boolean;
     retainedTaskId?: string | null;
     statusOnly?: boolean;
   } = {},
 ) {
   const platform = options.platform ?? "windows";
+  if (options.folderCreation && (platform !== "windows" || !options.nativeActions))
+    fail("INVALID_CAPABILITY", "后台批量建目录需要 Windows 本机执行能力", 400);
   if (
     (options.desktopFolderCopy || options.fileCopyVerification || options.backgroundFileCopy) &&
     (platform !== "windows" || !options.fileCopyShortcuts)
@@ -1533,6 +1553,7 @@ export async function pollDesktop(
          window_continuations=CASE WHEN NOT $6 THEN $7::boolean ELSE window_continuations END,
          file_copy_verification=CASE WHEN $6 THEN file_copy_verification ELSE $12::boolean END,
          background_file_copy=CASE WHEN $6 THEN background_file_copy ELSE $13::boolean END,
+         folder_creation=CASE WHEN $6 THEN folder_creation ELSE $15::boolean END,
          wecom_app=CASE WHEN $6 THEN wecom_app ELSE $14::boolean END,
          desktop_folder_copy=CASE WHEN $6 THEN desktop_folder_copy ELSE $11::boolean END,
          file_copy_shortcuts=CASE WHEN $6 THEN file_copy_shortcuts ELSE $10::boolean END,
@@ -1553,6 +1574,7 @@ export async function pollDesktop(
       !!options.fileCopyVerification,
       !!options.backgroundFileCopy,
       !!options.wecomApp,
+      !!options.folderCreation,
     );
     if (!d || options.statusOnly)
       return { task: null, authorizationId: d?.authorization_id ?? null };
@@ -1562,6 +1584,7 @@ export async function pollDesktop(
       `SELECT * FROM assistant_desktop_tasks WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])
        AND (NOT browser_only OR $4::boolean) AND (CASE WHEN $7='macos' THEN native_action='copy_finder_files'
          ELSE native_action IS DISTINCT FROM 'copy_finder_files' AND (native_action IS NULL OR $5::boolean) END)
+       AND (native_action IS DISTINCT FROM 'create_desktop_folders' OR $11::boolean)
        AND (NOT file_copy_flow OR $8::boolean) AND (NOT creates_desktop_folder OR $9::boolean) AND (NOT background_copy OR $10::boolean) AND (previous_task_id IS NULL OR $6::boolean) ORDER BY created_at LIMIT 1`,
       deviceId,
       c.actor.id,
@@ -1573,6 +1596,7 @@ export async function pollDesktop(
       !!options.fileCopyShortcuts,
       !!options.desktopFolderCopy,
       !!options.backgroundFileCopy,
+      !!options.folderCreation,
     );
     if (
       row?.status === "WAITING" &&
@@ -1587,6 +1611,14 @@ export async function pollDesktop(
     const wecom = row && wecomTask(row);
     if (wecom && (!options.wecomApp || !d.authorization_id || (row!.authorization_id && row!.authorization_id !== d.authorization_id)))
       return {task:null,authorizationId:d.authorization_id ?? null};
+    if (row?.native_action === "create_desktop_folders" && ["WAITING", "RUNNING"].includes(row.status)) {
+      if (!d.authorization_id || d.authorization_id !== row.authorization_id)
+        return { task: null, authorizationId: d.authorization_id ?? null };
+      if (row.status === "WAITING")
+        row = await one(tx, `UPDATE assistant_desktop_tasks SET delivered_at=now(),planning_id=coalesce(planning_id,$2::uuid)
+          WHERE id=$1::uuid AND status='WAITING' RETURNING *`, row.id, randomUUID());
+      return { task: row ? folderCreationDelivery(row) : null, authorizationId: d.authorization_id };
+    }
     if (confirmedPoll && row?.status === "WAITING")
       await tx.$executeRawUnsafe(
         "UPDATE assistant_desktop_tasks SET delivered_at=now() WHERE id=$1::uuid AND status='WAITING'",
@@ -1959,6 +1991,58 @@ async function settleVerifiedPaste(
       background,
     );
     return desktopTaskView(row!);
+  });
+}
+
+function folderCreationDelivery(row: Row): DesktopTask {
+  return { ...desktopTaskView(row), folderCreation: row.folder_creation, folderCreationAttemptId: row.planning_id };
+}
+
+const folderClaim = z.object({ authorizationId: z.string().uuid(), attemptId: z.string().uuid() });
+const folderCreationControl = z.discriminatedUnion("action", [
+  folderClaim.extend({ action: z.literal("start") }).strict(),
+  folderClaim.extend({ action: z.literal("complete"), verifiedCount: z.number().int().min(1).max(100) }).strict(),
+]);
+
+export async function controlFolderCreation(c: Context, deviceId: string, id: string, input: unknown) {
+  requireAssistant(c);
+  parse(z.string().uuid(), id);
+  const b = parse(folderCreationControl, input);
+  return db.$transaction(async (tx) => {
+    const device = await one(tx,
+      `SELECT id FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint
+       AND platform='windows' AND native_actions AND folder_creation AND authorization_id=$3::uuid
+       AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`,
+      deviceId, c.actor.id, b.authorizationId);
+    if (!device) fail("AUTHORIZATION_CHANGED", "设备连接或后台建目录授权已变化", 409);
+    const task = await one(tx,
+      `SELECT *,delivered_at>now()-interval '30 seconds' AS delivered FROM assistant_desktop_tasks
+       WHERE id=$1::uuid AND user_id=$2::bigint AND device_id=$3::uuid AND authorization_id=$4::uuid
+       AND native_action='create_desktop_folders' FOR UPDATE`,
+      id, c.actor.id, deviceId, b.authorizationId);
+    if (!task) fail("FOLDER_TASK_CHANGED", "请核对原批量建目录任务及其授权", 409);
+    if (b.action === "complete") {
+      if (task.folder_creation.folderNames.length !== b.verifiedCount)
+        fail("FOLDER_COUNT_MISMATCH", "本机核验的目录数量与计划不符", 409);
+      if (task.status === "DONE" && task.last_ack === b.attemptId) return desktopTaskView(task);
+    }
+    if (task.planning_id !== b.attemptId || (task.status !== "RUNNING" &&
+        !(b.action === "start" && task.status === "WAITING" && task.delivered)))
+      fail("FOLDER_TASK_CHANGED", "任务已暂停、结束或本次执行许可已失效", 409);
+    if (b.action === "start") {
+      if (task.status === "RUNNING") return folderCreationDelivery(task);
+      const started = await one(tx,
+        `UPDATE assistant_desktop_tasks SET status='RUNNING',stage='正在后台批量创建并核验文件夹',
+         started_at=now(),updated_at=now() WHERE id=$1::uuid RETURNING *`, id);
+      return folderCreationDelivery(started!);
+    }
+    const stage = `已核验桌面文件夹「${task.folder_creation.parentName}」中的 ${b.verifiedCount} 个指定子文件夹`;
+    const receipt = { step: 1, action: "create_folders", result: "ok", description: stage, confirmedTotal: 1 };
+    const complete = await one(tx,
+      `UPDATE assistant_desktop_tasks SET status='DONE',stage=$2,step=1,history=$3::jsonb,
+       last_ack=$4::uuid,planning_id=NULL,updated_at=now() WHERE id=$1::uuid RETURNING *`,
+      id, stage, JSON.stringify([receipt]), b.attemptId);
+    return desktopTaskView(complete!);
   });
 }
 

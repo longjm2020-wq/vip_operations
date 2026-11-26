@@ -2000,6 +2000,16 @@ test("文件复制任务区分自动核验、按键回执和人工暂停", async
   await refresh();
   await expect(rows).toHaveText(["第 1 步后台复制文件已核验"]);
   await expect(card).not.toContainText("粘贴文件");
+
+  delete task.fileCopyMode;
+  task.nativeAction = "create_desktop_folders";
+  task.stage = "已在桌面核验 10 个子文件夹";
+  task.recentSteps = [{ step: 1, action: "create_folders", result: "ok" }];
+  await refresh();
+  await expect(card.getByRole("status")).toHaveText(task.stage);
+  await expect(card).toContainText("后台批量建文件夹");
+  await expect(rows).toHaveText(["第 1 步批量创建文件夹已核验"]);
+  await expect(card).not.toContainText("暂无窗口记录");
   expect(state.taskControls).toEqual([]);
 });
 

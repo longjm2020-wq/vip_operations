@@ -3,6 +3,10 @@ import {
   desktopFileCopyDeviceName,
   desktopFileCopyIntent,
 } from "./desktop-file-copy.js";
+import {
+  desktopFolderCreationRequest,
+  looksLikeDesktopFolderCreation,
+} from "./desktop-folder-creation.js";
 import { parseAssistantWebsiteRequest } from "./assistant-web-command.js";
 import type { AssistantMessage } from "./personal-assistant.js";
 
@@ -123,6 +127,7 @@ export function shouldSearchAssistantPublicWeb(
     privateSearchContext.test(instruction) ||
     searchCredentials.test(instruction) ||
     followupOperation.test(instruction) ||
+    looksLikeDesktopFolderCreation(text) ||
     desktopExplorerIntent(text) !== undefined ||
     classifyAssistantFollowup(text) !== undefined ||
     currentPagePrefix.test(instruction) ||
@@ -373,6 +378,9 @@ export function classifyAssistantExecution(
   text: string,
   options?: { inferExternalTargets?: boolean },
 ): AssistantExecution {
+  const folderCreation = desktopFolderCreationRequest(text);
+  if (folderCreation?.deviceName) return { kind: "desktop", deviceName: folderCreation.deviceName };
+  if (folderCreation || looksLikeDesktopFolderCreation(text)) return { kind: "desktop" };
   if (desktopExplorerIntent(text)) return { kind: "desktop" };
   if (desktopFileCopyIntent(text) || desktopFileCopyIntent(text, "macos")) {
     const deviceName = desktopFileCopyDeviceName(text);

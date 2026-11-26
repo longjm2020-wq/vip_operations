@@ -206,7 +206,7 @@ static partial class Native {
             return result;
         }
         [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true,ExactSpelling=true)]
-        static extern bool CreateDirectoryW(string path,IntPtr security);
+        internal static extern bool CreateDirectoryW(string path,IntPtr security);
         [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true,ExactSpelling=true)]
         static extern SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
         [StructLayout(LayoutKind.Sequential)] struct HandleInfo {
@@ -232,10 +232,10 @@ static partial class Native {
             try {SetFileInformationByHandle(handle,4,flag.AddrOfPinnedObject(),1);}
             finally {flag.Free();}
         }
-        static SafeFileHandle OpenDirectoryHandle(string path,uint share) {
+        internal static SafeFileHandle OpenDirectoryHandle(string path,uint share) {
             return CreateFileW(path,0x80,share,IntPtr.Zero,3,0x02200000,IntPtr.Zero);
         }
-        static string FolderId(SafeFileHandle handle) {
+        internal static string FolderId(SafeFileHandle handle) {
             HandleInfo info;
             if(handle.IsInvalid || !GetFileInformationByHandle(handle,out info) || (info.attributes&0x410)!=0x10 ||
                 (info.indexHigh==0 && info.indexLow==0))throw Block("本机无法核对桌面文件夹的身份，已停止创建或粘贴。");

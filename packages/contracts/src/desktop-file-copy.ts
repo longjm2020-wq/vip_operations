@@ -95,7 +95,7 @@ const backgroundPrefix =
 export const backgroundCopyUnavailable =
   "请在执行电脑启动支持后台文件复制的 Windows 桌面端（1.2.14 或更新版本），连接并授权后重试。";
 export const backgroundCopyScope =
-  "后台执行支持明确路径的普通文件复制。请写明来源和目标目录，其他桌面窗口操作需要使用前台。";
+  "后台执行支持明确路径的普通文件复制和批量创建桌面文件夹。请写明复制的来源和目标目录，或说明父文件夹与子文件夹名称。需要操作窗口时请使用前台。";
 
 function newDesktopCopy(
   command: string,

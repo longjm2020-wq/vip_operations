@@ -512,3 +512,42 @@ test("从小序聊天将文件复制交给配对的 Mac，原任务卡显示 Fin
     await revoke();
   }
 });
+
+test("聊天将桌面连续编号目录作为一项后台任务下发并显示核验结果", async ({ page, request, baseURL }) => {
+  const name = "批量建目录测试电脑";
+  const { client, deviceId, revoke } = await pairTestReceiver(page, request, baseURL!, name);
+  const receiving = { nativeActions: true, folderCreation: true };
+  const instruction = '在我的电脑桌面新建文件夹"测试自动化999"，并在文件内新建10个文件夹，命名规则按"XUTI-01......XUTI-n"';
+  try {
+    const { authorizationId } = await client("authorization", { enabled: true });
+    await client("poll", receiving);
+    await page.goto("/my-workspace");
+    await selectAssistantPanel(page, "我的电脑");
+    await page.locator(".assistant-desktop-item").filter({ hasText: name })
+      .getByRole("button", { name: "设为常用电脑" }).click();
+    const composer = page.locator(".assistant-compose:visible");
+    await composer.getByRole("textbox").fill(instruction);
+    await client("poll", receiving);
+    await composer.getByRole("button", { name: "发送给个人助理" }).click();
+    const card = page.getByRole("region", { name: "电脑任务：" + instruction }).filter({ visible: true }).first();
+    await expect(card).toContainText("后台批量建文件夹");
+    const { task } = await client("poll", receiving);
+    expect(task).toMatchObject({
+      deviceId, status: "WAITING", nativeAction: "create_desktop_folders",
+      folderCreation: {
+        parentName: "测试自动化999",
+        folderNames: Array.from({ length: 10 }, (_, i) => "XUTI-" + String(i + 1).padStart(2, "0")),
+      },
+    });
+    const claim = { authorizationId, attemptId: task.folderCreationAttemptId };
+    const route = "tasks/" + task.id + "/folder-creation";
+    await client(route, { ...claim, action: "start" });
+    await composer.getByRole("textbox").fill("同时编辑的下一条草稿");
+    const done = await client(route, { ...claim, action: "complete", verifiedCount: 10 });
+    expect(done.recentSteps).toEqual([{ step: 1, action: "create_folders", result: "ok" }]);
+    await expect(card.getByRole("status")).toContainText("10 个指定子文件夹", { timeout: 15000 });
+    await expect(composer.getByRole("textbox")).toHaveValue("同时编辑的下一条草稿");
+  } finally {
+    await revoke();
+  }
+});

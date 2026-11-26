@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { DesktopFileCopy, DesktopPlatform } from "./desktop-file-copy.js";
+import type { DesktopFolderCreationPlan } from "./desktop-folder-creation.js";
 
 export const desktopDevicePurposes = ["personal", "dedicated"] as const;
 export type DesktopDevicePurpose = (typeof desktopDevicePurposes)[number];
@@ -181,7 +182,7 @@ export type DesktopTask = {
   confirmedSteps?: number;
   recentSteps?: {
     step: number;
-    action: "click" | "scroll" | "type" | "key" | "switch_window" | "wait" | "file_copy" | "locate_wecom";
+    action: "click" | "scroll" | "type" | "key" | "switch_window" | "wait" | "file_copy" | "locate_wecom" | "create_folders";
     result: "ok" | "blocked" | "uncertain";
     fileShortcut?: "copy" | "paste";
     verifiedAfterPaste?: true;
@@ -196,10 +197,13 @@ export type DesktopTask = {
   fileCopyMode?: "background";
   /** Authenticated receiver only; a restarted client may inspect previous work without replaying writes. */
   backgroundCopyAttempt?: { attemptId: string; permitted: boolean };
+  /** Batch creation plan and permit identity, available only to the authenticated receiver. */
+  folderCreation?: DesktopFolderCreationPlan;
+  folderCreationAttemptId?: string;
   window: string;
   scope: "window" | "device";
   nativeAction?:
-    "open_notepad" | "focus_notepad" | "type_notepad" | "copy_finder_files";
+    "open_notepad" | "focus_notepad" | "type_notepad" | "copy_finder_files" | "create_desktop_folders";
   nativeText?: string;
   previousTaskId?: string;
   boundWindowId?: string;

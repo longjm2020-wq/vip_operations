@@ -21,6 +21,7 @@ import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import { desktopFileCopyIntent, mentionsDesktopFileCopy } from "../../../../../packages/contracts/src/desktop-file-copy.js";
+import { desktopFolderCreationPlan } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   assistantFollowupAnchor,
   classifyAssistantExecution,
@@ -322,27 +323,28 @@ export async function sendAssistant(
     attachments.some((f) => f.mime.startsWith("image/"))
   )
     fail("VISION_REQUIRED", "所选能力不支持看图，请选择标有“识图”的能力", 400);
-  // A failed reservation already contains the user's file-copy instruction. A new
+  // A failed reservation already contains the user's native file instruction. A new
   // HTTP attempt may resume it only with the same destination, attachment and mode
   // settings. Keep the task key even if the old queue commit lost its response.
   const last: AssistantMessage | undefined = existing.messages.at(-1);
   const previousVersion = existing.version - (expired(existing) ? 1 : 2);
-  const retryCopy = !voice && execution?.kind === "desktop" && !execution.localBrowser &&
-    mentionsDesktopFileCopy(body.message) && (existing.state === "FAILED" || expired(existing)) &&
+  const folderPlan = execution?.kind === "desktop" && desktopFolderCreationPlan(body.message);
+  const retryDesktop = !voice && execution?.kind === "desktop" && !execution.localBrowser &&
+    (folderPlan || mentionsDesktopFileCopy(body.message)) && (existing.state === "FAILED" || expired(existing)) &&
     last?.role === "user" && !last.source && last.text === body.message &&
     (last.attemptId ?? last.id) === existing.request_id &&
     hash(JSON.stringify({ ...body, requestId: existing.request_id, version: previousVersion })) === existing.request_hash;
-  const turnId = retryCopy ? last.id : body.requestId;
+  const turnId = retryDesktop ? last.id : body.requestId;
   const messages: AssistantMessage[] = [
-    ...(await hydrateTeamMessages(c.actor.id, retryCopy ? existing.messages.slice(-39, -1) : existing.messages.slice(-38))),
+    ...(await hydrateTeamMessages(c.actor.id, retryDesktop ? existing.messages.slice(-39, -1) : existing.messages.slice(-38))),
     {
       id: turnId,
-      ...(retryCopy ? { attemptId: body.requestId } : {}),
+      ...(retryDesktop ? { attemptId: body.requestId } : {}),
       role: "user",
       text: body.message,
       ...(voice ? { source: "voice" as const } : {}),
       ...(voice?.sessionId ? { voiceSessionId: voice.sessionId } : {}),
-      createdAt: retryCopy ? last.createdAt : new Date().toISOString(),
+      createdAt: retryDesktop ? last.createdAt : new Date().toISOString(),
       ...(attachments.length
         ? { attachments: attachments.map(agentFileView) }
         : {}),
@@ -414,7 +416,7 @@ export async function sendAssistant(
             deviceId: desktopExecution.deviceId,
             requestId: turnId,
             instruction: body.message,
-            model: desktopFileCopyIntent(body.message) || desktopFileCopyIntent(body.message, "macos")
+            model: folderPlan || desktopFileCopyIntent(body.message) || desktopFileCopyIntent(body.message, "macos")
               ? undefined
               : executionModel,
             localBrowser: desktopExecution?.localBrowser,
