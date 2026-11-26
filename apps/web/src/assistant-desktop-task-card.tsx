@@ -15,12 +15,14 @@ export const isActiveDesktopTask = (task: DesktopTask) =>
   ["WAITING", "RUNNING", "PAUSED", "NEEDS_USER"].includes(task.status);
 
 const backgroundTaskLabels: Partial<Record<NonNullable<DesktopTask["nativeAction"]>, string>> = {
+  copy_folder_attachment: "后台分发附件",
   create_desktop_folders: "后台批量建文件夹",
   create_folder_notes: "后台批量建文本",
   create_folders_with_notes: "后台批量建目录和文本",
 };
 
 const folderStepLabels: Record<NonNullable<DesktopTask["folderSteps"]>[number], string> = {
+  copy_attachment: "按附件原名复制到每个指定子目录",
   ensure_directories: "按名称清单补齐父目录和子目录",
   ensure_same_name_text: "在每个子目录中补齐同名 .txt 文件",
   verify: "核对清单中的所有目标并返回结果",
@@ -30,6 +32,7 @@ type StepReceipt = NonNullable<DesktopTask["recentSteps"]>[number];
 const actionLabels: Record<StepReceipt["action"], string> = {
   locate_wecom: "定位企业微信",
   file_copy: "后台复制文件",
+  copy_attachment: "复制并核验附件",
   create_folders: "批量创建文件夹",
   create_notes: "核对同名文本文件",
   create_folders_and_notes: "创建并核验目录和同名文本",
@@ -55,12 +58,14 @@ function receiptAction(receipt: StepReceipt) {
 function receiptResult(receipt: StepReceipt) {
   if (receipt.action === "key" && receipt.fileShortcut === "paste" && receipt.verifiedAfterPaste)
     return "事后已核验";
-  if (["file_copy", "create_folders", "create_notes", "create_folders_and_notes"].includes(receipt.action) && receipt.result === "ok") return "已核验";
+  if (["file_copy", "copy_attachment", "create_folders", "create_notes", "create_folders_and_notes"].includes(receipt.action) && receipt.result === "ok") return "已核验";
   return resultLabels[receipt.result];
 }
 
 function handoffHint(task: DesktopTask, device?: DesktopDevice) {
   if (task.status !== "NEEDS_USER" && task.status !== "PAUSED") return;
+  if (task.nativeAction === "copy_folder_attachment")
+    return "请按任务提示核对目标目录和同名文件，再继续补齐附件。";
   if (task.nativeAction === "create_folders_with_notes")
     return "请核对任务提示中的目录或文件，处理后继续，客户端会补齐缺少的目录和同名文本。";
   if (task.nativeAction === "create_folder_notes")
@@ -163,6 +168,7 @@ export function AssistantDesktopTaskCard({
         </Tag>
         <strong>{task.instruction}</strong>
       </div>
+      {task.folderAttachment && <p>附件：{task.folderAttachment.name}</p>}
       <p role="status">{awaitingVerification
         ? "请保持所选电脑的最新版桌面端连接。接单后会自动检查目标文件，无需再次粘贴。"
         : task.stage}</p>
@@ -178,7 +184,7 @@ export function AssistantDesktopTaskCard({
           更新于 {new Date(task.updatedAt).toLocaleTimeString("zh-CN")}
         </time>
       </div>
-      {task.nativeAction === "create_folders_with_notes" && !!task.folderSteps?.length && (
+      {(task.nativeAction === "create_folders_with_notes" || task.nativeAction === "copy_folder_attachment") && !!task.folderSteps?.length && (
         <details className="assistant-desktop-plan">
           <summary>后台执行计划</summary>
           <ol>{task.folderSteps.map(step => <li key={step}>{folderStepLabels[step]}</li>)}</ol>

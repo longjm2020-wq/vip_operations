@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import sharp from "sharp";
 import {
   test,
   expect,
@@ -49,7 +50,12 @@ async function pairTestReceiver(
         "Idempotency-Key": randomUUID(),
       },
     });
-  return { deviceId, client, revoke };
+  const downloadAttachment = (taskId: string, authorizationId: string, attemptId: string) =>
+    request.get(desktop + "/client/tasks/" + taskId + "/folder-attachment", {
+      headers: { Authorization: "Bearer " + token },
+      params: { authorizationId, attemptId },
+    });
+  return { deviceId, client, downloadAttachment, revoke };
 }
 
 test("工作台自动区分记事本连续输入、普通提问与网页任务，回执绑定原窗口", async ({
@@ -608,3 +614,64 @@ test("整句建父目录、编号子目录和同名文本只投递一个后台�
     await revoke();
   }
 });
+
+// Use a generated image to exercise the real upload, chat and paired-device APIs.
+for (const mode of ["自动识别", "操作我的电脑"] as const) {
+  test(`工作台在${mode}模式下将附件和复制指令一起投递给指定电脑`, async ({ page, request, baseURL }) => {
+    const deviceName = mode + "附件测试电脑";
+    const { client, deviceId, downloadAttachment, revoke } = await pairTestReceiver(page, request, baseURL!, deviceName);
+    const receiving = { nativeActions: true, folderCreation: true, folderNotes: true, folderBatchNotes: true, folderAttachment: true };
+    const photo = await sharp({ create: { width: 3, height: 2, channels: 3, background: "#874b72" } }).jpeg().toBuffer();
+    const sha256 = createHash("sha256").update(photo).digest("hex");
+    const instruction = "把这张图复制到桌面 “测试自动化9999” 下的100个子文件夹（XUTI-01 至 XUTI-100），每个文件夹一份，保留图片原名。";
+    try {
+      const { authorizationId } = await client("authorization", { enabled: true });
+      await client("poll", receiving);
+      await page.goto("/my-workspace");
+      await selectAssistantPanel(page, "我的电脑");
+      await page.locator(".assistant-desktop-item").filter({ hasText: deviceName })
+        .getByRole("button", { name: "设为常用电脑" }).click();
+      const composer = page.locator(".assistant-compose:visible");
+      await composer.getByLabel("上传助理附件").setInputFiles({ name: "LOGO400.jpg", mimeType: "image/jpeg", buffer: photo });
+      await expect(composer.locator(".agent-attachments")).toContainText("LOGO400.jpg");
+      await composer.getByRole("textbox").fill("这张图是什么颜色？");
+      await expect(composer.locator(".assistant-draft-target")).toHaveText("普通对话");
+      await composer.getByRole("textbox").fill(instruction);
+      await expect(composer.locator(".assistant-draft-target")).toHaveText("操作我的电脑 · " + deviceName);
+      if (mode === "操作我的电脑") {
+        await composer.locator(".assistant-draft-target").click();
+        await page.getByRole("menuitem", { name: "操作我的电脑", exact: true }).click();
+      }
+      await client("poll", receiving);
+      await composer.getByRole("button", { name: "发送给个人助理" }).click();
+      const card = page.getByRole("region", { name: "电脑任务：" + instruction }).filter({ visible: true }).first();
+      await expect(card).toContainText("后台分发附件");
+      const { task } = await client("poll", receiving);
+      expect(task).toMatchObject({
+        deviceId, nativeAction: "copy_folder_attachment", folderSteps: ["copy_attachment", "verify"],
+        folderCreation: { parentName: "测试自动化9999", folderNames: Array.from({ length: 100 }, (_, i) => "XUTI-" + String(i + 1).padStart(2, "0")) },
+        folderAttachment: { name: "LOGO400.jpg", bytes: photo.length, sha256 },
+      });
+      const attemptId = task.folderCreationAttemptId;
+      const claim = { authorizationId, attemptId };
+      const control = "tasks/" + task.id + "/folder-creation";
+      await client(control, { ...claim, action: "start" });
+      expect((await downloadAttachment(task.id, authorizationId, randomUUID())).ok()).toBe(false);
+      const download = await downloadAttachment(task.id, authorizationId, attemptId);
+      await expect(download).toBeOK();
+      expect(await download.body()).toEqual(photo);
+      const complete = await client(control, { ...claim, action: "complete", verifiedCount: 100, sha256 });
+      expect(complete.recentSteps).toEqual([{ step: 1, action: "copy_attachment", result: "ok" }]);
+      await expect(card.getByRole("status")).toContainText("100", { timeout: 15000 });
+      await expect(card.getByRole("status")).toContainText("LOGO400.jpg");
+      expect((await downloadAttachment(task.id, authorizationId, attemptId)).ok()).toBe(false);
+      const conversation = await page.request.get("/api/v1/my-workspace/assistant");
+      const { messages } = (await conversation.json()).data;
+      expect(messages).toEqual(expect.arrayContaining([expect.objectContaining({
+        role: "user", text: instruction, attachments: [expect.objectContaining({ name: "LOGO400.jpg" })],
+      })]));
+    } finally {
+      await revoke();
+    }
+  });
+}

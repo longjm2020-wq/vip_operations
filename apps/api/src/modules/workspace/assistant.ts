@@ -21,7 +21,8 @@ import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import { desktopFileCopyIntent, mentionsDesktopFileCopy } from "../../../../../packages/contracts/src/desktop-file-copy.js";
-import { desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
+import { desktopFolderAttachmentRequest, desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent,
+  folderAttachmentGuidance, looksLikeDesktopFolderAttachment, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   assistantFollowupAnchor,
   classifyAssistantExecution,
@@ -174,6 +175,13 @@ export async function sendAssistant(
   requireAssistant(c);
   const body = parse(assistantSendSchema, input);
   const autoExecution = body.autoExecution === true;
+  const folderAttachment = desktopFolderAttachmentRequest(body.message);
+  if (autoExecution || body.desktopDeviceId) {
+    if (!folderAttachment && looksLikeDesktopFolderAttachment(body.message))
+      fail("INVALID_FOLDER_ATTACHMENT", folderAttachmentGuidance.format, 400);
+    if (folderAttachment && body.attachmentIds.length !== 1)
+      fail("FOLDER_ATTACHMENT_REQUIRED", folderAttachmentGuidance.attachment, 400);
+  }
   if (
     body.browserExecution &&
     (body.attachmentIds.length ||
@@ -188,7 +196,7 @@ export async function sendAssistant(
   if (
     !autoExecution &&
     body.desktopDeviceId &&
-    (body.attachmentIds.length ||
+    ((body.attachmentIds.length && !folderAttachment) ||
       body.webSearch ||
       (voice && !voice.desktopRequest))
   )
@@ -239,7 +247,7 @@ export async function sendAssistant(
     (last.attemptId ?? last.id) === existing.request_id &&
     hash(JSON.stringify({ ...body, requestId: existing.request_id, version: previousVersion })) === existing.request_hash;
   const direct =
-    autoExecution && !hasAttachments && !folderNotes
+    autoExecution && (!hasAttachments || !!folderAttachment) && !folderNotes
       ? await resolveAutomaticAssistantExecution(
           c,
           body.message,
@@ -335,7 +343,7 @@ export async function sendAssistant(
   // A failed reservation already contains the user's native file instruction. A new
   // HTTP attempt may resume it only with the same destination, attachment and mode
   // settings. Keep the task key even if the old queue commit lost its response.
-  const folderPlan = execution?.kind === "desktop" && (desktopFolderCompoundRequest(body.message)?.plan ?? desktopFolderCreationPlan(body.message));
+  const folderPlan = execution?.kind === "desktop" && (folderAttachment?.plan ?? desktopFolderCompoundRequest(body.message)?.plan ?? desktopFolderCreationPlan(body.message));
   const retryDesktop = !voice && execution?.kind === "desktop" && !execution.localBrowser &&
     (folderNotes || folderPlan || mentionsDesktopFileCopy(body.message)) && sameFailedTurn;
   const turnId = retryDesktop ? last.id : body.requestId;
@@ -420,6 +428,7 @@ export async function sendAssistant(
             deviceId: desktopExecution.deviceId,
             requestId: turnId,
             instruction: body.message,
+            ...(folderAttachment ? { attachmentIds: body.attachmentIds } : {}),
             model: folderNotes || folderPlan || desktopFileCopyIntent(body.message) || desktopFileCopyIntent(body.message, "macos")
               ? undefined
               : executionModel,

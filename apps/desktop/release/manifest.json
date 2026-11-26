@@ -1,20 +1,21 @@
 {
-  "version": "1.2.18",
+  "version": "1.2.19",
   "platform": "win-x64",
-  "sha256": "6e564d13443d6d26edbcc76f827beaadeda7f4d0b1b6262914d930acef593ec0",
+  "sha256": "4da056e1d4cff6192b3b769b43be3e94a80f1c64985c514a83fd6ba200d6ee1c",
   "sources": {
-    "apps/desktop/XutiDesktop.cs": "53578adeacf6997b9304682ddf93fb028287ab5be0409552a795064eafb6427f",
+    "apps/desktop/XutiDesktop.cs": "85c37008c6469a7e4589f483420f9d835c88ab6d77ecdb34f7911f0c51acca61",
     "apps/desktop/DesktopExplorer.cs": "36c1b7afd22364f0d810315ce8d6486991dc9759b808ef1bae6b2840dad8f156",
-    "apps/desktop/ExplorerCopy.cs": "38e9af3fd727778249d188f482eabdb9b4749fca09539a7d0aa76f630a14570f",
-    "apps/desktop/FolderCreation.cs": "2ead7fa31febf5b6dfd8958a0e41cd4762a31c4fe08ec605b0339a8217da08bc",
-    "apps/desktop/FilePlanRunner.cs": "fb5574cc251898fcf94c9e64572744fc6b2a9251413fa49a243bd628424243b7",
+    "apps/desktop/ExplorerCopy.cs": "df589684e65bbc8fd33eaafbca2026d302294cc03cb0c5df5c59cb9ba434b367",
+    "apps/desktop/FolderCreation.cs": "42b211154ef7cea897a248b8cdb546f8f2f189babcb63938eb66a750199f6448",
+    "apps/desktop/FolderAttachment.cs": "647973bc0d18df083b73c41d7f0b583737c53a0b7dd2aa4a418301c5a8873680",
+    "apps/desktop/FilePlanRunner.cs": "affcaf5c391d6def003ad15eda9c661511a6de7aa03769603a49fb017b0c0598",
     "apps/desktop/WeCom.cs": "fbf8f1f75a494dd258e3cce1096d168074ecc0b6770c5354829075ced69f1e87",
     "apps/desktop/DesktopShell.cs": "9971dd142efb05944f12f14ea02991168d4671125c389ad4265689e2447c2a31",
     "apps/desktop/app.manifest": "c58b06b9ed978a75dddc988e2e2fcde120675c3ac0554cc1e45b20076f3ee68d",
     "apps/desktop/启动小序.cmd": "4ea0d09b231966f86284ea78560ef38fa6ad7eb56d3312ba7f391fe3795e75ef",
-    "apps/desktop/README.txt": "3bdc8efea5876cd8ffc1787790743084320af03ab43cedebdf68ca7fd1c1277b",
-    "apps/desktop/version.json": "eaca9b8499b737ab4d0b72a07ee6ffbf1f6d78e39a0b635393ea5d73aa3c76f3",
-    "scripts/build-desktop.mjs": "91cf6c9bdbab482668074867bc31837cd393f642b6f388331b1f118e981ed156",
-    "scripts/desktop-artifact.mjs": "3f9e38ece4b298ee58e799a839af824ec593ff1defe44ae43ebec24c33775819"
+    "apps/desktop/README.txt": "30398488d4b0bda7e3e4a909c8cab3e8e35f1731cfe729b655662fdd46865ca0",
+    "apps/desktop/version.json": "0a9282f3d28836c0bcd462ea7b0c0afd6e44fe7bcbcf956dbaddd77ceea3a7c6",
+    "scripts/build-desktop.mjs": "a94bd92f206fbd10308222a045eb5110779814486308b9a2121a92ef7f01344e",
+    "scripts/desktop-artifact.mjs": "9ce3353e3fcc73946c68ba1ab407aea735d86ca3e70c7d99be3c9b958588d1fd"
   }
 }

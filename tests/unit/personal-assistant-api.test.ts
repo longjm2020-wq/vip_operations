@@ -10,10 +10,11 @@ import {
   vi,
 } from "vitest";
 import { readFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import type { Context } from "../../apps/api/src/core.js";
 import { resolveAutomaticAssistantExecution } from "../../apps/api/src/modules/workspace/assistant-execution.js";
+import { downloadFolderAttachment } from "../../apps/api/src/modules/workspace/desktop-attachment.js";
 import type { AssistantMessage } from "../../packages/contracts/src/personal-assistant.js";
 import { Readable } from "node:stream";
 import type { Request } from "express";
@@ -207,6 +208,7 @@ beforeAll(async () => {
     "121_desktop_folder_creation.sql",
     "122_desktop_folder_notes.sql",
     "123_desktop_folder_batch_notes.sql",
+    "124_desktop_folder_attachment.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -1045,6 +1047,86 @@ describe("assistant business tools and private memory", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
   const noteInstruction = "在每个子文件夹内新建一个记事本，命名按文件夹名命名";
+  const attachmentInstruction = '把这张图复制到桌面 “测试自动化9999” 下的100个子文件夹（XUTI-01 至 XUTI-100），每个文件夹一份，保留图片原名。';
+  const attachmentCapabilities = { nativeActions:true, folderCreation:true, folderAttachment:true };
+  async function attachmentDevice() {
+    const deviceId = randomUUID(), authorizationId = randomUUID();
+    await fixture.database!.query(`INSERT INTO assistant_desktop_devices
+      (id,user_id,name,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,authorization_id,folder_creation,folder_attachment)
+      VALUES($1,7,'样品室','s','t',now(),now(),true,$2,true,true)`, [deviceId,authorizationId]);
+    return {deviceId,authorizationId};
+  }
+  it.each([true,false])("delivers only the selected real attachment on the active paired attempt (automatic %s)", async automatic => {
+    const { deviceId, authorizationId } = await attachmentDevice(), c = actor();
+    const bytes = await sharp({create:{width:4,height:3,channels:3,background:"blue"}}).png().toBuffer();
+    const file = await saveAgentFile(c, "样衣核对图.png", "image/png", bytes, automatic ? "upload" : "generated");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const request = { ...input(), message:attachmentInstruction, desktopDeviceId:deviceId, attachmentIds:[file.id],
+      ...(automatic ? { autoExecution:true } : {}) };
+    const reply = await sendAssistant(c, request);
+    const taskId = reply.messages.at(-1)?.desktopTaskId!;
+    expect(taskId).toEqual(expect.any(String));
+    expect(reply.messages.at(-2)?.attachments).toMatchObject([{id:file.id,name:file.name}]);
+    expect((await sendAssistant(c,request)).messages.at(-1)?.desktopTaskId).toBe(taskId);
+    const poll = async () => (await pollDesktop(c,deviceId,false,attachmentCapabilities)).task!;
+    expect((await pollDesktop(c,deviceId,false,{nativeActions:true,folderCreation:true})).task).toBeNull();
+    const delivery = await poll();
+    expect(delivery).toMatchObject({nativeAction:"copy_folder_attachment",folderSteps:["copy_attachment","verify"],
+      folderAttachment:{name:file.name,bytes:bytes.length,sha256},folderCreation:{parentName:"测试自动化9999"}});
+    expect(delivery.folderCreation?.folderNames).toHaveLength(100);
+    const first = { authorizationId, attemptId: delivery.folderCreationAttemptId };
+    await expect(downloadFolderAttachment(c, deviceId, taskId, first)).rejects.toThrow();
+    await controlFolderCreation(c,deviceId,taskId,{action:"start",...first});
+    expect(await downloadFolderAttachment(c,deviceId,taskId,first)).toEqual(bytes);
+    await expect(downloadFolderAttachment(actor("8"),deviceId,taskId,first)).rejects.toThrow();
+    await expect(downloadFolderAttachment(c,randomUUID(),taskId,first)).rejects.toThrow();
+    await expect(downloadFolderAttachment(c,deviceId,taskId,{...first,authorizationId:randomUUID()})).rejects.toThrow();
+    await expect(deleteAgentFile(c,file.id)).rejects.toThrow();
+    await desktopControl(c,taskId,{action:"pause"});
+    await expect(downloadFolderAttachment(c,deviceId,taskId,first)).rejects.toThrow();
+    await expect(deleteAgentFile(c,file.id)).rejects.toThrow();
+    await desktopControl(c,taskId,{action:"resume"});
+    const next = { authorizationId, attemptId:(await poll()).folderCreationAttemptId };
+    await controlFolderCreation(c,deviceId,taskId,{action:"start",...next});
+    await expect(downloadFolderAttachment(c,deviceId,taskId,first)).rejects.toThrow();
+    expect(await downloadFolderAttachment(c,deviceId,taskId,next)).toEqual(bytes);
+    const complete = {action:"complete",...next,verifiedCount:100,sha256};
+    await expect(controlFolderCreation(c,deviceId,taskId,{...complete,sha256:"0".repeat(64)})).rejects.toThrow();
+    await expect(controlFolderCreation(c,deviceId,taskId,{...complete,verifiedCount:99})).rejects.toThrow();
+    const done = await controlFolderCreation(c,deviceId,taskId,complete);
+    expect(done).toMatchObject({status:"DONE",confirmedSteps:1,recentSteps:[{action:"copy_attachment",result:"ok"}]});
+    await expect(downloadFolderAttachment(c,deviceId,taskId,next)).rejects.toThrow();
+    expect(await controlFolderCreation(c,deviceId,taskId,complete)).toEqual(done);
+    expect(await deleteAgentFile(c,file.id)).toEqual({deleted:true});
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("refuses missing, foreign or ambiguous files and malformed targets without queuing foreground work", async () => {
+    const { deviceId } = await attachmentDevice(), c = actor();
+    const own = await saveAgentFile(c,"样品.txt","text/plain",Buffer.from("ok"),"upload");
+    const other = await saveAgentFile(actor("8"),"样品.txt","text/plain",Buffer.from("other"),"upload");
+    const queue = (message:string, ids:string[]) => queueDesktopTask(c,{deviceId,requestId:randomUUID(),instruction:message,attachmentIds:ids});
+    await expect(queue(attachmentInstruction,[])).rejects.toThrow();
+    await expect(queue(attachmentInstruction,[own.id,other.id])).rejects.toThrow();
+    await expect(queue(attachmentInstruction,[own.id])).rejects.toThrow();
+    const textRequest = attachmentInstruction.replace("这张图","这个附件").replace("图片原名","附件原名");
+    await expect(queue(textRequest,[other.id])).rejects.toThrow();
+    await expect(queue(textRequest.replace("XUTI-100","XUTI-99"),[own.id])).rejects.toThrow();
+    expect((await fixture.database!.query("SELECT id FROM assistant_desktop_tasks")).rows).toHaveLength(0);
+    const task = await queue(textRequest,[own.id]);
+    await desktopControl(c,task.id,{action:"stop"});
+    expect(await deleteAgentFile(c,own.id)).toEqual({deleted:true});
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("keeps an image analysis request with automatic routing in ordinary chat", async () => {
+    const bytes = await sharp({create:{width:4,height:3,channels:3,background:"green"}}).png().toBuffer();
+    const file = await saveAgentFile(actor(),"样衣.png","image/png",bytes,"upload");
+    const reply = await sendAssistant(actor(),{...input(),autoExecution:true,message:"请分析这张图的主要颜色",attachmentIds:[file.id]});
+    expect(reply.state).toBe("IDLE");
+    expect(reply.messages.at(-2)?.attachments).toMatchObject([{id:file.id}]);
+    expect(reply.messages.at(-1)?.desktopTaskId).toBeUndefined();
+    expect((await fixture.database!.query("SELECT id FROM assistant_desktop_tasks")).rows).toHaveLength(0);
+    expect(fetch).toHaveBeenCalled();
+  });
   it.each([true,false])("routes an explicit parent-folder, child-folder and txt instruction as one native job (automatic %s)", async automatic => {
     const deviceId = randomUUID(), authorization = randomUUID();
     await fixture.database!.exec("UPDATE compass_ai_settings SET enabled=false,verified_at=NULL");

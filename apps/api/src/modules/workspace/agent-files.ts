@@ -77,6 +77,9 @@ const mimeByExt: Record<string, string> = {
   ".mov": "video/quicktime",
   ".webm": "video/webm",
 };
+export function isSupportedUpload(name: string, mime: string) {
+  return mimeByExt[extname(name).toLowerCase()] === mime;
+}
 export const agentFileView = (r: Row): AgentFile => ({
   id: r.id,
   name: r.name,
@@ -653,20 +656,19 @@ export async function listAgentFiles(c: Context) {
   return items.map(agentFileView);
 }
 export async function deleteAgentFile(c: Context, id: string) {
-  await ownedAgentFiles(c, [id]);
-  const busy = await one(
-    db,
-    "SELECT id FROM public.personal_assistant_jobs WHERE user_id=$1::bigint AND status IN ('QUEUED','RUNNING') AND input::text LIKE $2 LIMIT 1",
-    c.actor.id,
-    `%${id}%`,
-  );
-  if (busy) fail("FILE_BUSY", "文件仍被任务使用，完成后可删除", 409);
-  await db.$executeRawUnsafe(
-    "DELETE FROM public.personal_assistant_files WHERE id=$1::uuid AND user_id=$2::bigint",
-    id,
-    c.actor.id,
-  );
-  return { deleted: true };
+  requireAssistant(c);
+  if (!z.string().uuid().safeParse(id).success) fail("FILE_INVALID", "附件标识无效", 400);
+  return db.$transaction(async tx => {
+    const file = await one(tx, "SELECT id FROM public.personal_assistant_files WHERE id=$1::uuid AND user_id=$2::bigint FOR UPDATE", id, c.actor.id);
+    if (!file) fail("FILE_NOT_FOUND", "附件不存在或不属于当前账号", 404);
+    const busy = await one(tx, `SELECT id FROM public.personal_assistant_jobs WHERE user_id=$1::bigint
+        AND status IN ('QUEUED','RUNNING') AND input::text LIKE $2
+      UNION ALL SELECT id FROM assistant_desktop_tasks WHERE user_id=$1::bigint AND folder_attachment_id=$3::uuid
+        AND status IN ('WAITING','RUNNING','PAUSED','NEEDS_USER') LIMIT 1`, c.actor.id, `%${id}%`, id);
+    if (busy) fail("FILE_BUSY", "文件仍被任务使用，请完成或停止任务后再删除。", 409);
+    await tx.$executeRawUnsafe("DELETE FROM public.personal_assistant_files WHERE id=$1::uuid AND user_id=$2::bigint", id, c.actor.id);
+    return { deleted: true };
+  });
 }
 export async function downloadAgentFile(
   c: Context,

@@ -56,8 +56,8 @@ static class FilePlanRunner {
             RedirectStandardInput=true,RedirectStandardOutput=true,StandardOutputEncoding=utf8
         });
     }
-    static void SendScript(Process child,Dictionary<string,object> plan,string[] steps,string fixture) {
-        var bytes=utf8.GetBytes(Serializer().Serialize(new {steps,plan,fixture}));
+    static void SendScript(Process child,Dictionary<string,object> plan,string[] steps,string fixture,Native.FolderAttachment source=null) {
+        var bytes=utf8.GetBytes(Serializer().Serialize(new {steps,plan,fixture,attachment=source==null?null:source.Descriptor}));
         if(bytes.Length>MaxBytes)throw new IOException("文件执行脚本过长。");
         var pipe=child.StandardInput.BaseStream;
         byte[] length=BitConverter.GetBytes(bytes.Length);
@@ -81,6 +81,11 @@ static class FilePlanRunner {
                     var message=AssistantForm.D(Serializer().DeserializeObject(utf8.GetString(bytes)));
                     string[] steps=ReadSteps(message["steps"]);
                     var plan=AssistantForm.D(message["plan"]);
+                    Native.FolderAttachment source=null;
+                    if(message.ContainsKey("attachment") && message["attachment"]!=null) {
+                        source=new Native.FolderAttachment(AssistantForm.D(message["attachment"]));
+                        source.SetContent(input.ReadBytes(source.Length));
+                    }
                     string fixture=AssistantForm.S(message,"fixture");
                     if(!fixtureMode && fixture.Length!=0)throw new IOException("脚本只允许操作本机桌面。");
                     string root=fixtureMode?FixtureRoot(fixture):Native.UserDesktop();
@@ -96,7 +101,7 @@ static class FilePlanRunner {
                     var elapsed=Stopwatch.StartNew();
                     Func<Task> check=()=>{
                         closed.Token.ThrowIfCancellationRequested();
-                        if(elapsed.Elapsed.TotalSeconds>=MaxSeconds)throw new TimeoutException("后台脚本执行超时。");
+                        if(elapsed.Elapsed.TotalSeconds>=(source==null?MaxSeconds:1800))throw new TimeoutException("后台脚本执行超时。");
                         return Task.FromResult(0);
                     };
                     int count=Native.ExecuteFilePlan(root,plan,steps,check,op=>{
@@ -104,7 +109,7 @@ static class FilePlanRunner {
                         byte permit;
                         if(!permits.TryTake(out permit,15000,closed.Token))throw new TimeoutException("等待本机任务授权超时。");
                         closed.Token.ThrowIfCancellationRequested();
-                    }).GetAwaiter().GetResult();
+                    },source).GetAwaiter().GetResult();
                     output.WriteLine("DONE "+count.ToString(CultureInfo.InvariantCulture));
                 }
                 return 0;
@@ -116,7 +121,7 @@ static class FilePlanRunner {
         }
     }
 
-    internal static async Task<int> Run(Dictionary<string,object> plan,string[] steps,Func<Task> check,CancellationToken stop,string fixture=null) {
+    internal static async Task<int> Run(Dictionary<string,object> plan,string[] steps,Func<Task> check,CancellationToken stop,string fixture=null,Native.FolderAttachment attachment=null) {
         stop.ThrowIfCancellationRequested();await check();
         using(var job=WorkerJob())
         using(var child=Start(fixture!=null)) {
@@ -124,11 +129,16 @@ static class FilePlanRunner {
                 if(!AssignProcessToJobObject(job,child.Handle))throw new IOException("无法约束后台脚本进程，已停止任务。");
                 using(stop.Register(job.Dispose)) {
                     stop.ThrowIfCancellationRequested();
-                    SendScript(child,plan,steps,fixture);
+                    SendScript(child,plan,steps,fixture,attachment);
+                    if(attachment!=null) {
+                        var pipe=child.StandardInput.BaseStream;
+                        await pipe.WriteAsync(attachment.Content,0,attachment.Length,stop);
+                        await pipe.FlushAsync(stop);
+                    }
                     var elapsed=Stopwatch.StartNew();
                     Func<Task> checkpoint=async()=>{
                         stop.ThrowIfCancellationRequested();
-                        if(elapsed.Elapsed.TotalSeconds>=MaxSeconds)throw new TimeoutException("后台脚本执行超时。");
+                        if(elapsed.Elapsed.TotalSeconds>=(attachment==null?MaxSeconds:1800))throw new TimeoutException("后台脚本执行超时。");
                         await check();
                     };
                     int next=0;
@@ -175,6 +185,7 @@ static class FilePlanRunner {
             plan["parentName"]="compound";
             if(run(Native.FolderSteps(Native.CreateFoldersWithNotes))!=2 ||
                 names.Any(n=>!File.Exists(Path.Combine(root,"compound",n,n+".txt"))))throw new Exception("Compound script did not produce the verified pairs");
+            TestAttachmentScript(root,fixture,plan,names);
             plan["parentName"]="invalid";
             try{run(new[]{"ensure_directories","unknown","verify"});throw new Exception("Unknown instruction was accepted");}
             catch(IOException){}
@@ -209,6 +220,38 @@ static class FilePlanRunner {
             }
             Directory.Delete(root);
         }
+    }
+
+    static void TestAttachmentScript(string root,string fixture,Dictionary<string,object> plan,string[] names) {
+        var source=new Native.FolderAttachment(new Dictionary<string,object>{{"name","测试附件.txt"},{"bytes",3},{"sha256","ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}});
+        try{source.SetContent(Encoding.ASCII.GetBytes("bad"));throw new Exception("Incorrect source hash accepted");}catch(IOException){}
+        source.SetContent(Encoding.ASCII.GetBytes("abc"));
+        string[] files=names.Select(n=>Path.Combine(root,"compound",n,source.Name)).ToArray();
+        string[] steps=Native.FolderSteps(Native.CopyAttachment);
+        Func<int> run=()=>Run(plan,steps,()=>Task.FromResult(0),CancellationToken.None,fixture,source).GetAwaiter().GetResult();
+        try {
+            plan["folderNames"]=new[]{names[0],"absent"};
+            try{run();throw new Exception("Created a missing attachment destination");}catch(IOException){}
+            if(File.Exists(files[0]) || Directory.Exists(Path.Combine(root,"compound","absent")))throw new Exception("Missing directory changed a sibling");
+            plan["folderNames"]=names;
+            File.WriteAllText(files[1],"old");
+            try{run();throw new Exception("Different same-size content accepted");}catch(IOException){}
+            if(File.Exists(files[0]) || File.ReadAllText(files[1])!="old")throw new Exception("Attachment preflight overwrote or partially populated target");
+            File.Delete(files[1]);
+            string phase="";int writes=0;
+            try {
+                Native.ExecuteFilePlan(root,plan,steps,()=>{
+                    if(phase=="copy_attachment" && ++writes==4)throw new OperationCanceledException();
+                    return Task.FromResult(0);
+                },op=>phase=op,source).GetAwaiter().GetResult();
+                throw new Exception("Attachment cancellation ignored");
+            } catch(OperationCanceledException) {}
+            if(files.Any(File.Exists) || names.Any(n=>Directory.GetFiles(Path.Combine(root,"compound",n),".xuti-attachment-*.tmp").Length!=0))
+                throw new Exception("An interrupted attachment left temporary or partial data");
+            if(run()!=names.Length || files.Any(p=>!File.ReadAllBytes(p).SequenceEqual(source.Content)))throw new Exception("Bad file attachment copy");
+            DateTime stamp=File.GetLastWriteTimeUtc(files[0]);
+            if(run()!=names.Length || File.GetLastWriteTimeUtc(files[0])!=stamp)throw new Exception("Retry rewrote an existing attachment");
+        } finally {plan["folderNames"]=names;foreach(string file in files)File.Delete(file);}
     }
 }
 }

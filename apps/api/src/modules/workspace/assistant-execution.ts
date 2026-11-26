@@ -8,9 +8,9 @@ import {
 } from "../../../../../packages/contracts/src/assistant-execution.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
 import {
-  desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent,
-  folderCompoundGuidance, folderCreationGuidance, folderNotesGuidance,
-  looksLikeDesktopFolderCompound, looksLikeDesktopFolderCreation, looksLikeDesktopFolderNotes,
+  desktopFolderAttachmentRequest, desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent,
+  folderAttachmentGuidance, folderCompoundGuidance, folderCreationGuidance, folderNotesGuidance,
+  looksLikeDesktopFolderAttachment, looksLikeDesktopFolderCompound, looksLikeDesktopFolderCreation, looksLikeDesktopFolderNotes,
 } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   desktopFileCopyIntent,
@@ -133,10 +133,13 @@ export async function resolveAutomaticAssistantExecution(
     return { kind: "clarify", message: desktopFolderNotesIntent(instruction) ? folderNotesGuidance.source : folderNotesGuidance.format };
   const windowsCopy = desktopFileCopyIntent(instruction);
   const macCopy = desktopFileCopyIntent(instruction, "macos");
+  const attachment = desktopFolderAttachmentRequest(instruction);
+  if (!attachment && looksLikeDesktopFolderAttachment(instruction))
+    fail("INVALID_FOLDER_ATTACHMENT", folderAttachmentGuidance.format, 400);
   const compound = desktopFolderCompoundRequest(instruction);
-  if (!compound && looksLikeDesktopFolderCompound(instruction))
+  if (!attachment && !compound && looksLikeDesktopFolderCompound(instruction))
     fail("INVALID_FOLDER_COMPOUND", folderCompoundGuidance.format, 400);
-  const folderPlan = compound?.plan ?? desktopFolderCreationPlan(instruction);
+  const folderPlan = attachment?.plan ?? compound?.plan ?? desktopFolderCreationPlan(instruction);
   if (!folderPlan && looksLikeDesktopFolderCreation(instruction))
     fail("INVALID_FOLDER_CREATION", folderCreationGuidance.format, 400);
   if (!folderPlan && !windowsCopy && !macCopy && requestsBackgroundDesktopExecution(instruction))
@@ -196,7 +199,7 @@ export async function resolveAutomaticAssistantExecution(
   if (!deviceName && !preferredDeviceId)
     return {
       kind: "clarify",
-      message: folderPlan ? folderCreationGuidance.platform : filePlatform
+      message: attachment ? folderAttachmentGuidance.platform : folderPlan ? folderCreationGuidance.platform : filePlatform
         ? `请在右侧「我的电脑」选择执行复制的 ${filePlatform === "macos" ? "Mac" : "Windows 电脑"}，设为常用电脑后再发送。`
         : target.localBrowser
           ? "请在右侧「我的电脑」连接并选择运行小序桌面端的设备，再在右侧浏览器打开本地网页。"
@@ -205,7 +208,7 @@ export async function resolveAutomaticAssistantExecution(
 
   const devices = await rows(
     db,
-    `SELECT id,name,platform,native_actions,desktop_folder_copy,background_file_copy,folder_creation,folder_batch_notes,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
+    `SELECT id,name,platform,native_actions,desktop_folder_copy,background_file_copy,folder_creation,folder_batch_notes,folder_attachment,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
             coalesce(last_seen_at > now() - interval '20 seconds', false) AS online
        FROM assistant_desktop_devices
       WHERE user_id = $1::bigint AND token_hash IS NOT NULL
@@ -233,7 +236,9 @@ export async function resolveAutomaticAssistantExecution(
   if (windowsCopy?.destinationKind && devices[0].platform !== "windows")
     fail("DEVICE_PLATFORM_MISMATCH", desktopFolderCopyGuidance.platform, 400);
   if (folderPlan && devices[0].platform !== "windows")
-    fail("DEVICE_PLATFORM_MISMATCH", folderCreationGuidance.platform, 400);
+    fail("DEVICE_PLATFORM_MISMATCH", attachment ? folderAttachmentGuidance.platform : folderCreationGuidance.platform, 400);
+  if (attachment && !devices[0].folder_attachment)
+    fail("FOLDER_ATTACHMENT_UPDATE_REQUIRED", folderAttachmentGuidance.update, 409);
   if (compound && !devices[0].folder_batch_notes)
     fail("FOLDER_COMPOUND_UPDATE_REQUIRED", folderCompoundGuidance.update, 409);
   if (folderPlan && !devices[0].folder_creation)

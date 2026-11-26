@@ -222,7 +222,7 @@ static partial class Native {
         }
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileInformationByHandle(SafeFileHandle handle,int infoClass,IntPtr data,uint size);
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileTime(SafeFileHandle handle,IntPtr created,IntPtr accessed,ref long lastWrite);
-        static void PublishFile(SafeFileHandle handle,string path) {
+        internal static void PublishFile(SafeFileHandle handle,string path) {
             byte[] name=Encoding.Unicode.GetBytes(path);
             int lengthOffset=IntPtr.Size*2,header=lengthOffset+4;
             var rename=new byte[header+name.Length];
@@ -238,6 +238,13 @@ static partial class Native {
             var flag=GCHandle.Alloc(new byte[]{1},GCHandleType.Pinned);
             try {SetFileInformationByHandle(handle,4,flag.AddrOfPinnedObject(),1);}
             finally {flag.Free();}
+        }
+        internal static void StagingDisposition(SafeFileHandle handle,bool delete) {
+            var flag=GCHandle.Alloc(new byte[]{delete?(byte)1:(byte)0},GCHandleType.Pinned);
+            try {
+                if(!SetFileInformationByHandle(handle,4,flag.AddrOfPinnedObject(),1))
+                    throw new IOException("无法保护附件的临时文件（Windows "+Marshal.GetLastWin32Error()+"）。");
+            } finally {flag.Free();}
         }
         internal static SafeFileHandle OpenDirectoryHandle(string path,uint share) {
             return CreateFileW(path,0x80,share,IntPtr.Zero,3,0x02200000,IntPtr.Zero);

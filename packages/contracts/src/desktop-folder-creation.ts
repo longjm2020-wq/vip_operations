@@ -3,18 +3,29 @@ import { z } from "zod";
 const maximumFolders = 100;
 const reservedWindowsName =
   /^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(?:COM|LPT)[1-9¹²³])$/iu;
-const folderNameSchema = z
-  .string()
-  .min(1)
-  .max(100)
-  .refine(
-    (name) =>
-      name === name.trim() &&
-      !name.startsWith(".") &&
-      !name.endsWith(".") &&
-      !/[\\/:*?"<>|\p{Cc}\p{Cf}]/u.test(name) &&
-      !reservedWindowsName.test(name.split(".", 1)[0].trimEnd()),
+function safeWindowsName(name: string): boolean {
+  return (
+    name === name.trim() &&
+    !name.startsWith(".") &&
+    !name.endsWith(".") &&
+    !/[\\/:*?"<>|\p{Cc}\p{Cf}]/u.test(name) &&
+    !reservedWindowsName.test(name.split(".", 1)[0].trimEnd())
   );
+}
+
+const folderNameSchema = z.string().min(1).max(100).refine(safeWindowsName);
+
+export const maxDesktopFolderAttachmentBytes = 64 * 1024 * 1024;
+export const desktopFolderAttachmentSchema = z
+  .object({
+    name: z.string().min(1).max(180).refine(safeWindowsName),
+    bytes: z.number().int().min(1).max(maxDesktopFolderAttachmentBytes),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
+export type DesktopFolderAttachment = z.infer<
+  typeof desktopFolderAttachmentSchema
+>;
 
 export const desktopFolderCreationPlanSchema = z
   .object({
@@ -36,7 +47,7 @@ export type DesktopFolderCreationPlan = z.infer<
 >;
 
 export type DesktopFolderStep =
-  "ensure_directories" | "ensure_same_name_text" | "verify";
+  "ensure_directories" | "ensure_same_name_text" | "copy_attachment" | "verify";
 
 type DesktopFolderRequest = {
   plan: DesktopFolderCreationPlan;
@@ -55,6 +66,8 @@ export function desktopFolderSteps(
       return ["ensure_same_name_text", "verify"];
     case "create_folders_with_notes":
       return ["ensure_directories", "ensure_same_name_text", "verify"];
+    case "copy_folder_attachment":
+      return ["copy_attachment", "verify"];
   }
 }
 
@@ -81,6 +94,16 @@ export const folderCompoundGuidance = {
     "请写明桌面父文件夹、所需子文件夹名称或连续编号，以及每个子文件夹建立一个同名空白文本文档。其他操作请单独下达。",
   update:
     "请更新所选 Windows 电脑的小序桌面端并重新连接，以便在同一任务中后台批量建目录和同名文本文档。",
+} as const;
+
+export const folderAttachmentGuidance = {
+  format:
+    "请随消息附上一份文件，写明桌面父文件夹和已存在的子文件夹名称或编号范围，例如「把这张图复制到桌面『样品』下的 10 个子文件夹（XUTI-01 至 XUTI-10），每个文件夹一份，保留原名」。",
+  attachment:
+    "请在这条消息中只附上一份要复制的文件。如果指令写的是图片，请附上一张图片。",
+  platform: "请在「我的电脑」选择有这些桌面文件夹的 Windows 电脑。",
+  update:
+    "请更新所选 Windows 电脑的小序桌面端并重新连接，以便在后台批量复制聊天附件。",
 } as const;
 
 const politePrefix = /^(?:小序[，,、\s]*)?(?:(?:请你?|帮我|替我|麻烦你?)\s*)*/u;
@@ -437,4 +460,115 @@ export function desktopFolderCompoundRequest(
   const notes = desktopFolderNotesSteps(compound.notes);
   if (folders && notes)
     return { ...folders, steps: [...folders.steps.slice(0, -1), ...notes] };
+}
+
+const attachmentComputerScope =
+  /^在\s*(?:我的电脑|这台电脑|本机|本地(?:电脑)?|Windows(?:电脑)?)(?:上|中|里)?\s*[，,：:]?\s*/iu;
+const imageReference = String.raw`(?:这(?:一)?张(?:图(?:片|像)?|照片|截[图屏])|这(?:个|幅)图(?:片|像)?|(?:当前|本条|上述|附件)图片|(?:随附|上传)(?:的)?图片)`;
+const attachmentReference = String.raw`(?:这(?:一)?(?:个|份)(?:附件|文件|文档)|(?:这|本)条(?:消息)?(?:里|中|附上)?的?(?:附件|文件)|(?:当前|随附|上传)(?:的)?(?:附件|文件)|附件)`;
+const attachmentCopy = String.raw`(?:分别|逐一|批量)?\s*(?:复制|拷贝|分发)`;
+const attachmentDestination = String.raw`(?:到|至|进(?:入)?)\s*(.+)`;
+function attachmentCopyCommand(reference: string) {
+  return new RegExp(
+    String.raw`^(?:(?:把|将)\s*(${reference})\s*${attachmentCopy}|\s*${attachmentCopy}\s*(${reference}))\s*${attachmentDestination}$`,
+    "u",
+  );
+}
+const attachmentCommand = attachmentCopyCommand(
+  `${imageReference}|${attachmentReference}`,
+);
+const possibleAttachmentCommand = attachmentCopyCommand(
+  `${imageReference}|${attachmentReference}|(?:这些|全部|所有)(?:图片|图|附件|文件)|(?:本条|这条)(?:消息的?)?(?:全部|所有)(?:图片|附件|文件)`,
+);
+const attachmentTargets = new RegExp(
+  String.raw`^(?:(?:的\s*)?(?:父)?(?:文件夹|目录)\s*)?(${nameToken})\s*(?:(?:下(?:面)?|里(?:面)?|中|内(?:部)?)(?:的)?|的)\s*(?:以下|指定的?)?\s*(?:(${clauseNumber})\s*个\s*)?(?:子文件夹|子目录)\s*(.*)$`,
+  "u",
+);
+const attachmentCopySuffix =
+  /(?:[，,、；;]\s*(?:(?:每(?:一)?个(?:子文件夹|文件夹|子目录|目录)?|各(?:个)?(?:子文件夹|文件夹|子目录|目录)?)\s*(?:(?:各|都)?(?:放|复制|拷贝|放入)?\s*)?(?:一|1|１)份|保留(?:图片|附件|文件)?(?:的)?(?:原(?:始)?(?:文件名|名称)|原名)))+$/u;
+const desktopClientSurface = /桌面(?:端|版|浏览器|网页|应用)/u;
+
+function readAttachmentCopy(text: string) {
+  const clauses = joinFolderClauses(text);
+  if (!clauses) return;
+  let command = clauses.command
+    .trim()
+    .replace(politePrefix, "")
+    .replace(backgroundPrefix, "");
+  const device = attachmentComputerScope.test(command)
+    ? null
+    : devicePrefix.exec(command);
+  if (device) command = command.slice(device[0].length);
+  command = command
+    .replace(attachmentComputerScope, "")
+    .replace(backgroundPrefix, "")
+    .replace(politePrefix, "")
+    .replace(/[。!！]$/u, "")
+    .trimEnd()
+    .replace(trailingExecutionMode, "");
+  const outside = command.replace(quotation, "");
+  if (
+    questionOrDiscussion.test(outside) ||
+    /(?:为什么|是不是|能不能|要不要|会不会|可否|有没有)/u.test(outside)
+  )
+    return;
+  return {
+    ordered: clauses.ordered,
+    command,
+    deviceName: device?.slice(1).find(Boolean)?.trim(),
+  };
+}
+
+/** Detects attempted attachment distribution before the user selects a file or completes the target list. */
+export function looksLikeDesktopFolderAttachment(text: string): boolean {
+  const request = readAttachmentCopy(text);
+  const copy = request && possibleAttachmentCommand.exec(request.command);
+  if (!copy) return false;
+  const destinations = copy[3].replace(quotation, "");
+  if (desktopClientSurface.test(destinations)) return false;
+  return (
+    desktopPrefix.test(copy[3]) ||
+    (!/(?:浏览器|网盘|网站|云端|站内)/u.test(destinations) &&
+      /(?:子文件夹|子目录)/u.test(destinations))
+  );
+}
+
+export function desktopFolderAttachmentRequest(
+  text: string,
+): (DesktopFolderRequest & { source: "image" | "attachment" }) | undefined {
+  const request = readAttachmentCopy(text);
+  if (!request?.ordered) return;
+  const copy = attachmentCommand.exec(request.command);
+  if (!copy) return;
+  if (desktopClientSurface.test(copy[3].replace(quotation, ""))) return;
+  const scope = desktopPrefix.exec(copy[3]);
+  if (!scope) return;
+  const targets = attachmentTargets.exec(copy[3].slice(scope[0].length));
+  if (!targets) return;
+
+  const count = countFolders(targets[2]);
+  const list = targets[3].replace(attachmentCopySuffix, "").trim();
+  const wrapped = /^(?:（(.+)）|\((.+)\))$/u.exec(list);
+  const names = wrapped?.[1] ?? wrapped?.[2] ?? list.replace(/^[：:]\s*/u, "");
+  const outside = names.replace(quotation, "");
+  if (
+    /(?:^|[，,；;]\s*)(?:并|再|然后|且|也)?(?:每(?:一)?个|保留(?:图片|附件|文件)?(?:的)?原|不保留|重命名|改名|另存)/u.test(
+      outside,
+    )
+  )
+    return;
+  const folderNames = parseFolderNames(names.trim(), count);
+  if (!folderNames || (count !== undefined && count !== folderNames.length))
+    return;
+  const plan = desktopFolderCreationPlanSchema.safeParse({
+    parentName: unquote(targets[1]),
+    folderNames,
+  });
+  if (!plan.success) return;
+  return {
+    plan: plan.data,
+    deviceName: request.deviceName,
+    steps: ["copy_attachment", "verify"],
+    source: /图|照片|截屏/u.test(copy[1] ?? copy[2]) ? "image" : "attachment",
+  };
 }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  desktopFolderAttachmentRequest,
+  desktopFolderAttachmentSchema,
   desktopFolderCompoundRequest,
   desktopFolderCreationPlan,
   desktopFolderCreationPlanSchema,
@@ -7,6 +9,7 @@ import {
   desktopFolderNotesIntent,
   desktopFolderNotesSteps,
   desktopFolderSteps,
+  looksLikeDesktopFolderAttachment,
   looksLikeDesktopFolderCompound,
   looksLikeDesktopFolderCreation,
   looksLikeDesktopFolderNotes,
@@ -146,6 +149,148 @@ describe("Windows Desktop folder creation plans", () => {
         parentName: "parent",
         folderNames: [name],
       }).success,
+    ).toBe(false);
+  });
+});
+
+describe("one uploaded file copied to explicitly named desktop child folders", () => {
+  const source =
+    "把这张图复制到桌面 “测试自动化9999” 下的100个子文件夹（XUTI-01 至 XUTI-100），每个文件夹一份，保留图片原名。";
+  const steps = ["copy_attachment", "verify"];
+  const folderNames = Array.from(
+    { length: 100 },
+    (_, index) => `XUTI-${String(index + 1).padStart(2, "0")}`,
+  );
+
+  it.each([
+    source,
+    source.replace(/[ “”]/gu, "").replace("（", "(").replace("）", ")"),
+    "请在后台静默执行：" + source,
+    "复制这张图到桌面文件夹「测试自动化9999」的 100 个子目录：XUTI-01 至 XUTI-100，保留原名",
+  ])("compiles the image request as one two-operation plan: %s", (text) => {
+    expect(desktopFolderAttachmentRequest(text)).toEqual({
+      source: "image",
+      deviceName: undefined,
+      plan: { parentName: "测试自动化9999", folderNames },
+      steps,
+    });
+    expect(looksLikeDesktopFolderAttachment(text)).toBe(true);
+    expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
+    expect(shouldSearchAssistantPublicWeb(text, { explicitSearch: true })).toBe(
+      false,
+    );
+  });
+
+  it("preserves the named device and literal names for an ordinary attachment", () => {
+    const text =
+      "在设备「样品电脑」上，将这份附件分别复制到桌面目录『资料』的两个子目录（「春、夏」和商品 A），各文件夹一份，保留原始文件名。";
+    expect(desktopFolderAttachmentRequest(text)).toEqual({
+      source: "attachment",
+      deviceName: "样品电脑",
+      plan: { parentName: "资料", folderNames: ["春、夏", "商品 A"] },
+      steps,
+    });
+    expect(classifyAssistantExecution(text)).toEqual({
+      kind: "desktop",
+      deviceName: "样品电脑",
+    });
+  });
+
+  it.each([
+    ["把附件图片复制", "image"],
+    ["把这个文件复制", "attachment"],
+    ["把这份文档复制", "attachment"],
+    ["把上传的图片复制", "image"],
+    ["将这张图片分发", "image"],
+  ])(
+    "binds the singular reference without changing the original-name rule: %s",
+    (command, kind) => {
+      const text =
+        command +
+        "到桌面「样品」下的两个子目录（A、B），每个文件夹一份，保留原文件名。";
+      expect(desktopFolderAttachmentRequest(text)).toEqual({
+        source: kind,
+        deviceName: undefined,
+        plan: { parentName: "样品", folderNames: ["A", "B"] },
+        steps,
+      });
+      expect(looksLikeDesktopFolderAttachment("怎么" + text)).toBe(false);
+    },
+  );
+
+  it.each([
+    source.replace("100个", "99个"),
+    source.replace("测试自动化9999", "C:\\不应复制"),
+    source.replace("XUTI-01 至 XUTI-100", "XUTI-01 至 OTHER-100"),
+    source.replace("这张图", "所有附件"),
+    source.replace("保留图片原名", "改名为样品.png"),
+    source.replace("保留图片原名", "并覆盖已有图片"),
+    source.replace("，保留图片原名。", "，保留图片原名，并打开文件夹。"),
+    "把当前附件复制到桌面『样品』下的所有子目录，保留原名",
+    "将这份附件复制到桌面文件夹『资料』下的子目录：样品 A，不保留原名",
+    "把这张图复制到每个子文件夹",
+  ])(
+    "recognizes the attempt without guessing incomplete or unsupported targets: %s",
+    (text) => {
+      expect(looksLikeDesktopFolderAttachment(text)).toBe(true);
+      expect(desktopFolderAttachmentRequest(text)).toBeUndefined();
+      expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
+    },
+  );
+
+  it.each([
+    "怎么" + source,
+    source.replace(/。$/u, "可以吗？"),
+    "不要" + source,
+    "把这张图复制到云端网盘的子目录",
+    "把这张图复制到桌面端浏览器下的两个子目录（A、B）",
+    "把这张图片复制到桌面网页版下的子目录：A、B",
+    "帮我分析这张图",
+    "请帮我把这张图片制作成一份报告",
+  ])(
+    "keeps questions and unrelated attachment text out of desktop routing: %s",
+    (text) => {
+      expect(looksLikeDesktopFolderAttachment(text)).toBe(false);
+      expect(desktopFolderAttachmentRequest(text)).toBeUndefined();
+    },
+  );
+
+  it("keeps existing explicit local-path copy on its file-copy route", () => {
+    const text = String.raw`把「D:\样品\照片.png」复制到「D:\已核对」`;
+    expect(looksLikeDesktopFolderAttachment(text)).toBe(false);
+    expect(desktopFolderAttachmentRequest(text)).toBeUndefined();
+    expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
+  });
+
+  it("keeps attachment metadata as the original safe name, exact byte count and digest", () => {
+    const metadata = {
+      name: "核对照片 final.png",
+      bytes: 64 * 1024 * 1024,
+      sha256: "ab".repeat(32),
+    };
+    expect(desktopFolderAttachmentSchema.parse(metadata)).toEqual(metadata);
+    expect(desktopFolderSteps("copy_folder_attachment")).toEqual(steps);
+    for (const name of [
+      "../a.png",
+      "C:\\a.png",
+      "NUL.png",
+      ".hidden",
+      "a. ",
+      "a".repeat(181),
+    ]) {
+      expect(
+        desktopFolderAttachmentSchema.safeParse({ ...metadata, name }).success,
+      ).toBe(false);
+    }
+    expect(
+      desktopFolderAttachmentSchema.safeParse({
+        ...metadata,
+        bytes: metadata.bytes + 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      desktopFolderAttachmentSchema.safeParse({ ...metadata, sha256: "ab" })
+        .success,
     ).toBe(false);
   });
 });

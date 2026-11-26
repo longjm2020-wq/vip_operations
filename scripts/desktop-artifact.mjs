@@ -7,6 +7,7 @@ export const sourceFiles = [
   "apps/desktop/DesktopExplorer.cs",
   "apps/desktop/ExplorerCopy.cs",
   "apps/desktop/FolderCreation.cs",
+  "apps/desktop/FolderAttachment.cs",
   "apps/desktop/FilePlanRunner.cs",
   "apps/desktop/WeCom.cs",
   "apps/desktop/DesktopShell.cs",

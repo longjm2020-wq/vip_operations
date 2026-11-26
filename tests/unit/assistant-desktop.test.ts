@@ -153,6 +153,8 @@ beforeAll(async () => {
   await fixture.db.exec(await readFile("packages/database/migrations/121_desktop_folder_creation.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/122_desktop_folder_notes.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/123_desktop_folder_batch_notes.sql", "utf8"));
+  await fixture.db.exec(await readFile("packages/database/migrations/083_assistant_agent.sql", "utf8"));
+  await fixture.db.exec(await readFile("packages/database/migrations/124_desktop_folder_attachment.sql", "utf8"));
 });
 beforeEach(async () => {
   fixture.session = true;

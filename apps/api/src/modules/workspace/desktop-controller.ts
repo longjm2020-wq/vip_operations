@@ -3,6 +3,7 @@ import { Response } from "express";
 import { z } from "zod";
 import { AuthRequest, Public, context } from "../../http.js";
 import { fail, parse } from "../../core.js";
+import { downloadFolderAttachment } from "./desktop-attachment.js";
 import {
   acknowledgeDesktop,
   createDesktopPair,
@@ -104,6 +105,7 @@ export class AssistantDesktopController {
             folderCreation: z.literal(true).optional(),
             folderNotes: z.literal(true).optional(),
             folderBatchNotes: z.literal(true).optional(),
+            folderAttachment: z.literal(true).optional(),
             desktopFolderCopy: z.literal(true).optional(),
             retainedTaskId: z.string().uuid().nullable().optional(),
           })
@@ -124,6 +126,7 @@ export class AssistantDesktopController {
           folderCreation: b.folderCreation,
           folderNotes: b.folderNotes,
           folderBatchNotes: b.folderBatchNotes,
+          folderAttachment: b.folderAttachment,
           desktopFolderCopy: b.desktopFolderCopy,
           platform: b.platform,
           retainedTaskId: b.retainedTaskId,
@@ -164,6 +167,14 @@ export class AssistantDesktopController {
   ) {
     const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
     return controlFolderCreation(d.c, d.deviceId, id, input);
+  }
+  @Public() @Get("client/tasks/:id/folder-attachment") async attachment(
+    @Req() r: AuthRequest, @Res() res: Response, @Param("id") id: string,
+  ) {
+    const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
+    const content = await downloadFolderAttachment(d.c, d.deviceId, id, r.query);
+    res.set({ "Cache-Control": "private, no-store", "Content-Type": "application/octet-stream",
+      "Content-Disposition": "attachment", "Content-Length": String(content.length), "X-Content-Type-Options": "nosniff" }).end(content);
   }
   @Public() @Post("client/tasks/:id/plan") async plan(
     @Req() r: AuthRequest,

@@ -4,8 +4,10 @@ import {
   desktopFileCopyIntent,
 } from "./desktop-file-copy.js";
 import {
+  desktopFolderAttachmentRequest,
   desktopFolderCompoundRequest,
   desktopFolderCreationRequest,
+  looksLikeDesktopFolderAttachment,
   looksLikeDesktopFolderCompound,
   looksLikeDesktopFolderCreation,
   looksLikeDesktopFolderNotes,
@@ -130,6 +132,7 @@ export function shouldSearchAssistantPublicWeb(
     privateSearchContext.test(instruction) ||
     searchCredentials.test(instruction) ||
     followupOperation.test(instruction) ||
+    looksLikeDesktopFolderAttachment(text) ||
     looksLikeDesktopFolderCompound(text) ||
     looksLikeDesktopFolderCreation(text) ||
     looksLikeDesktopFolderNotes(text) ||
@@ -383,9 +386,9 @@ export function classifyAssistantExecution(
   text: string,
   options?: { inferExternalTargets?: boolean },
 ): AssistantExecution {
-  const folderCreation = desktopFolderCompoundRequest(text) ?? desktopFolderCreationRequest(text);
+  const folderCreation = desktopFolderAttachmentRequest(text) ?? desktopFolderCompoundRequest(text) ?? desktopFolderCreationRequest(text);
   if (folderCreation?.deviceName) return { kind: "desktop", deviceName: folderCreation.deviceName };
-  if (folderCreation || looksLikeDesktopFolderCompound(text) || looksLikeDesktopFolderCreation(text) || looksLikeDesktopFolderNotes(text)) return { kind: "desktop" };
+  if (folderCreation || looksLikeDesktopFolderAttachment(text) || looksLikeDesktopFolderCompound(text) || looksLikeDesktopFolderCreation(text) || looksLikeDesktopFolderNotes(text)) return { kind: "desktop" };
   if (desktopExplorerIntent(text)) return { kind: "desktop" };
   if (desktopFileCopyIntent(text) || desktopFileCopyIntent(text, "macos")) {
     const deviceName = desktopFileCopyDeviceName(text);

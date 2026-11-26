@@ -719,7 +719,7 @@ export function PersonalAssistantProvider({
       attachments: !!agent.attachments.length,
     });
   const draftRoute = docked ? resolveDraft(text) : undefined;
-  const draftUsesNativeApp = !draftOverride && isNativeAppRequest(text);
+  const draftUsesNativeApp = !draftOverride && !agent.attachments.length && isNativeAppRequest(text);
   const draftIsSite =
     !draftIsPublicSearch &&
     (!docked || (!draftUsesNativeApp && draftRoute?.kind === "site"));
@@ -1075,17 +1075,12 @@ export function PersonalAssistantProvider({
         : desktopMode
           ? desktopDeviceId
           : undefined;
-    const nativeAppRequest = !selected && isNativeAppRequest(value);
+    const nativeAppRequest = !selected && !agent.attachments.length && isNativeAppRequest(value);
     const siteRequest =
       !publicSearch &&
       !externalMode &&
       !nativeAppRequest &&
       (!target || target === "site" || target === "pending");
-    const externalRequest =
-      externalMode ||
-      nativeAppRequest ||
-      target === "browser" ||
-      target === "desktop";
     const websiteRequest =
       siteRequest && selected?.mode !== "chat" && !agent.attachments.length
         ? parseAssistantWebsiteRequest(value)
@@ -1117,8 +1112,8 @@ export function PersonalAssistantProvider({
         throw new Error(
           "编写这条指令时，对话的操作目标已变化。请核对最近的任务，再重新输入或选择本条目标。",
         );
-      if (externalRequest && agent.attachments.length)
-        throw new Error("外部操作仅接收本条指令，请先移除附件后发送。");
+      if (agent.attachments.length && (sendToBrowser || selected?.mode === "local"))
+        throw new Error("网页操作请单独发送文字。要把附件复制到电脑，请选择「我的电脑」并写明目标文件夹。");
       if (
         execution?.kind === "desktop" &&
         !execution.deviceName &&

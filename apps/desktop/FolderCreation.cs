@@ -11,8 +11,9 @@ using Microsoft.Win32.SafeHandles;
 namespace XutiDesktop {
 static partial class Native {
     internal const string CreateFolders="create_desktop_folders", CreateNotes="create_folder_notes", CreateFoldersWithNotes="create_folders_with_notes";
+    internal const string CopyAttachment="copy_folder_attachment";
     internal static bool IsFolderBatchAction(string action) {
-        return action==CreateFolders || action==CreateNotes || action==CreateFoldersWithNotes;
+        return action==CreateFolders || action==CreateNotes || action==CreateFoldersWithNotes || action==CopyAttachment;
     }
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
     static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
@@ -24,9 +25,9 @@ static partial class Native {
             throw new IOException("目标名称指向其他位置或别名，请核对。");
     }
 
-    static string FolderSegment(object value) {
+    static string FolderSegment(object value,int maxLength=100) {
         var name=value as string;
-        if(String.IsNullOrEmpty(name) || name.Length>100 || name!=name.Trim() || name.StartsWith(".") || name.EndsWith(".") ||
+        if(String.IsNullOrEmpty(name) || name.Length>maxLength || name!=name.Trim() || name.StartsWith(".") || name.EndsWith(".") ||
            name.IndexOfAny(Path.GetInvalidFileNameChars())>=0 ||
            Regex.IsMatch(name,@"[\p{Cc}\p{Cf}]") ||
            Regex.IsMatch(name.Split('.')[0].TrimEnd(),@"^(?:CON|NUL|PRN|AUX|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant))
@@ -92,6 +93,7 @@ static partial class Native {
         if(!IsFolderBatchAction(action))throw new InvalidOperationException("未知的桌面批量任务类型。");
         if(action==CreateFolders)return new[]{"ensure_directories","verify"};
         if(action==CreateNotes)return new[]{"ensure_same_name_text","verify"};
+        if(action==CopyAttachment)return new[]{"copy_attachment","verify"};
         return new[]{"ensure_directories","ensure_same_name_text","verify"};
     }
 
@@ -99,8 +101,9 @@ static partial class Native {
         return ExecuteFilePlan(desktop,plan,FolderSteps(action),checkpoint,op=>{});
     }
 
-    internal static async Task<int> ExecuteFilePlan(string desktop,Dictionary<string,object> plan,string[] steps,Func<Task> checkpoint,Action<string> beforeStep) {
-        if(!new[]{CreateFolders,CreateNotes,CreateFoldersWithNotes}.Any(a=>FolderSteps(a).SequenceEqual(steps)))
+    internal static async Task<int> ExecuteFilePlan(string desktop,Dictionary<string,object> plan,string[] steps,Func<Task> checkpoint,Action<string> beforeStep,FolderAttachment attachment=null) {
+        bool copying=FolderSteps(CopyAttachment).SequenceEqual(steps);
+        if(!new[]{CreateFolders,CreateNotes,CreateFoldersWithNotes,CopyAttachment}.Any(a=>FolderSteps(a).SequenceEqual(steps)) || copying!=(attachment!=null))
             throw new IOException("文件执行脚本包含不支持的操作或顺序。");
         bool allowMissingFolders=steps.Contains("ensure_directories");
         bool includeNotes=steps.Contains("ensure_same_name_text");
@@ -110,15 +113,16 @@ static partial class Native {
         string parentName=FolderSegment(parentValue);
         var children=childrenValue as object[];
         if(children==null || children.Length<1 || children.Length>100)throw new IOException("一次建目录需要 1 至 100 个子目录名称。");
-        string[] names=children.Select(FolderSegment).ToArray();
+        string[] names=children.Select(value=>FolderSegment(value)).ToArray();
         if(names.Distinct(StringComparer.OrdinalIgnoreCase).Count()!=names.Length)throw new IOException("子目录名称重复，请核对任务。");
         if(desktop==null || desktop.Length<=3 || new DriveInfo(Path.GetPathRoot(desktop)).DriveType!=DriveType.Fixed)
             throw new IOException("Windows 桌面需要位于本机固定磁盘。");
 
         string parent=Path.Combine(desktop,parentName);
-        var held=new List<SafeFileHandle>();
+        var held=new List<IDisposable>();
         var slots=new SafeFileHandle[names.Length];
         var notes=new SafeFileHandle[names.Length];
+        var copies=copying?new FileStream[names.Length]:null;
         string[] folders=names.Select(name=>Path.Combine(parent,name)).ToArray();
         string[] notePaths=names.Select((name,i)=>Path.Combine(folders[i],name+".txt")).ToArray();
         try {
@@ -138,6 +142,13 @@ static partial class Native {
                     if(includeNotes) {
                         notes[i]=PinBatchNote(notePaths[i],false);
                         if(notes[i]!=null)held.Add(notes[i]);
+                    }
+                    if(copying) {
+                        copies[i]=attachment.OpenDestination(folders[i],true);
+                        if(copies[i]!=null) {
+                            held.Add(copies[i]);
+                            await attachment.VerifyDestination(copies[i],checkpoint);
+                        }
                     }
                 }
             }
@@ -165,7 +176,16 @@ static partial class Native {
                     case "verify":
                         foreach(var slot in slots)ExplorerCopy.FolderId(slot);
                         if(includeNotes)foreach(var note in notes)ExplorerCopy.VerifyBatchNote(note,false);
+                        if(copying)foreach(var copy in copies)await attachment.VerifyDestination(copy,checkpoint);
                         return slots.Length;
+                    case "copy_attachment":
+                        for(int i=0;i<folders.Length;i++) {
+                            await checkpoint();
+                            if(copies[i]!=null)continue;
+                            copies[i]=await attachment.Publish(folders[i],checkpoint);
+                            held.Add(copies[i]);
+                        }
+                        break;
                 }
             }
             throw new IOException("文件执行脚本缺少结果核验。");

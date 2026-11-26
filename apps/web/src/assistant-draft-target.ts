@@ -8,6 +8,7 @@ import {
   isNativeDesktopAppCommand,
   shouldSearchAssistantPublicWeb,
 } from "../../../packages/contracts/src/assistant-execution";
+import { looksLikeDesktopFolderAttachment } from "../../../packages/contracts/src/desktop-folder-creation";
 import type { AssistantMessage } from "../../../packages/contracts/src/personal-assistant";
 import type { BrowserState } from "../../../packages/contracts/src/assistant-browser";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
@@ -55,7 +56,8 @@ export function workbenchDraftTarget(
     kind: "site",
     label: search ? "普通对话 · 联网搜索" : "普通对话",
   } as const;
-  if (target?.mode === "chat" || search || attachments) return chat;
+  if (target?.mode === "chat" || search) return chat;
+  if (attachments && !looksLikeDesktopFolderAttachment(text)) return chat;
   if (!text.trim()) return { kind: "site", label: "自动识别" } as const;
   const route = classifyAssistantExecution(text);
   if (route.kind === "desktop")
