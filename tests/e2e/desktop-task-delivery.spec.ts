@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect } from "@playwright/test";
 import { selectAssistantPanel } from "./assistant-controls.js";
 
-test("网页发送记事本指令后，任务卡根据已配对客户端的接单和完成回执更新", async ({
+test("工作台自动区分记事本连续输入、普通提问与网页任务，回执绑定原窗口", async ({
   page,
   request,
   baseURL,
@@ -39,7 +39,11 @@ test("网页发送记事本指令后，任务卡根据已配对客户端的接�
     const { authorizationId } = await client("authorization", {
       enabled: true,
     });
-    const receiving = { localBrowser: true, nativeActions: true };
+    const receiving = {
+      localBrowser: true,
+      nativeActions: true,
+      windowContinuations: true,
+    };
     await client("poll", receiving);
     await page.goto("/my-workspace");
     await selectAssistantPanel(page, "我的电脑");
@@ -50,7 +54,8 @@ test("网页发送记事本指令后，任务卡根据已配对客户端的接�
     const composer = page.locator(".assistant-compose:visible");
     const instruction = "在我的电脑上切换到已打开的记事本窗口";
     await expect(composer.getByRole("textbox")).toHaveAttribute(
-      "placeholder", /在我的电脑上打开记事本/,
+      "placeholder",
+      /在我的电脑上打开记事本/,
     );
     await composer.getByRole("textbox").fill(instruction);
     await client("poll", receiving);
@@ -76,17 +81,73 @@ test("网页发送记事本指令后，任务卡根据已配对客户端的接�
         })
       ).status,
     ).toBe("RUNNING");
+    const windowId = randomUUID();
+    const retained = { ...receiving, retainedTaskId: task.id };
     await client(control, {
       action: "complete_native",
       authorizationId,
       attemptId,
-      windowId: randomUUID(),
+      windowId,
+      retainedWindow: true,
       application: "notepad",
       window: "测试空白窗口 - 记事本",
     });
     await expect(card).toContainText("已完成", { timeout: 15000 });
     await expect(card).toContainText("已执行 1 步");
     await expect(card).toContainText("测试空白窗口 - 记事本");
+    const textbox = composer.getByRole("textbox");
+    await textbox.fill("为什么输不进去？");
+    await expect(
+      composer.getByRole("button", { name: "本条目标：普通对话", exact: true }),
+    ).toBeVisible();
+    await textbox.fill("在独立浏览器里点击帮助按钮");
+    await expect(
+      composer.getByRole("button", {
+        name: "本条目标：操作网页 · 云端",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await textbox.fill("输入9999999");
+    await expect(
+      composer.getByRole("button", {
+        name: /本条目标：操作我的电脑.*测试空白窗口/,
+      }),
+    ).toBeVisible();
+    await client("poll", retained);
+    await composer.getByRole("button", { name: "发送给个人助理" }).click();
+    let continuation: typeof task | undefined;
+    await expect
+      .poll(async () => {
+        continuation = (await client("poll", retained)).task;
+        return continuation?.nativeAction;
+      })
+      .toBe("type_notepad");
+    expect(continuation).toMatchObject({
+      deviceId,
+      boundWindowId: windowId,
+      previousTaskId: task.id,
+      nativeText: "9999999",
+      scope: "window",
+    });
+    const followupControl = "tasks/" + continuation!.id + "/control";
+    const followupAttempt = randomUUID();
+    await client(followupControl, {
+      action: "start_native",
+      authorizationId,
+      attemptId: followupAttempt,
+    });
+    await client(followupControl, {
+      action: "complete_native",
+      authorizationId,
+      attemptId: followupAttempt,
+      windowId,
+      application: "notepad",
+      window: "测试空白窗口 - 记事本",
+    });
+    const followupCard = page
+      .locator(".assistant-desktop-panel")
+      .getByRole("region", { name: "电脑任务：输入9999999" });
+    await expect(followupCard).toContainText("已完成", { timeout: 15000 });
   } finally {
     await page.request.post(desktop + "/devices/" + deviceId + "/revoke", {
       headers: {

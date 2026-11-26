@@ -34,6 +34,27 @@ function setup() {
   return {initial,controller,driver,store,open,getState:()=>state,setState:(value:BrowserRun|null)=>{state=value;},run:()=>runIndependentBrowser(initial,store,controller.signal,open)};
 }
 describe('independent browser lease execution',()=>{
+  it('can verify a link destination while keeping follow-up input bound to the original document',async()=>{
+    const f=setup();
+    const source='source-document',destination='link-destination';
+    f.setState({...f.initial,activeGoalId:'followup',expectedDocumentId:source});
+    let document=source;
+    const dispatched:string[]=[];
+    f.driver.frame=vi.fn(async()=>({jpeg:Buffer.from('fixture'),width:100,height:100,url:'https://example.com/',title:'目标',documentId:document}));
+    f.driver.execute=vi.fn(async(action,_current,_signal,expected)=>{
+      if(expected!==document)throw Error('stale-document');
+      dispatched.push(action.kind);document=destination;
+    });
+    f.store.planBrowserStep=vi.fn<BrowserStore['planBrowserStep']>(async()=>document===source
+      ? {kind:'click',ref:'next',description:'打开目标'}
+      : {kind:'fill',ref:'other',value:'9999999',description:'输入文字'});
+    f.store.finishBrowserTask=vi.fn(async()=>{f.setState(null);return true;});
+    await f.run();
+    expect(f.driver.observe).toHaveBeenNthCalledWith(1,source);
+    expect(f.driver.observe).toHaveBeenNthCalledWith(2,destination);
+    expect(dispatched).toEqual(['click']);
+    expect(f.store.finishBrowserTask).toHaveBeenCalledWith(expect.anything(),'NEEDS_USER',expect.any(String));
+  });
   it('keeps the same picture ID until an input or task epoch changes, then publishes a fresh receipt',async()=>{
     const f=setup();f.setState({...f.initial,status:'PAUSED',mode:'BROWSE'});
     let clock=Date.now(),manual=false;

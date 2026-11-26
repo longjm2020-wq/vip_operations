@@ -95,12 +95,14 @@ export function AgentComposer({
   change,
   disabled,
   onUploading,
+  targetPicker,
   actions,
 }: {
   value: AgentOptions;
   change: (v: AgentOptions) => void;
   disabled: boolean;
   onUploading: (v: boolean) => void;
+  targetPicker?: ReactNode;
   actions?: ReactNode;
 }) {
   const input = useRef<HTMLInputElement>(null),
@@ -191,6 +193,7 @@ export function AgentComposer({
             disabled={disabled || uploading}
             onClick={() => input.current?.click()}
           />
+          {targetPicker}
         </div>
         <div className="agent-composer-trailing">{actions}</div>
       </div>

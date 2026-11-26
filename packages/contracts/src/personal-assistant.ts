@@ -27,6 +27,7 @@ export const assistantSendSchema = z
     attachmentIds: z.array(z.string().uuid()).max(6).default([]),
     webSearch: z.boolean().default(false),
     autoExecution: z.literal(true).optional(),
+    explicitChat: z.literal(true).optional(),
     desktopDeviceId: z.string().uuid().optional(),
     nativeDesktopDeviceId: z.string().uuid().optional(),
     browserExecution: z.literal(true).optional(),
@@ -35,6 +36,7 @@ export const assistantSendSchema = z
       .optional(),
   })
   .strict()
+  .refine((v) => !v.explicitChat || !(v.autoExecution || v.desktopDeviceId || v.browserExecution || v.webOpenResult), "普通对话不能同时指定操作目标")
   .refine((v) => !v.nativeDesktopDeviceId || (v.autoExecution && v.desktopDeviceId === v.nativeDesktopDeviceId), "本机快捷指令需明确选择当前设备")
   .refine(
     (v) => !(v.browserExecution && (v.desktopDeviceId || v.autoExecution)),
@@ -82,6 +84,7 @@ export type AssistantMessage = {
   browserTaskId?: string;
   teamRunId?: string;
   source?: "voice" | "team";
+  voiceSessionId?: string;
   evidence?: AssistantEvidence[];
   actions?: AssistantAction[];
   memorySuggestions?: { title: string; content: string }[];

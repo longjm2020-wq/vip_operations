@@ -20,7 +20,11 @@ import { type WorkspaceConfig } from "../../../../../packages/contracts/src/pers
 import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
-import { shouldSearchAssistantPublicWeb } from "../../../../../packages/contracts/src/assistant-execution.js";
+import {
+  assistantFollowupAnchor,
+  classifyAssistantExecution,
+  shouldSearchAssistantPublicWeb,
+} from "../../../../../packages/contracts/src/assistant-execution.js";
 import { agentFileView, ownedAgentFiles } from "./agent-files.js";
 import { resolveChatModel } from "./agent-models.js";
 import { searchAgentWeb } from "./agent-search.js";
@@ -37,7 +41,13 @@ import {
 import { runAssistantVoiceCommand } from "./assistant-voice-commands.js";
 import { queueDesktopTask } from "./desktop.js";
 import { queueBrowserTask } from "./assistant-browser.js";
-import { resolveAutomaticAssistantExecution } from "./assistant-execution.js";
+import {
+  clarifyFollowup,
+  resolveAssistantFollowup,
+  resolveAutomaticAssistantExecution,
+  type AutomaticAssistantExecution,
+} from "./assistant-execution.js";
+import { resolveSemanticFollowup } from "./assistant-semantic-intent.js";
 import { resolveAssistantWebsite } from "./assistant-website.js";
 import { hydrateTeamMessages } from "./assistant-shared-context.js";
 export { parseAssistantAnswer } from "./assistant-model.js";
@@ -155,6 +165,7 @@ export async function sendAssistant(
     signal: AbortSignal;
     desktopRequest?: boolean;
     browserRequest?: boolean;
+    sessionId?: string;
   },
 ) {
   requireAssistant(c);
@@ -217,7 +228,7 @@ export async function sendAssistant(
     existing.request_count >= 20
   )
     fail("AI_RATE_LIMIT", "每小时最多发送20条消息，请稍后再试", 429);
-  const execution =
+  const direct =
     autoExecution && !hasAttachments
       ? await resolveAutomaticAssistantExecution(
           c,
@@ -227,24 +238,48 @@ export async function sendAssistant(
           { inferExternalTargets: !searchRequested },
         )
       : undefined;
-  const browserExecution = autoExecution
-    ? execution?.kind === "browser"
-    : !!body.browserExecution;
-  const desktopExecution =
-    execution?.kind === "desktop" ? execution : undefined;
-  const desktopDeviceId = autoExecution
-    ? desktopExecution?.deviceId
-    : body.desktopDeviceId;
-  const clarification =
-    execution?.kind === "clarify" ? execution.message : undefined;
-  const siteExecution =
-    !browserExecution && !desktopDeviceId && clarification === undefined;
+  const explicitSurface = autoExecution
+    ? undefined
+    : body.browserExecution
+      ? "browser"
+      : body.desktopDeviceId
+        ? "desktop"
+        : undefined;
+  const allowFollowup =
+    (autoExecution || explicitSurface) &&
+    !hasAttachments &&
+    !body.webSearch &&
+    !searchRequested &&
+    (direct?.kind ?? classifyAssistantExecution(body.message).kind) ===
+      "site" &&
+    !parseVoiceCommand(body.message) &&
+    !parseAssistantWebsiteRequest(body.message);
+  const followup = allowFollowup
+    ? await resolveAssistantFollowup(
+        c,
+        body.message,
+        !voice || voice.sessionId
+          ? assistantFollowupAnchor(existing.messages, voice?.sessionId)
+          : undefined,
+        body.desktopDeviceId,
+        explicitSurface,
+      )
+    : undefined;
+  let execution: AutomaticAssistantExecution | undefined =
+    followup?.kind === "semantic" ? undefined : (followup ?? direct);
+  if (!followup && explicitSurface)
+    execution =
+      explicitSurface === "browser"
+        ? { kind: "browser" }
+        : { kind: "desktop", deviceId: body.desktopDeviceId! };
+  let siteExecution =
+    followup?.kind !== "semantic" && (!execution || execution.kind === "site");
   const websiteRequest =
-    !voice && siteExecution && !hasAttachments
+    !voice && !body.explicitChat && siteExecution && !hasAttachments
       ? parseAssistantWebsiteRequest(body.message)
       : undefined;
   const siteCommand =
-    siteExecution && !hasAttachments
+    !body.explicitChat && siteExecution && !hasAttachments
       ? parseVoiceCommand(body.message)
       : undefined;
   const command =
@@ -264,18 +299,20 @@ export async function sendAssistant(
     );
   // Desktop and browser tasks use their own execution paths in both input modes.
   const usesChat = !publicSearch && siteExecution;
-  const s = usesChat || publicSearch ? await settings() : undefined;
+  let s = usesChat || publicSearch ? await settings() : undefined;
   const attachments = await ownedAgentFiles(c, body.attachmentIds);
-  const chatSelection = usesChat
-    ? await resolveChatModel(body.model, {
-        vision: attachments.some((file) => /^(image|video)\//.test(file.mime)),
-      })
-    : null;
+  async function prepareChat() {
+    const selection = await resolveChatModel(body.model, {
+      vision: attachments.some((file) => /^(image|video)\//.test(file.mime)),
+    });
+    if (selection.model.provider === "bailian") await bailianChatConnection();
+    else if (selection.model.provider === "agentai") await agentaiConnection();
+    else if (!ready(s))
+      fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
+    return selection;
+  }
+  let chatSelection = usesChat ? await prepareChat() : null;
   const selected = chatSelection?.model;
-  if (selected?.provider === "bailian") await bailianChatConnection();
-  else if (selected?.provider === "agentai") await agentaiConnection();
-  else if (usesChat && !ready(s))
-    fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
   if (attachments.reduce((sum, f) => sum + f.size, 0) > 80 * 1024 * 1024)
     fail("FILE_LIMIT", "本次附件合计超过80MB，请分次处理", 400);
   if (
@@ -291,6 +328,7 @@ export async function sendAssistant(
       role: "user",
       text: body.message,
       ...(voice ? { source: "voice" as const } : {}),
+      ...(voice?.sessionId ? { voiceSessionId: voice.sessionId } : {}),
       createdAt: new Date().toISOString(),
       ...(attachments.length
         ? { attachments: attachments.map(agentFileView) }
@@ -310,6 +348,27 @@ export async function sendAssistant(
   if (!reserved)
     fail("VERSION_CONFLICT", "对话已在其他页面更新，请刷新后继续", 409);
   try {
+    if (followup?.kind === "semantic") {
+      // Only the successful optimistic reservation may consume an intent call.
+      const intent = await resolveSemanticFollowup(
+        c,
+        body.message,
+        followup.surface,
+      );
+      if (intent === "chat") {
+        siteExecution = true;
+        s = await settings();
+        chatSelection = await prepareChat();
+      } else {
+        execution =
+          intent === "type" ||
+          (intent === "page" && followup.surface !== "desktop")
+            ? followup.target
+            : clarifyFollowup;
+      }
+    }
+    const desktopExecution =
+      execution?.kind === "desktop" ? execution : undefined;
     const website = websiteRequest
       ? websiteRequest.destination
         ? { destination: websiteRequest.destination, text: "" }
@@ -335,23 +394,35 @@ export async function sendAssistant(
         ? await readAssistantMemory(c)
         : null;
     const executionModel = autoExecution ? undefined : body.model;
-    const desktopTask = desktopDeviceId
-      ? await queueDesktopTask(c, {
-          deviceId: desktopDeviceId,
-          requestId: body.requestId,
-          instruction: body.message,
-          model: executionModel,
-          localBrowser: desktopExecution?.localBrowser,
-        })
+    const desktopTask = desktopExecution
+      ? await queueDesktopTask(
+          c,
+          {
+            deviceId: desktopExecution.deviceId,
+            requestId: body.requestId,
+            instruction: body.message,
+            model: executionModel,
+            localBrowser: desktopExecution?.localBrowser,
+          },
+          desktopExecution.previousTaskId
+            ? { previousTaskId: desktopExecution.previousTaskId }
+            : undefined,
+        )
       : null;
-    const browserTask = browserExecution
-      ? await queueBrowserTask(c, {
-          requestId: body.requestId,
-          instruction: body.message,
-          model: executionModel,
-        })
-      : null;
-    let directReply = clarification;
+    const browserTask =
+      execution?.kind === "browser"
+        ? await queueBrowserTask(
+            c,
+            {
+              requestId: body.requestId,
+              instruction: body.message,
+              model: executionModel,
+            },
+            execution.previousGoal,
+          )
+        : null;
+    let directReply =
+      execution?.kind === "clarify" ? execution.message : undefined;
     let citations: { title: string; url: string }[] = [];
     if (website)
       directReply = webCommand
@@ -420,6 +491,7 @@ export async function sendAssistant(
                 attachmentIds: body.attachmentIds,
                 requestId: body.requestId,
                 autoExecution,
+                explicitChat: body.explicitChat,
               },
             );
     const reply: AssistantMessage = {
@@ -427,6 +499,7 @@ export async function sendAssistant(
       role: "assistant",
       text: answer.text,
       ...(voice ? { source: "voice" as const } : {}),
+      ...(voice?.sessionId ? { voiceSessionId: voice.sessionId } : {}),
       schedules: answer.schedules,
       tools: answer.tools,
       evidence: answer.evidence,

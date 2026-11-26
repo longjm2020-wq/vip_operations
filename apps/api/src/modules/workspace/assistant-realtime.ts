@@ -37,7 +37,7 @@ import { closeRealtimeRelay } from "./realtime-relay-registry.js";
 import { resolveAgentModel } from "./agent-models.js";
 import { browserStatus } from "./assistant-browser.js";
 import { parseVoiceCommand } from "../../../../../packages/contracts/src/assistant-voice-commands.js";
-import { classifyAssistantExecution, isNativeDesktopAppCommand } from "../../../../../packages/contracts/src/assistant-execution.js";
+import { canConsiderAssistantFollowup, classifyAssistantExecution, classifyAssistantFollowup, isNativeDesktopAppCommand } from "../../../../../packages/contracts/src/assistant-execution.js";
 import {
   pageToolDefinitions,
   pageTaskToolDefinitions,
@@ -657,10 +657,11 @@ export async function runRealtimeTool(c: Context, id: string, input: unknown) {
   const request = spoken?.text ?? b.request;
   const nativeApp = session.native_app_commands && isNativeDesktopAppCommand(request);
   const route = !autoExecution ? "site" : nativeApp ? "desktop" : classifyAssistantExecution(request).kind;
+  const possibleFollowup = autoExecution && (!!classifyAssistantFollowup(request) || canConsiderAssistantFollowup(request));
   if (
     autoExecution &&
     !spoken &&
-    (desktopRequest || browserRequest || route !== "site")
+    (desktopRequest || browserRequest || route !== "site" || possibleFollowup)
   )
     return { text: "没能核实这一句语音，请重新说一次完整指令。" };
   if (!autoExecution && browserRequest && !session.browser_execution)
@@ -677,7 +678,7 @@ export async function runRealtimeTool(c: Context, id: string, input: unknown) {
     );
   // Providers can retry with a new tool call ID. An external goal belongs to
   // its original utterance, so those retries use the same reservation.
-  const externalTurn = route !== "site" && spoken;
+  const externalTurn = (route !== "site" || possibleFollowup) && spoken;
   const callId = externalTurn
     ? "turn_" + createHash("sha256").update(externalTurn.id).digest("hex")
     : b.callId;
@@ -758,6 +759,7 @@ export async function runRealtimeTool(c: Context, id: string, input: unknown) {
       },
       {
         signal: AbortSignal.timeout(175000),
+        ...(spoken ? {sessionId: session.id} : {}),
         ...(useDesktop ? { desktopRequest: true } : {}),
         ...(useBrowser ? { browserRequest: true } : {}),
       },

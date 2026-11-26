@@ -1529,7 +1529,11 @@ export function AssistantBrowserPanel({
                     {
                       key: "choose",
                       label: "让小序操作当前网页",
-                      disabled: disabled || (!embedded && !data?.ready),
+                      disabled:
+                        disabled ||
+                        (!embedded && !data?.ready) ||
+                        (!!task && !isActiveBrowserTask(task)) ||
+                        (newTab && tasks.some(isActiveBrowserTask)),
                     },
                     ...(!embedded
                       ? [

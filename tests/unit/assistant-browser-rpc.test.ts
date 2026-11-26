@@ -33,6 +33,15 @@ function fixture() {
 const click={kind:'click' as const,ref:'bound-ref',description:'点击目标'};
 
 describe('private browser RPC',() => {
+  it('passes the document identity through observation and authorized actions',async()=>{
+    const f=fixture();await f.client.initialize(null);const documentId=randomUUID();
+    await f.client.observe(documentId);
+    expect(f.driver.observe).toHaveBeenCalledWith(documentId);
+    await f.client.execute(click,async()=>true,new AbortController().signal,documentId);
+    expect(f.driver.execute).toHaveBeenCalledWith(click,expect.any(Function),expect.any(AbortSignal),documentId);
+    expect(browserRpcRequest.safeParse({v:1,id:3,op:'execute',action:click,expectedDocumentId:'invalid'}).success).toBe(false);
+    await f.client.close();
+  });
   it('carries the published picture revision through manual RPC without accepting arbitrary identifiers',async()=>{
     const f=fixture();await f.client.initialize(null);const revision=randomUUID();
     await f.client.manual({kind:'click',x:100,y:100},async()=>true,new AbortController().signal,revision);

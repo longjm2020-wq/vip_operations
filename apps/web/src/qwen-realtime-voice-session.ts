@@ -12,7 +12,9 @@ import {
 import { runPresentationTool } from "./voice-presentation-store.js";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
 import {
+  canConsiderAssistantFollowup,
   classifyAssistantExecution,
+  classifyAssistantFollowup,
   isNativeDesktopAppCommand,
 } from "../../../packages/contracts/src/assistant-execution.js";
 import { RealtimeSpokenTurns } from "../../../packages/contracts/src/realtime-spoken-turn.js";
@@ -477,6 +479,8 @@ export class QwenRealtimeVoiceSession {
       const externalTurn =
         !!spokenTurn &&
         (classifyAssistantExecution(spokenTurn.text).kind !== "site" ||
+          !!classifyAssistantFollowup(spokenTurn.text) ||
+          canConsiderAssistantFollowup(spokenTurn.text) ||
           (this.nativeAppShortcuts && isNativeDesktopAppCommand(spokenTurn.text)));
       const pageBatch =
         !externalTurn &&

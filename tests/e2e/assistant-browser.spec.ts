@@ -1287,6 +1287,11 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(panel.locator(".assistant-browser-tab")).toContainText(
     "历史网页",
   );
+  await panel.getByRole("button", { name: "浏览器标签与会话菜单" }).click();
+  await expect(
+    page.getByRole("menuitem", { name: "让小序操作当前网页", exact: true }),
+  ).toHaveAttribute("aria-disabled", "true");
+  await page.keyboard.press("Escape");
   await panel.getByRole("button", { name: "打开新网址" }).click();
   await expect(panel.getByRole("textbox", { name: "网页地址" })).toBeEnabled();
   await panel.getByRole("button", { name: "浏览器标签与会话菜单" }).click();

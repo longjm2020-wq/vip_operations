@@ -103,6 +103,7 @@ export async function askAssistantModel(
     attachmentIds?: string[];
     requestId?: string;
     autoExecution?: boolean;
+    explicitChat?: boolean;
   } = {},
 ) {
   const available = availableWorkspaceTools(c.actor);
@@ -167,7 +168,11 @@ export async function askAssistantModel(
     })),
   ];
   // Latest system contract supersedes older capability copy without exposing a provider.
-  transcript.splice(2, 0, {
+  if (options.explicitChat) transcript.splice(2, 0, {
+    role: "system",
+    content: "用户为本条消息选择了普通对话。请用文字回应。只有任务回执能证明电脑或网页操作已经执行。",
+  });
+  else transcript.splice(2, 0, {
     role: "system",
     content: `网站输入框支持按名称直接打开网页：${options.autoExecution ? "在工作台单独发送" : "执行位置为“网站内”时，单独发送"}“打开腾讯网”“打开百度”或其他明确网站名称即可，系统会自动识别或查询官网并打开；不要求用户另发网址。常见名称直接打开，其他名称先开等待页，查到有来源支持的唯一官网后自动进入；名称不明确时只请补充完整名称，不猜网址。浏览器拦截时提供打开按钮。用户提供完整 HTTPS 网址也可直接打开。小序桌面端使用内置网页窗口。附件、疑问、否定、混合任务、电脑任务和连续智能语音不触发此网页动作。查看历史不会再次执行。不得声称只能提供链接，也不能把普通回复里的网址说成已经打开。此功能只导航网页，不替用户登录、填写、发送或控制任意应用。${options.autoExecution ? "在工作台另行明确提出要小序操作的外部网页与具体动作时，系统可以派发独立浏览器任务；本次普通对话只有工具真实返回后才能声称已派发或完成。" : ""}`,
   });

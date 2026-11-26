@@ -1760,7 +1760,9 @@ describe("Qwen WebRTC tools and interruption", () => {
   it.each([
     ["在我的电脑上打开 Excel", undefined],
     ["打开微信，给好友阿龙发送「最近好吗？」", "preferred-device"],
-  ])("keeps page tools away from confirmed desktop speech: %s", async (text, nativeDesktopDeviceId) => {
+    ["输入9999999", "preferred-device"],
+    ["把这几个字写进去", undefined],
+  ])("routes spoken external actions and continuations before running a page tool: %s", async (text, nativeDesktopDeviceId) => {
     allowPage();
     session = new QwenRealtimeVoiceSession(callbacks());
     await session.start({

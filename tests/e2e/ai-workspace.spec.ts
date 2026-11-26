@@ -109,7 +109,7 @@ test("简洁输入区展示模型和语音入口，发送文字不申请麦克�
   const fixture = await workspaceFixture(page);
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
-  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(4);
+  await expect(composer.getByRole("button", { name: "本条目标：自动识别" })).toBeVisible();
   await expect(composer.getByRole("combobox")).toHaveCount(0);
   await expect(
     composer.getByRole("button", { name: "语音输入", exact: true }),

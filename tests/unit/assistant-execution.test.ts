@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyAssistantExecution,
+  assistantFollowupAnchor,
+  assistantFollowupText,
+  classifyAssistantFollowup,
+  canConsiderAssistantFollowup,
   isNativeDesktopAppCommand,
   shouldSearchAssistantPublicWeb,
 } from "../../packages/contracts/src/assistant-execution.js";
@@ -49,6 +53,8 @@ describe("workbench execution from direct instructions", () => {
     "分析微信里这句话「最近好吗？」的语气",
     "在小序独立浏览器中操作当前网页：\n不要点击购买键",
     "在小序本地浏览器中操作当前网页：",
+    "把我的电脑上的记事本调到前台是什么意思",
+    "告诉我“把本地浏览器里的页面拉到底”的意思",
   ])(
     "keeps ordinary, navigation and non-action messages on the site: %s",
     (message) => {
@@ -69,10 +75,15 @@ describe("workbench execution from direct instructions", () => {
 
   it.each([
     ["在我的电脑上打开 Excel", undefined, undefined],
+    ["麻烦把我的电脑上的记事本调到前台", undefined, undefined],
+    ["请把本地浏览器里的商品详情页拉到底", undefined, true],
     ["在办公室电脑上打开 Excel", "办公室电脑", undefined],
     ["在电脑「财务工作站」上把表格打开", "财务工作站", undefined],
     ["在小序本地浏览器中操作当前网页：\n点击详情", undefined, true],
     ["在本地浏览器里点击详情", undefined, true],
+    ["操作浏览器，搜索 GitHub 下载量最多的开源项目", undefined, true],
+    ["在浏览器里搜索毛衣搭配", undefined, true],
+    ["用浏览器在 GitHub 搜索开源项目", undefined, true],
     ["在办公室电脑的本地浏览器中查看详情", "办公室电脑", true],
   ])(
     "requires an explicit local target: %s",
@@ -95,6 +106,84 @@ describe("workbench execution from direct instructions", () => {
       expect(classifyAssistantExecution(message)).toEqual({ kind: "clarify" });
     },
   );
+});
+
+describe("short follow-ups within the last verified task", () => {
+  it.each([
+    ["输入9999999", "9999999"],
+    ["帮我输一下9999999", "9999999"],
+    ["输入9999999试试", "9999999"],
+    ["在记事本中输入9999999", "9999999"],
+    ["请再输入９９９看看吧", "９９９"],
+    ["接着输入『  ＡＢＣ９  』", "  ＡＢＣ９  "],
+    ["输入「在我的电脑上打开 Excel」", "在我的电脑上打开 Excel"],
+    ["输入「今天的天气如何？」", "今天的天气如何？"],
+  ])("preserves only the user's literal: %s", (text, expected) => {
+    expect(assistantFollowupText(text)).toBe(expected);
+    expect(classifyAssistantFollowup(text)).toBe("type");
+    expect(classifyAssistantExecution(text)).toEqual({ kind: "site" });
+    expect(shouldSearchAssistantPublicWeb(text)).toBe(false);
+  });
+  it.each([
+    "接着往下滚",
+    "往下翻一页",
+    "点击第一个结果",
+    "再点击「详情」",
+    "在网页里搜索毛衣",
+  ])("recognizes a page gesture: %s", (text) => {
+    expect(classifyAssistantFollowup(text)).toBe("page");
+  });
+  it.each([
+    "为什么输不进去？",
+    "输入法不好用",
+    "输入是什么意思",
+    "输入输出设备",
+    "输入延迟很高",
+    "输入卡顿",
+    "解释一下‘输入999’",
+    "取消输入999",
+    "输入999是什么意思",
+    "怎么输入999",
+    "如果点击帮助按钮",
+    "输入999然后点击提交",
+    "点击购买按钮",
+    "把上一句翻译成中文",
+  ])("keeps discussion and unrelated targets out: %s", (text) => {
+    expect(classifyAssistantFollowup(text)).toBeUndefined();
+    expect(canConsiderAssistantFollowup(text)).toBe(false);
+  });
+  it("checks adjacent turn and voice session ownership", () => {
+    const user = {
+        role: "user" as const,
+        id: "u",
+        text: "打开记事本",
+        createdAt: "",
+      },
+      reply = {
+        role: "assistant" as const,
+        id: "a",
+        text: "已派发",
+        createdAt: "",
+        desktopTaskId: "task",
+      };
+    expect(assistantFollowupAnchor([user, reply])).toEqual({
+      kind: "desktop",
+      taskId: "task",
+      requestId: "u",
+    });
+    expect(assistantFollowupAnchor([user, reply, user])).toBeUndefined();
+    expect(
+      assistantFollowupAnchor([user, { ...reply, desktopTaskId: undefined }]),
+    ).toBeUndefined();
+    const voice = [user, reply].map((m) => ({
+      ...m,
+      source: "voice" as const,
+      voiceSessionId: "session-a",
+    }));
+    expect(assistantFollowupAnchor(voice)).toBeUndefined();
+    expect(assistantFollowupAnchor(voice, "session-b")).toBeUndefined();
+    expect(assistantFollowupAnchor(voice, "session-a")?.taskId).toBe("task");
+  });
 });
 
 describe("public search from ordinary text", () => {

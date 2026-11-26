@@ -84,6 +84,7 @@ import { resolveTeamModel } from "../../apps/api/src/modules/workspace/team-mode
 import { engineConfig } from "../../apps/api/src/modules/aigc/config.js";
 import { teamServiceReady } from "../../apps/api/src/modules/workspace/assistant-team.js";
 import { resolveAssistantWebsite } from "../../apps/api/src/modules/workspace/assistant-website.js";
+import { resolveSemanticFollowup } from "../../apps/api/src/modules/workspace/assistant-semantic-intent.js";
 
 const admin = (): Context => ({
   actor: {
@@ -357,6 +358,7 @@ describe("AgentAI actual feature routing", () => {
       "assistant_browser",
       "assistant_desktop",
       "assistant_search",
+      "assistant_intent",
       "assistant_website",
       "aigc_compile",
     ]) {
@@ -809,6 +811,65 @@ describe("AI model administration and real routing", () => {
       "openai/gpt-6.1-sol",
     );
     expect(await query("SELECT * FROM audit_logs")).toHaveLength(2);
+  });
+  it("meters the configured intent model and accepts only classifications for the existing target", async () => {
+    await saveAiFeatureModel(admin(), {
+      feature: "assistant_intent",
+      model: modelRef(vision),
+      revision: 0,
+    });
+    let classification = { intent: "type" };
+    let returnedModel = vision;
+    const network = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (!String(url).endsWith("/chat/completions"))
+        return catalogFetch(url, init);
+      const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe(vision);
+      expect(body.response_format.type).toBe("json_schema");
+      expect(body.tools).toBeUndefined();
+      expect(JSON.parse(body.messages[1].content)).toEqual({
+        previousTarget: "desktop",
+        utterance: "再给它补上「文本」和数字",
+      });
+      return json({
+        id: randomUUID(),
+        model: returnedModel,
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { content: JSON.stringify(classification) },
+          },
+        ],
+        usage: { prompt_tokens: 14, completion_tokens: 3, total_tokens: 17 },
+      });
+    });
+    vi.stubGlobal("fetch", network);
+    const classify = () =>
+      resolveSemanticFollowup(
+        admin(),
+        "再给它补上「内部订单」和9982",
+        "desktop",
+      );
+    expect(await classify()).toBe("type");
+    const recorded = await query(
+      "SELECT model,total_tokens::text AS total,amount FROM ai_model_usage WHERE feature_id='assistant_intent'",
+    );
+    expect(recorded).toEqual([{ model: vision, total: "17", amount: null }]);
+    classification = { intent: "page" };
+    expect(await classify()).toBeUndefined();
+    classification = {
+      intent: "type",
+      command: "untrusted",
+    } as typeof classification;
+    expect(await classify()).toBeUndefined();
+    classification = { intent: "chat" };
+    expect(await classify()).toBe("chat");
+    returnedModel = "unexpected";
+    expect(await classify()).toBeUndefined();
+    await fixture.db!.exec("UPDATE compass_ai_settings SET verified_at=NULL");
+    network.mockClear();
+    expect(await classify()).toBeUndefined();
+    expect(network).not.toHaveBeenCalled();
   });
   it("uses the managed search model in the outgoing API body and keeps team defaults independent", async () => {
     const initial = (await aiModelManagement(admin())).features;

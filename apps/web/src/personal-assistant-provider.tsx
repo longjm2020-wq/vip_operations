@@ -29,6 +29,7 @@ import {
   EllipsisOutlined,
   AudioOutlined,
   DesktopOutlined,
+  DownOutlined,
   GlobalOutlined,
   CloseOutlined,
 } from "@ant-design/icons";
@@ -45,10 +46,14 @@ import {
 } from "../../../packages/contracts/src/personal-assistant";
 import { assistantNavigationTools } from "../../../packages/contracts/src/assistant-voice-commands";
 import {
+  assistantFollowupAnchor,
+  canConsiderAssistantFollowup,
   classifyAssistantExecution,
+  classifyAssistantFollowup,
   isNativeDesktopAppCommand,
   shouldSearchAssistantPublicWeb,
 } from "../../../packages/contracts/src/assistant-execution";
+import { workbenchDraftTarget, type DraftTarget } from "./assistant-draft-target";
 import {
   AssistantHubContext,
   assistantToolGroup,
@@ -287,6 +292,12 @@ export function PersonalAssistantProvider({
   };
   const [open, setOpen] = useState(false),
     [text, setText] = useState("");
+  const [draftOverride, setDraftOverride] = useState<DraftTarget>();
+  const stagedPagePrefix = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    setDraftOverride(undefined);
+    stagedPagePrefix.current = undefined;
+  }, [user.id, docked]);
   const chatSender = useRef<ComponentRef<typeof Sender>>(null);
   const [artifactPreview, setArtifactPreview] = useState<{
     owner: string;
@@ -410,6 +421,12 @@ export function PersonalAssistantProvider({
   }, []);
   const rememberDesktopChoice = (choice: DesktopChoice) => {
     if (docked && choice.mode !== "device") return;
+    setDraftOverride((current) =>
+      docked && choice.mode === "device" &&
+      current?.mode === "desktop" && !current.deviceId
+        ? { mode: "desktop", deviceId: choice.deviceId }
+        : undefined,
+    );
     setDesktopSelection({
       owner: user.id,
       choice: docked ? desktopChoice : choice,
@@ -659,6 +676,16 @@ export function PersonalAssistantProvider({
         : false,
   });
   const data = q.data?.data as AssistantConversation | undefined;
+  const anchorRequest = assistantFollowupAnchor(data?.messages || [])?.requestId;
+  const draftStart = useRef<{ owner: string; anchor?: string } | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    if (!docked || !text.trim() || draftStart.current?.owner !== user.id)
+      draftStart.current = undefined;
+    if (docked && text.trim() && !draftStart.current && data)
+      draftStart.current = { owner: user.id, anchor: anchorRequest };
+  }, [docked, text, data, anchorRequest, user.id]);
   const pickerState = resolveAssistantModelPickerState({
     catalog: modelCatalog.data,
     value: chatModel,
@@ -672,11 +699,22 @@ export function PersonalAssistantProvider({
       : "";
   const shouldSearch = (value: string) =>
     !externalMode &&
+    (!docked || !draftOverride || draftOverride.mode === "chat") &&
     !agent.attachments.length &&
     shouldSearchAssistantPublicWeb(value);
   const draftIsPublicSearch = shouldSearch(text);
-  const draftRoute = docked ? classifyAssistantExecution(text) : undefined;
-  const draftUsesNativeApp = isNativeAppRequest(text);
+  const resolveDraft = (value: string) =>
+    workbenchDraftTarget(value, {
+      target: draftOverride,
+      messages: data?.messages || [],
+      desktop: desktop.data,
+      browser: browser.data,
+      deviceId: desktopTargetId,
+      native: nativeDesktop,
+      attachments: !!agent.attachments.length,
+    });
+  const draftRoute = docked ? resolveDraft(text) : undefined;
+  const draftUsesNativeApp = !draftOverride && isNativeAppRequest(text);
   const draftIsSite =
     !draftIsPublicSearch &&
     (!docked || (!draftUsesNativeApp && draftRoute?.kind === "site"));
@@ -698,6 +736,7 @@ export function PersonalAssistantProvider({
     : docked
       ? !!data &&
         !browserPagePrefixes.includes(text.trim()) &&
+        (draftOverride?.mode !== "desktop" || !!draftOverride.deviceId) &&
         (!draftIsSite || (data.ready && !modelProblem))
       : browserMode
         ? !!data && browser.data?.ready && !browserProblem
@@ -831,18 +870,21 @@ export function PersonalAssistantProvider({
     openDesktopComposer();
   };
   const stageBrowserDraft = (prefix: string) => {
-    if (executionBusy.current || desktopSetupRunning.current) return;
+    if (executionBusy.current || desktopSetupRunning.current) return false;
     const existingPrefix = browserPagePrefixes.find((entry) =>
       text.startsWith(entry),
     );
     const draft = existingPrefix ? text.slice(existingPrefix.length) : text;
     if (draft.length + prefix.length > 4000) {
       message.info("请缩短草稿后再添加当前网页的操作目标");
-      return;
+      return false;
     }
+    setDraftOverride(undefined);
+    stagedPagePrefix.current = prefix;
     setText(`${prefix}${draft}`);
     setSection("chat");
     setOpen(true);
+    return true;
   };
   const chooseBrowser = () => {
     if (docked) {
@@ -865,7 +907,8 @@ export function PersonalAssistantProvider({
       setOpen(true);
       return;
     }
-    stageBrowserDraft(currentLocalPagePrefix);
+    if (stageBrowserDraft(currentLocalPagePrefix))
+      setDraftOverride({ mode: "local", deviceId: localDesktopId });
   };
   const inspectBrowser = (id?: string) => {
     setSelectedBrowserTaskId(id);
@@ -1013,22 +1056,30 @@ export function PersonalAssistantProvider({
     const requestId = crypto.randomUUID();
     if (!data) return;
     const publicSearch = shouldSearch(value);
-    const execution =
-      docked && !publicSearch ? classifyAssistantExecution(value) : undefined;
+    const execution = docked && !publicSearch ? resolveDraft(value) : undefined;
     const target = execution?.kind;
-    const nativeAppRequest = isNativeAppRequest(value);
+    const selected = docked ? draftOverride : undefined;
+    const automatic = docked && (!selected || selected.mode === "local");
+    const sendToBrowser = browserMode || selected?.mode === "cloud";
+    const selectedDeviceId =
+      selected?.mode === "desktop" || selected?.mode === "local"
+        ? selected.deviceId
+        : desktopMode
+          ? desktopDeviceId
+          : undefined;
+    const nativeAppRequest = !selected && isNativeAppRequest(value);
     const siteRequest =
       !publicSearch &&
       !externalMode &&
       !nativeAppRequest &&
-      (!target || target === "site");
+      (!target || target === "site" || target === "pending");
     const externalRequest =
       externalMode ||
       nativeAppRequest ||
       target === "browser" ||
       target === "desktop";
     const websiteRequest =
-      siteRequest && !agent.attachments.length
+      siteRequest && selected?.mode !== "chat" && !agent.attachments.length
         ? parseAssistantWebsiteRequest(value)
         : undefined;
     const webOpenResult = websiteRequest
@@ -1049,6 +1100,14 @@ export function PersonalAssistantProvider({
       desktopSetupLifecycle.current.epoch === epoch &&
       currentOwner.current === user.id;
     try {
+      if (
+        automatic && !selected && !agent.attachments.length &&
+        draftStart.current && draftStart.current.anchor !== anchorRequest &&
+        (classifyAssistantFollowup(value) || canConsiderAssistantFollowup(value))
+      )
+        throw new Error(
+          "编写这条指令时，对话的操作目标已变化。请核对最近的任务，再重新输入或选择本条目标。",
+        );
       if (externalRequest && agent.attachments.length)
         throw new Error("外部操作仅接收本条指令，请先移除附件后发送。");
       if (
@@ -1059,7 +1118,7 @@ export function PersonalAssistantProvider({
         localClient.data?.engineReady === false
       )
         throw new Error(desktopReceiverProblem(localDevice, localClient.data));
-      if (browserMode) {
+      if (sendToBrowser) {
         const epoch = desktopSetupLifecycle.current.epoch;
         const current = await browser.refetch();
         if (
@@ -1083,7 +1142,7 @@ export function PersonalAssistantProvider({
           return;
         }
       }
-      if (desktopMode && desktopDeviceId) {
+      if (selectedDeviceId) {
         const current = await desktop.refetch();
         if (
           !desktopSetupLifecycle.current.mounted ||
@@ -1093,7 +1152,7 @@ export function PersonalAssistantProvider({
         if (current.error || !current.data)
           throw new Error("暂时无法核对电脑任务，请刷新后重试。");
         const currentDevice = current.data.devices.find(
-          (device) => device.id === desktopDeviceId,
+          (device) => device.id === selectedDeviceId,
         );
         if (!currentDevice)
           throw new Error(
@@ -1104,7 +1163,7 @@ export function PersonalAssistantProvider({
         if (
           current.data.tasks.some(
             (task) =>
-              task.deviceId === desktopDeviceId && isActiveDesktopTask(task),
+              task.deviceId === selectedDeviceId && isActiveDesktopTask(task),
           )
         ) {
           message.info(
@@ -1113,7 +1172,17 @@ export function PersonalAssistantProvider({
           return;
         }
       }
-      if (browserMode)
+      if (selected?.mode === "local") {
+        const pageRoute = classifyAssistantExecution(value);
+        if (pageRoute.kind !== "desktop" || !pageRoute.localBrowser)
+          throw new Error("请说明要在本地网页执行的操作，或切换本条目标。");
+        const currentClient = await localClient.refetch();
+        if (!isCurrent()) return;
+        if (desktopTargetId !== selected.deviceId || currentClient.error ||
+            !currentClient.data?.connected || currentClient.data.deviceId !== selected.deviceId)
+          throw new Error("本地浏览器连接已变化，请重新选择这台电脑后发送。");
+      }
+      if (sendToBrowser)
         revealBrowserAfter.current = new Set(
           (
             queryClient.getQueryData<BrowserState>([
@@ -1140,10 +1209,14 @@ export function PersonalAssistantProvider({
         includeMemory: siteRequest && includeMemory,
         attachmentIds: agent.attachments.map((f) => f.id),
         ...(siteRequest && chatModel ? { model: chatModel } : {}),
-        desktopDeviceId: docked ? desktopTargetId : desktopDeviceId,
+        desktopDeviceId:
+          selected?.mode === "chat" || sendToBrowser
+            ? undefined
+            : selectedDeviceId ?? (docked ? desktopTargetId : desktopDeviceId),
         ...(nativeDesktopDeviceId ? { nativeDesktopDeviceId } : {}),
-        ...(docked ? { autoExecution: true } : {}),
-        ...(browserMode ? { browserExecution: true } : {}),
+        ...(automatic ? { autoExecution: true } : {}),
+        ...(selected?.mode === "chat" ? { explicitChat: true } : {}),
+        ...(sendToBrowser ? { browserExecution: true } : {}),
         webOpenResult,
       };
       const submittedAt = Date.now();
@@ -1188,6 +1261,8 @@ export function PersonalAssistantProvider({
         (publicSearch || siteRequest || !docked || createdTask)
       ) {
         setText((current) => (current.trim() === input.message ? "" : current));
+        setDraftOverride(undefined);
+        stagedPagePrefix.current = undefined;
         setAgent((previous) => ({
           ...previous,
           attachments: previous.attachments.filter(
@@ -1556,6 +1631,57 @@ export function PersonalAssistantProvider({
       else selectSection("desktop");
     }
   };
+  const chooseDraftTarget = (key: string) => {
+    if (busy || voice.listening) return;
+    if (key === "local") {
+      chooseLocalBrowser();
+      return;
+    }
+    if (key === "desktop" && !desktopTarget) {
+      setDraftOverride({ mode: "desktop" });
+      setSection("desktop");
+      setOpen(true);
+      message.info("请先在「我的电脑」选择要操作的设备。");
+      return;
+    }
+    const prefix = stagedPagePrefix.current;
+    if (prefix && text.startsWith(prefix)) setText(text.slice(prefix.length));
+    stagedPagePrefix.current = undefined;
+    if (key === "desktop" && desktopTarget)
+      setDraftOverride({ mode: "desktop", deviceId: desktopTarget.id });
+    else if (key === "chat" || key === "cloud") setDraftOverride({ mode: key });
+    else setDraftOverride(undefined);
+  };
+  const targetPicker = docked && draftRoute && (
+    <Dropdown
+      trigger={["click"]}
+      disabled={busy || voice.listening}
+      menu={{
+        selectable: true,
+        selectedKeys: [draftOverride?.mode || "auto"],
+        onClick: ({ key }) => chooseDraftTarget(key),
+        items: [
+          { key: "auto", label: "自动识别" },
+          { key: "chat", label: "普通对话" },
+          { key: "desktop", label: "操作我的电脑" },
+          { key: "local", label: "操作本地网页" },
+          { key: "cloud", label: "操作云端网页" },
+        ],
+      }}
+    >
+      <Button
+        type="text"
+        size="small"
+        className="assistant-draft-target"
+        aria-label={`本条目标：${draftRoute.label}`}
+        title={`本条目标：${draftRoute.label}。点击更改`}
+        disabled={busy || voice.listening}
+      >
+        <span>{draftRoute.label}</span>
+        <DownOutlined aria-hidden />
+      </Button>
+    </Dropdown>
+  );
   const executionOptions = [
     { value: "site", label: "网站内" },
     { value: "browser", label: "小序独立浏览器" },
@@ -1645,9 +1771,11 @@ export function PersonalAssistantProvider({
             change={setAgent}
             disabled={busy || voice.listening}
             onUploading={setUploading}
+            targetPicker={targetPicker}
             actions={
               <div className="assistant-send-actions">
-                {!externalMode && !desktopOnlyPrompt && (
+                {!externalMode && !desktopOnlyPrompt &&
+                  (!docked || draftRoute?.kind === "site") && (
                   <AssistantModelPicker
                     catalog={modelCatalog.data}
                     value={chatModel}
@@ -2034,7 +2162,11 @@ export function PersonalAssistantProvider({
             ])
           }
           choose={chooseDesktop}
-          compose={openDesktopComposer}
+          compose={() => {
+            if (docked && desktopTargetId)
+              setDraftOverride({ mode: "desktop", deviceId: desktopTargetId });
+            openDesktopComposer();
+          }}
           connectLocal={() => void setupDesktop()}
           connecting={desktopConnecting}
           disabled={busy || voice.listening}

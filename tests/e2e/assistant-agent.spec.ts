@@ -652,7 +652,7 @@ test("公开问题从普通输入框直接搜索并显示来源，后续消息�
   const requests = await setup(page);
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
-  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(4);
+  await expect(composer.getByRole("button", { name: "本条目标：自动识别" })).toBeVisible();
   await expect(
     composer.getByRole("button", { name: "联网搜索", exact: true }),
   ).toHaveCount(0);
@@ -830,19 +830,6 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
     await launcher.press("Enter");
   };
   await page.goto("/my-workspace");
-  const noteEntry = page.getByRole("button", {
-    name: "打开私有备忘",
-    exact: true,
-  });
-  await noteEntry.focus();
-  await noteEntry.press("Enter");
-  await page
-    .getByRole("textbox", { name: "私有备忘", exact: true })
-    .fill("同页投影保留未保存备忘");
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  // The scene resumes moving after the card closes; activate its accessible launcher by keyboard.
   await openFromKeyboard();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
@@ -855,7 +842,7 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
     buffer: Buffer.from("测试库存：条码001234567890123456789 数量12"),
   });
   await expect(dialog.locator(".agent-attachments")).toContainText("资料.txt");
-  await expect(dialog.locator(".agent-composer-tools button")).toHaveCount(4);
+  await expect(dialog.locator(".agent-composer-tools button")).toHaveCount(5);
   await expect(dialog.getByRole("combobox", { name: "执行位置" })).toHaveCount(
     0,
   );
@@ -874,6 +861,8 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
     "href",
     "https://example.com/report",
   );
+  const pendingMessage = "同页预览后继续编辑本条消息";
+  await dialog.getByPlaceholder(/告诉我你想完成什么/).fill(pendingMessage);
   await selectAssistantPanel(page, "任务与文件");
   const filesPanel = page.locator(".workspace-tool-panels");
   await expect(
@@ -903,14 +892,9 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   await expect(page.locator(".workspace-ai-core-stage")).not.toHaveAttribute(
     "inert",
   );
-  await noteEntry.focus();
-  await noteEntry.press("Enter");
   await expect(
-    page.getByRole("textbox", { name: "私有备忘", exact: true }),
-  ).toHaveValue("同页投影保留未保存备忘");
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
+    page.locator(".assistant-compose:visible textarea"),
+  ).toHaveValue(pendingMessage);
   await openFromKeyboard();
   const draft = "跨页全息预览后继续编辑的草稿";
   await dialog.getByPlaceholder(/告诉我你想完成什么/).fill(draft);
@@ -965,7 +949,7 @@ test("窄屏模型听写语音布局不溢出，输入后原位切换发送", as
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.width).toBeLessThanOrEqual(390);
   const sender = dialog.locator(".ant-sender");
-  await expect(sender.locator("button")).toHaveCount(4);
+  await expect(sender.locator("button")).toHaveCount(5);
   const send = sender.getByRole("button", { name: "发送给个人助理" });
   await expect(
     sender.getByRole("button", { name: "开始语音对话", exact: true }),
@@ -1134,6 +1118,231 @@ test("桌面端已授权本机无需设置常用或打开面板，即可从小�
   expect(requests.at(-1)?.nativeDesktopDeviceId).toBe(desktopFixtureId);
   expect(state.actions).not.toContain("authorize");
   expect(state.actions).not.toContain("pair");
+});
+
+test("工作台识别上条已核验的窗口，普通问句与公开搜索仍按本条判断", async ({
+  page,
+}) => {
+  const { state } = await desktopScenario(page);
+  state.authorized = true;
+  state.engineReady = true;
+  const timestamp = new Date().toISOString();
+  state.tasks = [
+    {
+      id: jobId,
+      deviceId: desktopFixtureId,
+      instruction: "切换到已打开的记事本窗口",
+      status: "DONE",
+      stage: "已核验记事本窗口在前台",
+      step: 1,
+      scope: "window",
+      window: "无标题 - 记事本",
+      nativeAction: "focus_notepad",
+      canContinueTyping: true,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  ];
+  let previousSurface: "desktop" | "browser" = "desktop";
+  let cloudPageReady = true;
+  await page.route("**/api/v1/my-workspace/assistant/browser", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          ready: true,
+          tasks: [
+            {
+              id: jobId,
+              mode: "BROWSE",
+              status: "PAUSED",
+              automationStatus: "DONE",
+              title: "帮助页",
+              instruction: "在网页查看帮助",
+              url: "https://example.com/help",
+              navigationState: cloudPageReady ? "READY" : "LOADING",
+              step: 1,
+              updatedAt: timestamp,
+            },
+          ],
+          profile: null,
+        },
+      },
+    }),
+  );
+  await page.route("**/api/v1/my-workspace/assistant", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          version: 1,
+          ready: true,
+          state: "IDLE",
+          messages: [
+            {
+              id: fileId,
+              role: "user",
+              text: state.tasks[0].instruction,
+              createdAt: timestamp,
+            },
+            {
+              id: resultId,
+              role: "assistant",
+              text: "已提交",
+              createdAt: timestamp,
+              ...(previousSurface === "desktop"
+                ? { desktopTaskId: jobId }
+                : { browserTaskId: jobId }),
+            },
+          ],
+        },
+      },
+    }),
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const input = composer.locator("textarea");
+  const target = composer.getByRole("button", { name: /^本条目标/ });
+  await input.fill("输入9999999");
+  await expect(target).toHaveText(
+    "操作我的电脑 · 无标题 - 记事本 · 本机测试电脑",
+  );
+  await input.fill("在记事本中输入9999999");
+  await expect(target).toHaveText(
+    "操作我的电脑 · 无标题 - 记事本 · 本机测试电脑",
+  );
+  await input.fill("怎么在记事本输入数字？");
+  await expect(target).toHaveText("普通对话");
+  await input.fill("在独立浏览器中点击帮助按钮");
+  await expect(target).toHaveText("操作网页 · 云端");
+  await input.fill(publicSearchPrompt);
+  await expect(target).toHaveText("普通对话 · 联网搜索");
+  state.tasks[0].canContinueTyping = false;
+  await page.reload();
+  await input.fill("输入9999999");
+  await expect(target).toHaveText("待确认操作位置");
+  state.tasks[0].canContinueTyping = true;
+  state.tasks[0].localBrowser = true;
+  await page.reload();
+  await input.fill("点开帮助按钮");
+  await expect(target).toHaveText("操作网页 · 本地");
+  previousSurface = "browser";
+  await page.reload();
+  await input.fill("点开帮助按钮");
+  await expect(target).toHaveText("操作网页 · 云端");
+  await input.fill("在记事本中输入9999999");
+  await expect(target).toHaveText("待确认操作位置");
+  cloudPageReady = false;
+  await page.reload();
+  await input.fill("点开帮助按钮");
+  await expect(target).toHaveText("待确认操作位置");
+});
+
+test("本条可改成普通对话，打开网页的草稿不弹窗，发送后恢复自动识别", async ({
+  page,
+}) => {
+  const { state, requests } = await desktopScenario(page);
+  state.authorized = true;
+  state.engineReady = true;
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const input = composer.locator("textarea");
+  const target = composer.getByRole("button", { name: /^本条目标/ });
+  await input.fill("打开百度");
+  await expect(target).toHaveText("打开网页");
+  await target.click();
+  await page.getByRole("menuitem", { name: "普通对话", exact: true }).click();
+  await expect(target).toHaveText("普通对话");
+  await expect(input).toHaveValue("打开百度");
+  await input.press("Enter");
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toMatchObject({
+    explicitChat: true,
+    message: "打开百度",
+  });
+  for (const field of [
+    "autoExecution",
+    "desktopDeviceId",
+    "browserExecution",
+    "webOpenResult",
+  ])
+    expect(requests[0]).not.toHaveProperty(field);
+  expect(page.context().pages()).toHaveLength(1);
+  await expect(target).toHaveText("自动识别");
+  await input.fill("在我的电脑上打开记事本");
+  await expect(target).toHaveText("操作我的电脑 · 本机测试电脑");
+  await input.press("Enter");
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1]).toMatchObject({
+    autoExecution: true,
+    desktopDeviceId: desktopFixtureId,
+  });
+  expect(requests[1]).not.toHaveProperty("explicitChat");
+});
+
+test("首条浏览器指令默认走本地，尚未连接时可发送并获得连接指引", async ({ page }) => {
+  const { state, requests } = await desktopScenario(page, false, false);
+  state.connected = false;
+  const message = "操作浏览器，搜索 GitHub 上的开源项目";
+  const note = "请在右侧「我的电脑」连接并选择运行小序桌面端的设备，再在右侧浏览器打开本地网页。";
+  const conversation = { ready: false, state: "IDLE", version: 0, messages: [] as Record<string, unknown>[] };
+  await page.route("**/api/v1/my-workspace/assistant", (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      requests.push(body);
+      conversation.version++;
+      conversation.messages.push(
+        { id: body.requestId, role: "user", text: body.message },
+        { id: resultId, role: "assistant", text: note },
+      );
+    }
+    return route.fulfill({ json: { data: conversation } });
+  });
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.locator("textarea").fill(message);
+  await expect(composer.getByRole("button", { name: "本条目标：操作网页 · 本地" })).toBeVisible();
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect(page.getByText(note, { exact: true })).toBeVisible();
+  expect(requests[0]).toMatchObject({ message, autoExecution: true });
+  expect(requests[0]).not.toHaveProperty("desktopDeviceId");
+  expect(requests[0]).not.toHaveProperty("browserExecution");
+  expect(requests[0]).not.toHaveProperty("model");
+  await expect(composer.locator("textarea")).toHaveValue(message);
+});
+
+test("本条明确选择电脑后忠于所选设备，离线时保留草稿", async ({ page }) => {
+  const { state, requests } = await desktopScenario(page, false);
+  state.engineReady = true;
+  state.authorized = true;
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const input = composer.locator("textarea");
+  const target = composer.getByRole("button", { name: /^本条目标/ });
+  await input.fill("打开记事本");
+  await target.click();
+  await page
+    .getByRole("menuitem", { name: "操作我的电脑", exact: true })
+    .click();
+  await expect(target).toHaveText("操作我的电脑 · 请选择设备");
+  await expect(
+    composer.getByRole("button", { name: "发送给个人助理" }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "设为常用电脑", exact: true }).click();
+  await expect(target).toHaveText("操作我的电脑 · 本机测试电脑");
+  state.online = false;
+  await input.press("Enter");
+  await expect(
+    page.getByRole("alert").filter({ hasText: "所选电脑离线" }).first(),
+  ).toBeVisible();
+  await expect(input).toHaveValue("打开记事本");
+  expect(requests).toHaveLength(0);
+  state.online = true;
+  await input.press("Enter");
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toMatchObject({
+    desktopDeviceId: desktopFixtureId,
+    message: "打开记事本",
+  });
+  expect(requests[0]).not.toHaveProperty("autoExecution");
 });
 
 test("本机已记住授权但无法接单时显示本机原因，保留草稿", async ({ page }) => {
@@ -1462,7 +1671,7 @@ test("电脑操作面板撤销授权并设置常用电脑，输入区按原话�
   await expect(
     composer.getByRole("button", { name: "附件", exact: true }),
   ).toBeVisible();
-  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(4);
+  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(5);
   await page.screenshot({ path: ".local/assistant-composer-home.png" });
   await openPersonalAssistant(page);
   await selectAssistantPanel(page, "我的电脑");

@@ -38,15 +38,15 @@ export class RemoteBrowserDriver implements BrowserDriver {
     if (lifetime.aborted) this.abort();
   }
   async initialize(state:unknown, viewport?:BrowserViewport) { await this.call({op:'open',state:state ?? null,viewport}); return this; }
-  async observe() { return browserRpcResult('observe',await this.call({op:'observe'})) as Awaited<ReturnType<BrowserDriver['observe']>>; }
+  async observe(expectedDocumentId?:string) { return browserRpcResult('observe',await this.call({op:'observe',expectedDocumentId})) as Awaited<ReturnType<BrowserDriver['observe']>>; }
   async frame() {
-    const value = browserRpcResult('frame',await this.call({op:'frame'})) as {jpeg:string;width:number;height:number;url:string;title:string;revision?:string};
+    const value = browserRpcResult('frame',await this.call({op:'frame'})) as {jpeg:string;width:number;height:number;url:string;title:string;revision?:string;documentId?:string};
     return {...value,jpeg:Buffer.from(value.jpeg,'base64')};
   }
   async state() { return this.call({op:'state'}); }
   async diagnostics() { return this.call({op:'diagnostics'}); }
-  async execute(action:Parameters<BrowserDriver['execute']>[0],current:()=>Promise<boolean>,signal:AbortSignal) {
-    await this.call({op:'execute',action},current,signal);
+  async execute(action:Parameters<BrowserDriver['execute']>[0],current:()=>Promise<boolean>,signal:AbortSignal,expectedDocumentId?:string) {
+    await this.call({op:'execute',action,expectedDocumentId},current,signal);
   }
   async manual(action:Parameters<BrowserDriver['manual']>[0],current:()=>Promise<boolean>,signal:AbortSignal,expectedRevision?:string) {
     await this.call({op:'manual',action,...expectedRevision?{expectedRevision}:{}},current,signal);
@@ -55,7 +55,7 @@ export class RemoteBrowserDriver implements BrowserDriver {
     await this.call({op:'navigate',action},current,signal);
   }
 
-  private async call(request:Omit<Extract<BrowserRpcRequest,{op:'open'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'execute'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'manual'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'navigate'}>,'v'|'id'> | {op:'observe'|'frame'|'state'|'diagnostics'},current?:()=>Promise<boolean>,signal?:AbortSignal):Promise<unknown> {
+  private async call(request:Omit<Extract<BrowserRpcRequest,{op:'open'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'execute'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'manual'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'navigate'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'observe'}>,'v'|'id'> | {op:'frame'|'state'|'diagnostics'},current?:()=>Promise<boolean>,signal?:AbortSignal):Promise<unknown> {
     if (this.closed || this.pending || this.nextId >= 2147483646) throw new BrowserUnavailable();
     this.lifetime.throwIfAborted(); signal?.throwIfAborted();
     const id = ++this.nextId;

@@ -1,15 +1,104 @@
 import {
   classifyAssistantExecution,
+  type AssistantFollowupAnchor,
+  classifyAssistantFollowup,
+  assistantFollowupRequiresNotepad,
+  canConsiderAssistantFollowup,
   isNativeDesktopAppCommand,
 } from "../../../../../packages/contracts/src/assistant-execution.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
 import type { Context } from "../../core.js";
+import { canContinueBrowserGoal } from "./assistant-browser.js";
 
 export type AutomaticAssistantExecution =
   | { kind: "site" }
-  | { kind: "browser" }
-  | { kind: "desktop"; deviceId: string; localBrowser?: true }
+  | { kind: "browser"; previousGoal?: AssistantFollowupAnchor }
+  | {
+      kind: "desktop";
+      deviceId: string;
+      localBrowser?: true;
+      previousTaskId?: string;
+    }
   | { kind: "clarify"; message: string };
+
+export type FollowupCandidate = {
+  kind: "semantic";
+  surface: "browser" | "desktop" | "localBrowser";
+  target: Extract<AutomaticAssistantExecution, { kind: "browser" | "desktop" }>;
+};
+
+export const clarifyFollowup = {
+  kind: "clarify" as const,
+  message:
+    "请告诉我要操作哪个窗口或网页，例如「在我的电脑上打开记事本」或「在独立浏览器里打开指定网址」。",
+};
+
+/** A browser reuses task IDs across goals. Bind both IDs from the adjacent stored turn. */
+export async function resolveAssistantFollowup(
+  c: Context,
+  text: string,
+  anchor: AssistantFollowupAnchor | undefined,
+  preferredDeviceId?: string,
+  explicitSurface?: "desktop" | "browser",
+): Promise<AutomaticAssistantExecution | FollowupCandidate | undefined> {
+  const operation = classifyAssistantFollowup(text);
+  if (!operation && !canConsiderAssistantFollowup(text)) return;
+  if (!anchor || (explicitSurface && explicitSurface !== anchor.kind))
+    return clarifyFollowup;
+  let target: FollowupCandidate["target"],
+    surface: FollowupCandidate["surface"];
+  if (anchor.kind === "browser") {
+    if (assistantFollowupRequiresNotepad(text)) return clarifyFollowup;
+    if (!(await canContinueBrowserGoal(db, c.actor.id, anchor)))
+      return {
+        kind: "clarify",
+        message:
+          "请在目标网页重新下达完整指令。上次操作的网页尚未完成、已经变化或已过期。",
+      };
+    target = { kind: "browser", previousGoal: anchor };
+    surface = "browser";
+  } else {
+    const [task] = await rows(
+      db,
+      `SELECT t.device_id,t.browser_only,t.application FROM assistant_desktop_tasks t
+       JOIN assistant_desktop_devices d ON d.id=t.device_id AND d.user_id=t.user_id
+       WHERE t.id=$1::uuid AND t.user_id=$2::bigint AND t.request_id=$3::uuid
+         AND ($4::uuid IS NULL OR t.device_id=$4::uuid)
+         AND t.status='DONE' AND t.window_id IS NOT NULL AND t.step>0
+         AND t.updated_at>now()-interval '10 minutes'
+         AND t.authorization_id=d.authorization_id AND d.revoked_at IS NULL AND d.token_hash IS NOT NULL
+         AND d.expires_at>now() AND d.window_continuations AND d.retained_task_id=t.id
+         AND d.engine_seen_at>now()-interval '20 seconds' AND d.last_seen_at>now()-interval '20 seconds'
+         AND NOT EXISTS(SELECT 1 FROM assistant_desktop_tasks newer WHERE newer.device_id=t.device_id
+                        AND newer.user_id=t.user_id AND newer.created_at>t.created_at)`,
+      anchor.taskId,
+      c.actor.id,
+      anchor.requestId,
+      preferredDeviceId ?? null,
+    );
+    if (!task)
+      return {
+        kind: "clarify",
+        message:
+          "上次操作的窗口暂时无法核验。请检查所选电脑已连接并运行新版桌面端，再明确指定要操作的窗口。",
+      };
+    if (
+      assistantFollowupRequiresNotepad(text) &&
+      (task.browser_only || task.application !== "notepad")
+    )
+      return clarifyFollowup;
+    surface = task.browser_only ? "localBrowser" : "desktop";
+    target = {
+      kind: "desktop",
+      deviceId: task.device_id,
+      previousTaskId: anchor.taskId,
+      ...(task.browser_only ? { localBrowser: true } : {}),
+    };
+  }
+  if (!operation) return { kind: "semantic", surface, target };
+  if (operation === "page" && surface === "desktop") return clarifyFollowup;
+  return target;
+}
 
 export async function resolveAutomaticAssistantExecution(
   c: Context,

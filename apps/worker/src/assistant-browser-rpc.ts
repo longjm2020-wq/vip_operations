@@ -12,11 +12,11 @@ const state = z.unknown().refine(value => {
 });
 export const browserRpcRequest = z.discriminatedUnion('op', [
   z.object({ ...base, op: z.literal('open'), state: state.nullable(), viewport: browserViewportSchema.optional() }).strict(),
-  z.object({ ...base, op: z.literal('observe') }).strict(),
+  z.object({ ...base, op: z.literal('observe'), expectedDocumentId:z.uuid().optional() }).strict(),
   z.object({ ...base, op: z.literal('frame') }).strict(),
   z.object({ ...base, op: z.literal('state') }).strict(),
   z.object({ ...base, op: z.literal('diagnostics') }).strict(),
-  z.object({ ...base, op: z.literal('execute'), action: browserActionSchema.refine(action => !['done','handoff'].includes(action.kind)) }).strict(),
+  z.object({ ...base, op: z.literal('execute'), action: browserActionSchema.refine(action => !['done','handoff'].includes(action.kind)), expectedDocumentId:z.uuid().optional() }).strict(),
   z.object({ ...base, op: z.literal('manual'), action: browserManualActionSchema, expectedRevision: z.uuid().optional() }).strict(),
   z.object({ ...base, op: z.literal('navigate'), action: browserNavigationActionSchema }).strict(),
   z.object({ ...base, op: z.literal('close') }).strict(),
@@ -38,6 +38,7 @@ export const browserRpcFrame = z.object({
   url:z.string().max(8192), title:z.string().max(200),
   canGoBack:z.boolean().optional(), canGoForward:z.boolean().optional(),
   revision:z.uuid().optional(),
+  documentId:z.uuid().optional(),
 }).strict();
 export const browserRpcObservation = z.object({
   snapshotId:z.uuid(),url:z.string().max(8192),title:z.string().max(200),text:z.string().max(12000),

@@ -11,9 +11,9 @@ export class BrowserHandoff extends Error {
 }
 export class BrowserUnavailable extends Error { constructor() { super('BROWSER_UNAVAILABLE'); } }
 export type BrowserDriver = {
-  observe(): Promise<BrowserObservation>;
-  frame(): Promise<{ jpeg: Buffer; width: number; height: number; url: string; title: string; canGoBack?: boolean; canGoForward?: boolean; revision?: string }>;
-  execute(action: BrowserAction, current: () => Promise<boolean>, signal: AbortSignal): Promise<void>;
+  observe(expectedDocumentId?: string): Promise<BrowserObservation>;
+  frame(): Promise<{ jpeg: Buffer; width: number; height: number; url: string; title: string; canGoBack?: boolean; canGoForward?: boolean; revision?: string; documentId?: string }>;
+  execute(action: BrowserAction, current: () => Promise<boolean>, signal: AbortSignal, expectedDocumentId?: string): Promise<void>;
   manual(action: BrowserManualAction, current: () => Promise<boolean>, signal: AbortSignal, expectedRevision?: string): Promise<void>;
   navigate(action: BrowserNavigationAction, current: () => Promise<boolean>, signal: AbortSignal): Promise<void>;
   state(): Promise<unknown>;
@@ -107,6 +107,7 @@ export class IndependentBrowserPage implements BrowserDriver {
       candidate.on('filechooser', () => { this.blocked = true; });
       candidate.on('framenavigated', (frame) => {
         this.invalidateView();
+        if (frame === candidate.mainFrame()) this.pageIds.set(candidate,randomUUID());
         if (frame !== candidate.mainFrame() || frame.url() === 'about:blank') return;
         try { publicBrowserUrl(frame.url()); } catch { this.blocked = true; void candidate.close().catch(() => {}); }
       });
@@ -136,6 +137,10 @@ export class IndependentBrowserPage implements BrowserDriver {
     if (!this.page) throw new BrowserUnavailable();
     return this.page;
   }
+  private checkDocument(expected?: string) {
+    if (expected && this.pageIds.get(this.currentPage()) !== expected)
+      throw new BrowserHandoff('上次操作的网页已切换或重新加载，请核对目标页面后再下达指令');
+  }
   private async releaseBindings() {
     const old = this.bindings; this.bindings = new Map();
     await Promise.allSettled([...old.values()].map(({ handle }) => handle.dispose()));
@@ -155,9 +160,13 @@ export class IndependentBrowserPage implements BrowserDriver {
     if (!this.frameIdentity || this.frameIdentity.hash !== hash || at - this.frameIdentity.at >= 15000)
       this.frameIdentity = { hash, revision: randomUUID(), at };
     this.manualView = { page, url, at, key };
-    return { jpeg, revision: this.frameIdentity.revision, ...(page.viewportSize() || viewport), url: page.url(), title: (await page.title()).slice(0, 200), canGoBack: history.currentIndex > 0, canGoForward: history.currentIndex < history.entries.length - 1 };
+    const documentId=this.pageIds.get(page);
+    const title=(await page.title()).slice(0,200);
+    this.checkDocument(documentId);
+    return { jpeg, documentId, revision: this.frameIdentity.revision, ...(page.viewportSize() || viewport), url: page.url(), title, canGoBack: history.currentIndex > 0, canGoForward: history.currentIndex < history.entries.length - 1 };
   }
-  async observe(): Promise<BrowserObservation> {
+  async observe(expectedDocumentId?: string): Promise<BrowserObservation> {
+    this.checkDocument(expectedDocumentId);
     const page = this.currentPage();
     await this.releaseBindings();
     if (this.blocked) { this.blocked = false; throw new BrowserHandoff('网页出现文件、弹窗确认或不支持的页面操作，请接管核对后继续'); }
@@ -177,10 +186,13 @@ export class IndependentBrowserPage implements BrowserDriver {
       }
     }
     const jpeg = sensitive ? undefined : await page.screenshot({ type: 'jpeg', quality: 55, timeout: 5000, mask: this.masks(true), maskColor: '#333333' });
-    return { snapshotId, url: browserObservationUrl(page.url()), title: (await page.title()).slice(0, 200), text: text.slice(0, 12000), controls, sensitive, image: jpeg?.toString('base64') };
+    const title=(await page.title()).slice(0,200);
+    this.checkDocument(expectedDocumentId);
+    return { snapshotId, url: browserObservationUrl(page.url()), title, text: text.slice(0, 12000), controls, sensitive, image: jpeg?.toString('base64') };
   }
-  async execute(action: BrowserAction, current: () => Promise<boolean>, signal: AbortSignal) {
-    const guard = async () => { signal.throwIfAborted(); if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted(); this.invalidateView(); };
+  async execute(action: BrowserAction, current: () => Promise<boolean>, signal: AbortSignal, expectedDocumentId?: string) {
+    this.checkDocument(expectedDocumentId);
+    const guard = async () => { signal.throwIfAborted(); if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted(); this.checkDocument(expectedDocumentId); this.invalidateView(); };
     const page = this.currentPage();
     if (action.kind === 'goto') { const url = publicBrowserUrl(action.url); await guard(); await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 20000 }); }
     else if ('ref' in action) {

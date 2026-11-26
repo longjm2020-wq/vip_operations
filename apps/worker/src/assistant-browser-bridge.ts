@@ -52,13 +52,13 @@ export class BrowserRpcServer {
         if (this.closed) { await driver.close(); return; }
       } else {
         if (!this.driver) throw new BrowserUnavailable();
-        if (request.op === 'observe') value = await this.driver.observe();
+        if (request.op === 'observe') value = await this.driver.observe(request.expectedDocumentId);
         else if (request.op === 'frame') { const frame = await this.driver.frame(); value = {...frame,jpeg:frame.jpeg.toString('base64')}; }
         else if (request.op === 'state') value = await this.driver.state();
         else if (request.op === 'diagnostics') value = await browserIsolationDiagnostics();
         else {
           const current = () => this.permission(request.id,signal);
-          if (request.op === 'execute') await this.driver.execute(request.action,current,signal);
+          if (request.op === 'execute') await this.driver.execute(request.action,current,signal,request.expectedDocumentId);
           else if (request.op === 'navigate') await this.driver.navigate(request.action,current,signal);
           else await this.driver.manual(request.action,current,signal,request.expectedRevision);
         }

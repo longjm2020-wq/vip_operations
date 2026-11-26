@@ -130,6 +130,12 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await fixture.db.exec(
+    await readFile(
+      "packages/database/migrations/115_desktop_window_continuations.sql",
+      "utf8",
+    ),
+  );
 });
 beforeEach(async () => {
   fixture.session = true;
@@ -373,6 +379,172 @@ describe("paired desktop task execution", () => {
       desktopControl(actor(), composite.id, start, d.deviceId),
     ).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it("requires a live receipt for the original Notepad, never substitutes another window, and retries idempotently", async () => {
+    const { deviceId } = await paired();
+    const { authorizationId } = await setDesktopAuthorization(
+      actor(),
+      deviceId,
+      true,
+    );
+    const client = { nativeActions: true, windowContinuations: true };
+    await pollDesktop(actor(), deviceId, true, client);
+    const source = await queueDesktopTask(actor(), {
+      deviceId,
+      requestId: randomUUID(),
+      instruction: "麻烦把我的电脑上的记事本调到前台",
+    });
+    const ctl = (id: string, body: unknown) =>
+      desktopControl(actor(), id, body, deviceId);
+    const windowId = randomUUID();
+    const start = {
+      action: "start_native",
+      authorizationId,
+      attemptId: randomUUID(),
+    };
+    const done = {
+      ...start,
+      action: "complete_native",
+      application: "notepad",
+      window: "无标题 - 记事本",
+      windowId,
+      retainedWindow: true,
+    };
+    await pollDesktop(actor(), deviceId, true, client);
+    await ctl(source.id, start);
+    await ctl(source.id, done);
+    expect((await desktopState(actor())).tasks[0].canContinueTyping).toBe(true);
+    const input = {
+      deviceId,
+      requestId: randomUUID(),
+      instruction: "输入9999999",
+    };
+    const context = { previousTaskId: source.id };
+    await pollDesktop(actor(), deviceId, true, { nativeActions: true });
+    await expect(queueDesktopTask(actor(), input, context)).rejects.toThrow();
+    await pollDesktop(actor(), deviceId, true, {
+      ...client,
+      retainedTaskId: source.id,
+    });
+    const task = await queueDesktopTask(actor(), input, context);
+    expect(task).toMatchObject({
+      nativeAction: "type_notepad",
+      nativeText: "9999999",
+      scope: "window",
+      previousTaskId: source.id,
+      boundWindowId: windowId,
+    });
+    expect(
+      (await pollDesktop(actor(), deviceId, true, { nativeActions: true }))
+        .task,
+    ).toBeNull();
+    await pollDesktop(actor(), deviceId, true, {
+      ...client,
+      retainedTaskId: source.id,
+    });
+    await ctl(task.id, start);
+    await expect(
+      ctl(task.id, { ...done, windowId: randomUUID() }),
+    ).rejects.toThrow();
+    expect(await ctl(task.id, done)).toMatchObject({
+      status: "DONE",
+      step: 1,
+      scope: "window",
+    });
+    expect((await queueDesktopTask(actor(), input, context)).id).toBe(task.id);
+    await expect(
+      queueDesktopTask(actor(), { ...input, requestId: randomUUID() }, context),
+    ).rejects.toThrow();
+    const disappeared = await queueDesktopTask(
+      actor(),
+      { ...input, requestId: randomUUID() },
+      { previousTaskId: task.id },
+    );
+    expect(
+      (await pollDesktop(actor(), deviceId, true, client)).task,
+    ).toMatchObject({ id: disappeared.id, status: "NEEDS_USER" });
+    await expect(ctl(disappeared.id, start)).rejects.toThrow();
+    expect(
+      (await desktopState(actor())).tasks[0].canContinueTyping,
+    ).toBeUndefined();
+    await expect(
+      queueDesktopTask(
+        actor(),
+        { ...input, requestId: randomUUID() },
+        { previousTaskId: task.id },
+      ),
+    ).rejects.toThrow();
+  });
+  it("keeps a modeled continuation in its original window even with a saved device grant", async () => {
+    const { deviceId } = await paired();
+    const { authorizationId } = await setDesktopAuthorization(
+      actor(),
+      deviceId,
+      true,
+    );
+    const protocol = { nativeActions: true, windowContinuations: true };
+    await pollDesktop(actor(), deviceId, true, protocol);
+    const source = await queueDesktopTask(actor(), {
+      deviceId,
+      requestId: randomUUID(),
+      instruction: "核对当前笔记",
+    });
+    const window = {
+      windowId: randomUUID(),
+      window: "笔记",
+      application: "notes",
+    };
+    const allow = { action: "allow", authorizationId, ...window };
+    await desktopControl(actor(), source.id, allow, deviceId);
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_tasks SET status='DONE' WHERE id=$1",
+      [source.id],
+    );
+    await pollDesktop(actor(), deviceId, true, {
+      ...protocol,
+      retainedTaskId: source.id,
+    });
+    const task = await queueDesktopTask(
+      actor(),
+      { deviceId, requestId: randomUUID(), instruction: "输入9999999" },
+      { previousTaskId: source.id },
+    );
+    expect(task).toMatchObject({
+      scope: "window",
+      boundWindowId: window.windowId,
+    });
+    await expect(
+      desktopControl(
+        actor(),
+        task.id,
+        { ...allow, windowId: randomUUID() },
+        deviceId,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      desktopControl(
+        actor(),
+        task.id,
+        { ...allow, authorizationId: undefined },
+        deviceId,
+      ),
+    ).rejects.toThrow();
+    expect(
+      await desktopControl(actor(), task.id, allow, deviceId),
+    ).toMatchObject({ status: "RUNNING", scope: "window" });
+    await expect(
+      planDesktop(actor(), deviceId, task.id, {
+        ...(await shot()),
+        ...window,
+        windows: [
+          {
+            id: window.windowId,
+            title: window.window,
+            application: window.application,
+          },
+        ],
+      }),
+    ).rejects.toThrow();
   });
   it("resumes the same expired legacy Notepad task through the native path only if it never started", async () => {
     const d = await paired();

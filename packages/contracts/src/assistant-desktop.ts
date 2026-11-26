@@ -156,7 +156,11 @@ export type DesktopTask = {
   step: number;
   window: string;
   scope: "window" | "device";
-  nativeAction?: "open_notepad" | "focus_notepad";
+  nativeAction?: "open_notepad" | "focus_notepad" | "type_notepad";
+  nativeText?: string;
+  previousTaskId?: string;
+  boundWindowId?: string;
+  canContinueTyping?: boolean;
   localBrowser?: boolean;
   createdAt: string;
   updatedAt: string;

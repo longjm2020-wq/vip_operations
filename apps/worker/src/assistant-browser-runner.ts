@@ -66,6 +66,7 @@ export async function runIndependentBrowser(
   let frameAt = 0, sessionAt = 0, navigated = !initial.initialUrl, viewportKey = '';
   let lastFrame: { key: string; id: string; revision: string } | undefined;
   let activeGoalId = initial.activeGoalId;
+  let verificationDocumentId: string | undefined;
   const recentSteps: BrowserRecentStep[] = [];
   let pendingStep: BrowserRecentStep['kind'] | undefined;
   let runtimeMs: number | undefined;
@@ -78,6 +79,7 @@ export async function runIndependentBrowser(
     if (latest.epoch !== run.epoch || latest.status !== run.status) { operation?.abort(); frameAt = 0; }
     if (latest.activeGoalId !== activeGoalId) {
       activeGoalId = latest.activeGoalId;
+      verificationDocumentId = undefined;
       recentSteps.length = 0;
       pendingStep = undefined;
     }
@@ -171,6 +173,7 @@ export async function runIndependentBrowser(
             await save(snapshot, true);
             return;
           }
+          if (snapshot.expectedDocumentId) navigated = true;
           if (!navigated) {
             lastFrame = undefined;
             // Consume before dispatch: interruption must never replay a navigation.
@@ -204,7 +207,8 @@ export async function runIndependentBrowser(
           }
           if (snapshot.status !== 'RUNNING') { ended = true; lifetime.abort(); return; }
           await capture(snapshot);
-          const observation = await driver!.observe();
+          const observedDocumentId = verificationDocumentId ?? snapshot.expectedDocumentId;
+          const observation = await driver!.observe(observedDocumentId);
           phase.throwIfAborted();
           if (pendingStep) {
             recentSteps.push({ kind: pendingStep, description: browserStepLabels[pendingStep], url: browserObservationUrl(observation.url), title: observation.title.slice(0, 200) });
@@ -226,13 +230,22 @@ export async function runIndependentBrowser(
             phase.throwIfAborted();
             const finalFrame = { ...await driver!.frame(), frameId: randomUUID() };
             phase.throwIfAborted();
+            if (observedDocumentId && finalFrame.documentId !== observedDocumentId)
+              throw new BrowserHandoff('最终网页已变化，请核对当前页面后继续');
             // Automation is done, but the same browser remains available for browsing.
             await store.finishBrowserTask(snapshot, 'DONE', action.description, finalFrame);
             frameAt = 0;
             return;
           }
           lastFrame = undefined;
-          await driver!.execute(action, () => current(), phase);
+          await driver!.execute(action, () => current(), phase, snapshot.expectedDocumentId);
+          if (snapshot.expectedDocumentId && (action.kind === 'click' || action.kind === 'goto' || (action.kind === 'key' && action.key === 'ENTER'))) {
+            // A link may open a new document. It can be observed to verify the result;
+            // any further input for this goal is still restricted to the source document.
+            const destination = await driver!.frame();
+            if (!destination.documentId) throw new BrowserHandoff('未能核验操作后的网页，请核对后继续');
+            verificationDocumentId = destination.documentId;
+          }
           pendingStep = action.kind;
           phase.throwIfAborted();
           // A fresh observation is required after every actual mutation; no action batches.

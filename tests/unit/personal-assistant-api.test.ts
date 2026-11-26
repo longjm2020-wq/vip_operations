@@ -194,6 +194,8 @@ beforeAll(async () => {
     "108_realtime_automatic_execution.sql",
     "109_assistant_local_browser.sql",
     "114_desktop_execution_readiness.sql",
+    "115_desktop_window_continuations.sql",
+    "116_browser_goal_continuation.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -262,6 +264,128 @@ const toolSession = (): AssistantToolSession => ({
   memorySuggestions: [],
 });
 describe("multimodal agent ownership and jobs", () => {
+  async function retainedNotepad() {
+    const device = randomUUID(),
+      grant = randomUUID(),
+      window = randomUUID();
+    await fixture.database!.query(
+      "INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,window_continuations,authorization_id) VALUES($1,7,'测试电脑','session','token',now(),now(),true,true,$2)",
+      [device, grant],
+    );
+    const first = await sendAssistant(actor(), {
+      ...input(),
+      message: "在我的电脑上切换到已打开的记事本窗口",
+      desktopDeviceId: device,
+      autoExecution: true,
+    });
+    const previousId = first.messages.at(-1)?.desktopTaskId;
+    await fixture.database!.query(
+      "UPDATE assistant_desktop_tasks SET status='DONE',step=1,window_id=$2,window_name='记事本',application='notepad' WHERE id=$1",
+      [previousId, window],
+    );
+    await fixture.database!.query(
+      "UPDATE assistant_desktop_devices SET retained_task_id=$2 WHERE id=$1",
+      [device, previousId],
+    );
+    return { device, window, first, previousId };
+  }
+  it("classifies a natural imperative once, then binds the unrevised instruction to the confirmed target", async () => {
+    const { first, device, previousId } = await retainedNotepad();
+    vi.mocked(fetch).mockResolvedValueOnce(provider({ intent: "type" }));
+    const command = {
+      ...input(first.version),
+      message: "在那儿敲上「秋冬新品」",
+      desktopDeviceId: device,
+      autoExecution: true,
+    };
+    const result = await sendAssistant(actor(), command);
+    const reply = result.messages.at(-1);
+    expect(reply?.desktopTaskId).toEqual(expect.any(String));
+    expect(
+      (await sendAssistant(actor(), command)).messages.at(-1)?.desktopTaskId,
+    ).toBe(reply?.desktopTaskId);
+    expect(fetch).toHaveBeenCalledOnce();
+    const submitted = (
+      await fixture.database!.query(
+        "SELECT previous_task_id,instruction,native_action FROM assistant_desktop_tasks WHERE id=$1",
+        [reply?.desktopTaskId],
+      )
+    ).rows[0];
+    expect(submitted).toEqual({
+      previous_task_id: previousId,
+      instruction: command.message,
+      native_action: null,
+    });
+  });
+  it("automatically binds literal text only to the preceding retained window, and replays once", async () => {
+    const { first, device, window, previousId } = await retainedNotepad();
+    const command = {
+      ...input(first.version),
+      message: "输入9999999",
+      desktopDeviceId: device,
+      autoExecution: true,
+    };
+    const result = await sendAssistant(actor(), command);
+    expect(result.state).toBe("IDLE");
+    expect(result.messages.at(-1)?.desktopTaskId).toEqual(expect.any(String));
+    expect(
+      (await sendAssistant(actor(), command)).messages.at(-1)?.desktopTaskId,
+    ).toBe(result.messages.at(-1)?.desktopTaskId);
+    expect(
+      (
+        await fixture.database!.query(
+          "SELECT window_id,previous_task_id,native_action,instruction FROM assistant_desktop_tasks WHERE previous_task_id IS NOT NULL",
+        )
+      ).rows,
+    ).toEqual([
+      {
+        window_id: window,
+        previous_task_id: previousId,
+        native_action: "type_notepad",
+        instruction: command.message,
+      },
+    ]);
+    // A second turn before the selected target actually finishes cannot take over another window.
+    const pending = await sendAssistant(actor(), {
+      ...input(result.version),
+      message: "再输入888",
+      autoExecution: true,
+      desktopDeviceId: device,
+    });
+    expect(pending.messages.at(-1)).toMatchObject({
+      text: expect.stringContaining("窗口"),
+    });
+    expect(pending.messages.at(-1)?.desktopTaskId).toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("asks for a target on an unbound action and honors explicit chat on a normally actionable request", async () => {
+    const unbound = await sendAssistant(actor(), {
+      ...input(),
+      message: "帮我输一下999",
+      autoExecution: true,
+    });
+    expect(unbound.messages.at(-1)?.text).toContain("哪个窗口");
+    expect(fetch).not.toHaveBeenCalled();
+    const ordinary = await sendAssistant(actor(), {
+      ...input(unbound.version),
+      message: "打开百度",
+      explicitChat: true,
+    });
+    expect(ordinary.state).toBe("IDLE");
+    const reply = ordinary.messages.at(-1);
+    expect(reply?.webNavigation).toBeUndefined();
+    expect(reply?.desktopTaskId).toBeUndefined();
+    expect(reply?.browserTaskId).toBeUndefined();
+    expect(fetch).toHaveBeenCalledOnce();
+    await expect(
+      sendAssistant(actor(), {
+        ...input(ordinary.version),
+        message: "输入1234",
+        explicitChat: true,
+        desktopDeviceId: randomUUID(),
+      }),
+    ).rejects.toThrow();
+  });
   it("queues browser instructions once without opening the user's browser or starting desktop work", async () => {
     await fixture.database!.exec(
       "UPDATE personal_assistant_browser_runtime SET ready=true,heartbeat_at=now()",

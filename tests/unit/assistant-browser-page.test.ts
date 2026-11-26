@@ -44,6 +44,22 @@ async function fixture(body: string) {
 }
 const signal = () => new AbortController().signal;
 describe('isolated Chromium page execution', () => {
+  it('binds follow-up input to the same document through the last permission check',async()=>{
+    const {page,context,driver}=await fixture('<label>搜索<input type="search"></label>');
+    const first=await driver.frame();
+    expect(first.documentId).toBeTruthy();
+    const view=await driver.observe(first.documentId);
+    const ref=view.controls.find(control=>control.name==='搜索')!.ref;
+    const fill={kind:'fill' as const,ref,value:'9999999',description:'填写搜索框'};
+    await expect(driver.execute(fill,async()=>{await page.reload();return true;},signal(),first.documentId)).rejects.toThrow('BROWSER_HANDOFF');
+    expect(await page.locator('input').inputValue()).toBe('');
+    const reloaded=await driver.frame();
+    expect(reloaded.url).toBe(first.url);
+    expect(reloaded.documentId).not.toBe(first.documentId);
+    const other=await context.newPage();await other.goto(first.url);
+    await expect(driver.observe(reloaded.documentId)).rejects.toThrow('BROWSER_HANDOFF');
+    expect((await driver.frame()).documentId).not.toBe(reloaded.documentId);
+  });
   it('reuses only an unchanged document picture and expires it after fifteen seconds', async () => {
     const { driver, page } = await fixture('<body style="margin:0"><h1>静态页面</h1></body>');
     const first = await driver.frame();

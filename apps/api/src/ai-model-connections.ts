@@ -6,6 +6,7 @@ import { encryptionReady } from "./modules/analytics/secrets.js";
 // Historical receipts still attest to the same credential and model version.
 const sharedFeatures = [
   "assistant_chat",
+  "assistant_intent",
   "assistant_search",
   "assistant_website",
   "assistant_desktop",

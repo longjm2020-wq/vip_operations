@@ -132,6 +132,7 @@ beforeAll(async () => {
 });
 beforeAll(async () => {
   // Apply the production upgrade twice to cover existing installs and safe reruns.
+  await f.db!.exec(await readFile("packages/database/migrations/116_browser_goal_continuation.sql","utf8"));
   const sql = await readFile(
     "packages/database/migrations/105_browser_fullscreen_viewport.sql",
     "utf8",
@@ -210,6 +211,7 @@ async function frame(run: Awaited<ReturnType<typeof started>>) {
 }
 const finalFrame = () => ({
   frameId: randomUUID(),
+  documentId: randomUUID(),
   jpeg: Buffer.from("private-final-screen"),
   width: 1080,
   height: 760,
@@ -442,7 +444,12 @@ describe("independent assistant browser", () => {
     expect((await browserTaskFrame(actor(), run.id))!.readOnly).toBe(false);
     expect((await queueBrowserTask(actor(), goal)).mode).toBe("BROWSE");
     const secondGoal = { ...input(), instruction: "第二个明确目标" };
-    expect((await queueBrowserTask(actor(), secondGoal)).id).toBe(initial.id);
+    const previous = {taskId:initial.id, requestId:goal.requestId};
+    await expect(queueBrowserTask(actor(), secondGoal, {...previous,requestId:randomUUID()})).rejects.toMatchObject({
+      response:{error:{code:"STALE_BROWSER_SESSION"}},
+    });
+    expect((await queueBrowserTask(actor(), secondGoal, previous)).id).toBe(initial.id);
+    expect((await queueBrowserTask(actor(), secondGoal, previous)).id).toBe(initial.id);
     const rows = (
       await f.db!.query<Row>(
         "SELECT instruction,status,result FROM personal_assistant_browser_goals ORDER BY created_at",
@@ -523,6 +530,20 @@ describe("independent assistant browser", () => {
     expect(await completeBrowserAction(run, action.id)).toBe(false);
     expect(resize.viewport).toEqual({ width: 640, height: 480 });
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(["query","document"] as const)("does not apply a follow-up after the %s changes on the same public path", async change => {
+    await heartbeatBrowserWorker(true);
+    const first = input(), task = await queueBrowserTask(actor(), first);
+    const run = (await claimBrowserTask())!;
+    const finish = finalFrame();
+    await finishBrowserTask(run, "DONE", "已完成", finish);
+    const current = (await currentBrowserTask(run))!;
+    expect(await publishBrowserFrame(current, {...finish, frameId:randomUUID(),
+      ...(change==="document"?{documentId:randomUUID()}:{url:"https://example.com/result?item=different"})})).toBe(true);
+    await expect(queueBrowserTask(actor(), input(), {taskId:task.id,requestId:first.requestId})).rejects.toMatchObject({
+      response:{error:{code:"STALE_BROWSER_SESSION"}},
+    });
+    expect((await f.db!.query("SELECT count(*)::int AS n FROM personal_assistant_browser_goals")).rows).toEqual([{n:1}]);
   });
   it("resizes an active AI view without canceling the goal and rejects malformed navigation inputs", async () => {
     const run = await started();

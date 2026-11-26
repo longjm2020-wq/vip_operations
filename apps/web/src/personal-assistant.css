@@ -16,6 +16,20 @@
   gap: 6px;
   min-width: 0;
 }
+.assistant-draft-target.ant-btn {
+  max-width: min(250px, 37vw);
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.assistant-draft-target > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-draft-target .anticon-down {
+  font-size: 9px;
+}
 .assistant-chat-voice-slot {
   margin-top: 14px;
   padding: 12px 0;

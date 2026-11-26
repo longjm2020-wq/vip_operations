@@ -90,6 +90,8 @@ export class AssistantDesktopController {
           .object({
             localBrowser: z.literal(true).optional(),
             nativeActions: z.literal(true).optional(),
+            windowContinuations: z.literal(true).optional(),
+            retainedTaskId: z.string().uuid().nullable().optional(),
           })
           .strict(),
       ]),
@@ -99,6 +101,8 @@ export class AssistantDesktopController {
       ? pollDesktop(d.c, d.deviceId, false, { statusOnly: true })
       : pollDesktop(d.c, d.deviceId, b.localBrowser, {
           nativeActions: b.nativeActions,
+          windowContinuations: b.windowContinuations,
+          retainedTaskId: b.retainedTaskId,
         });
   }
   @Public() @Post("client/authorization") async authorization(
