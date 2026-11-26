@@ -2,7 +2,7 @@ name: Verify
 on: [push, pull_request]
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16.13
@@ -17,6 +17,7 @@ jobs:
       APP_ORIGIN: http://localhost:5173
       VIP_MODE: disabled
       FFMPEG_BIN: /usr/bin/ffmpeg
+      PLAYWRIGHT_BROWSERS_PATH: /opt/xuti-ci-playwright
     steps:
       - uses: actions/checkout@v4
       - name: Configure isolated CI database
@@ -33,7 +34,22 @@ jobs:
           "$FFMPEG_BIN" -version
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:generate
-      - run: pnpm exec playwright install --with-deps chromium
+      - name: Install Playwright Chromium with the Linux sandbox
+        run: |
+          download_dir="$RUNNER_TEMP/playwright-browsers"
+          PLAYWRIGHT_BROWSERS_PATH="$download_dir" pnpm exec playwright install --with-deps chromium
+          sudo cp -R --no-preserve=ownership "$download_dir" "$PLAYWRIGHT_BROWSERS_PATH"
+          sudo chmod -R go-w "$PLAYWRIGHT_BROWSERS_PATH"
+
+          # Grant user namespaces only to the root-owned executable used by the worker tests.
+          shells=("$PLAYWRIGHT_BROWSERS_PATH"/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell)
+          [[ ${#shells[@]} == 1 && -x "${shells[0]}" && ! -w "${shells[0]}" ]]
+          sudo apparmor_parser --replace <<PROFILE
+          abi <abi/4.0>,
+          profile xuti-ci-chromium "${shells[0]}" flags=(unconfined) {
+            userns,
+          }
+          PROFILE
       - run: pnpm lint && pnpm typecheck && pnpm test:unit && pnpm build
       - run: pnpm test:integration
       - name: Verify cross-table transfer transactions and product archive
