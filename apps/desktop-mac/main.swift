@@ -13,9 +13,12 @@ if CommandLine.arguments.dropFirst().elementsEqual(["--self-test"]) {
     }
     RunLoop.main.run()
 } else {
-    let app = NSApplication.shared
-    app.setActivationPolicy(.regular)
-    let delegate = MacWorkspace()
-    app.delegate = delegate
-    withExtendedLifetime(delegate) { app.run() }
+    // The process entry point is the main thread. Run AppKit's loop directly on it.
+    MainActor.assumeIsolated {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
+        let delegate = MacWorkspace()
+        app.delegate = delegate
+        withExtendedLifetime(delegate) { app.run() }
+    }
 }
