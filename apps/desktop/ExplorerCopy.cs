@@ -174,16 +174,21 @@ static partial class Native {
             public uint attributes,creationLow,creationHigh,accessLow,accessHigh,writeLow,writeHigh,volume,sizeHigh,sizeLow,links,indexHigh,indexLow;
         }
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle handle,out HandleInfo info);
+        static SafeFileHandle OpenDirectoryHandle(string path,uint share) {
+            return CreateFileW(path,0x80,share,IntPtr.Zero,3,0x02200000,IntPtr.Zero);
+        }
+        static string FolderId(SafeFileHandle handle) {
+            HandleInfo info;
+            if(handle.IsInvalid || !GetFileInformationByHandle(handle,out info) || (info.attributes&0x410)!=0x10 ||
+                (info.indexHigh==0 && info.indexLow==0))throw Block("本机无法核对桌面文件夹的身份，已停止创建或粘贴。");
+            return String.Format("{0:x}:{1:x}:{2:x}:{3:x}:{4:x}",info.volume,info.indexHigh,info.indexLow,info.creationHigh,info.creationLow);
+        }
         static string FolderId(string path) {
-            using(var handle=CreateFileW(path,0x80,7,IntPtr.Zero,3,0x02200000,IntPtr.Zero)) {
-                HandleInfo info;
-                if(handle.IsInvalid || !GetFileInformationByHandle(handle,out info) || (info.attributes&0x410)!=0x10 ||
-                    (info.indexHigh==0 && info.indexLow==0))throw Block("本机无法核对桌面文件夹的身份，已停止创建或粘贴。");
-                return String.Format("{0:x}:{1:x}:{2:x}:{3:x}:{4:x}",info.volume,info.indexHigh,info.indexLow,info.creationHigh,info.creationLow);
-            }
+            using(var handle=OpenDirectoryHandle(path,7))return FolderId(handle);
         }
         string Receipt(string phase) {return String.Join("\n",new[]{scope,destination,destinationId,fingerprint,phase});}
         bool CheckNewFolder() {
+            if(!SameFolder(UserDesktop(),Path.GetDirectoryName(destination)))throw Block("Windows 桌面的位置已经更改，请核对原任务。");
             string receipt=readReceipt()??"";
             var parts=receipt.Split('\n');
             if(parts[0]!=scope) {
@@ -446,18 +451,22 @@ static partial class Native {
                 }
                 throw new Exception("已发送复制快捷键，未能确认来源文件进入剪贴板，请核对后继续。");
             }
-            CheckVacant(destination,topLevel);
-            check();CheckDispatch(window,key,evidence);
-            if(newDesktopFolder) {
-                if(!CheckNewFolder())throw Block("目标目录已变化，请核对。");
-                writeReceipt(Receipt("paste"));
+            // Deny delete sharing on the owned directory until the actual Shell
+            // transfer has been verified. Contents can still be created normally.
+            using(var held=newDesktopFolder?OpenDirectoryHandle(destination,3):null) {
+                CheckVacant(destination,topLevel);
                 check();CheckDispatch(window,key,evidence);
-            }
-            pasteSent=true;
-            SendChord(Keys[key]);
-            for(int i=0;i<60;i++) {
-                await Task.Delay(200);check();
-                if(CopiedFilesVisible(destination,expected) && TargetHasExactContents())return;
+                if(newDesktopFolder) {
+                    if(FolderId(held)!=destinationId || !CheckNewFolder())throw Block("目标目录已变化，请核对。");
+                    writeReceipt(Receipt("paste"));
+                    check();CheckDispatch(window,key,evidence);
+                }
+                pasteSent=true;
+                SendChord(Keys[key]);
+                for(int i=0;i<60;i++) {
+                    await Task.Delay(200);check();
+                    if(CopiedFilesVisible(destination,expected) && TargetHasExactContents())return;
+                }
             }
             throw new Exception("已发送粘贴快捷键，目标文件还未全部核验。请查看复制进度，避免重复粘贴。");
         }
