@@ -271,11 +271,12 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     });
   }).flat();
   const sortingImport = await begin("style", sortingRecords, "sorting");
-  await ok(`${endpoint}/imports/${sortingImport.id}/chunks`, "POST", {
-    records: sortingRecords,
-  });
-  await ok(`${endpoint}/imports/${sortingImport.id}/finish`, "POST", {});
+  const sortingFixtureIds = [sortingImport.id];
   try {
+    await ok(`${endpoint}/imports/${sortingImport.id}/chunks`, "POST", {
+      records: sortingRecords,
+    });
+    await ok(`${endpoint}/imports/${sortingImport.id}/finish`, "POST", {});
     const batch=await ok(`${endpoint}?days=30&q=${encodeURIComponent(" sort-a，SORT-B\nSORT-A,missing ")}`);
     assert.equal(batch.total,2);assert.equal(Number(batch.summary.salesAmount),1500);assert.equal(batch.top.length,2);
     assert.equal((await ok(`${endpoint}?days=30&q=SORT`)).total,3,"single search remains fuzzy");
@@ -288,6 +289,7 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     const hash=createHash("sha256").update(JSON.stringify(sortingRecords)+"sorting").digest("hex");
     const upgraded=await ok(`${endpoint}/imports`,"POST",{dimension:"style",fileName:"sorting.xlsx",fileHash:hash,startDate:start,endDate:end,expectedRows:enriched.length,normalizationVersion:2});
     assert.notEqual(upgraded.id,sortingImport.id);
+    sortingFixtureIds.push(upgraded.id);
     await ok(`${endpoint}/imports/${upgraded.id}/chunks`,"POST",{records:enriched});
     await ok(`${endpoint}/imports/${upgraded.id}/finish`,"POST",{});
     const meta=await ok(`${endpoint}?days=30&sort=saleAge`);
@@ -343,6 +345,7 @@ export async function testCompassAnalytics(h: Record<string, any>) {
       }),
     ).flat();
     const rankingImport = await begin("style", rankingRecords, "ranking");
+    sortingFixtureIds.push(rankingImport.id);
     await ok(`${endpoint}/imports/${rankingImport.id}/chunks`, "POST", {
       records: rankingRecords,
     });
@@ -364,10 +367,14 @@ export async function testCompassAnalytics(h: Record<string, any>) {
       "AI and email snapshots retain their TOP 10 scope",
     );
   } finally {
-    await db.$executeRawUnsafe(
-      "UPDATE compass_active_imports SET import_id=$1::bigint WHERE dimension='style'",
-      partial.id,
-    );
+    // Historical queries choose the latest completed import for each day.
+    await db.$transaction([
+      db.$executeRawUnsafe(
+        "UPDATE compass_active_imports SET import_id=$1::bigint WHERE dimension='style'",
+        partial.id,
+      ),
+      db.$executeRawUnsafe("DELETE FROM compass_imports WHERE id=ANY($1::bigint[])", sortingFixtureIds),
+    ]);
   }
   check(
     "Compass metric sorting uses cumulative ratios, stock snapshots, global pagination and null-last ordering",
@@ -512,7 +519,10 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     );
     aiBundle = await collectCompassBundle(end);
     const first = ensureAIAnalysis(aiBundle);
-    await aiStarted;
+    await Promise.race([
+      aiStarted,
+      first.then((result) => assert.fail(`AI analysis finished before the mocked request reached its gate: ${JSON.stringify(result)}`)),
+    ]);
     assert.equal((await ensureAIAnalysis(aiBundle)).state, "PENDING");
     releaseAI();
     assert.equal((await first).state, "READY");
