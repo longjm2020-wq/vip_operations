@@ -35,7 +35,7 @@ static partial class Native {
             return full.Length>3 ? full.TrimEnd('\\') : full;
         } catch { return null; }
     }
-    static string UserDesktop() {
+    internal static string UserDesktop() {
         return LocalFolder(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
     }
     static bool SameFolder(string left,string right) {

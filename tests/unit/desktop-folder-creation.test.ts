@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  desktopFolderCompoundRequest,
   desktopFolderCreationPlan,
   desktopFolderCreationPlanSchema,
   desktopFolderCreationRequest,
   desktopFolderNotesIntent,
+  desktopFolderNotesSteps,
+  desktopFolderSteps,
+  looksLikeDesktopFolderCompound,
   looksLikeDesktopFolderCreation,
   looksLikeDesktopFolderNotes,
 } from "../../packages/contracts/src/desktop-folder-creation.js";
@@ -52,6 +56,7 @@ describe("Windows Desktop folder creation plans", () => {
     expect(desktopFolderCreationRequest(text)).toEqual({
       deviceName: "样品室",
       plan: { parentName: "Ａ区", folderNames: ["秋、冬", "样品 A", "纸样"] },
+      steps: ["ensure_directories", "verify"],
     });
     expect(classifyAssistantExecution(text)).toEqual({
       kind: "desktop",
@@ -161,6 +166,10 @@ describe("empty documents for the previous verified folder batch", () => {
     "recognizes a standalone instruction to create same-name documents: %s",
     (text) => {
       expect(desktopFolderNotesIntent(text)).toBe(true);
+      expect(desktopFolderNotesSteps(text)).toEqual([
+        "ensure_same_name_text",
+        "verify",
+      ]);
       expect(looksLikeDesktopFolderNotes(text)).toBe(true);
       expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
       expect(
@@ -200,6 +209,147 @@ describe("empty documents for the previous verified folder batch", () => {
       expect(desktopFolderNotesIntent(text)).toBe(false);
       expect(looksLikeDesktopFolderNotes(text)).toBe(false);
       expect(classifyAssistantExecution(text)).toEqual({ kind: "site" });
+    },
+  );
+});
+
+describe("directories and same-name documents in one batch", () => {
+  const folders =
+    '在我的电脑桌面新建父文件夹"测试自动化666"，并在文件内新建100个子文件夹，命名规则按"XUTI-01......XUTI-n"';
+  const notes = "在每个子文件夹内新建一个记事本，命名按子文件夹名命名";
+  const compound = folders + "，然后" + notes;
+  const expected = {
+    parentName: "测试自动化666",
+    folderNames: Array.from(
+      { length: 100 },
+      (_, index) => `XUTI-${String(index + 1).padStart(2, "0")}`,
+    ),
+  };
+  const steps = ["ensure_directories", "ensure_same_name_text", "verify"];
+
+  it.each([
+    compound,
+    "请在后台静默执行，" + compound + "，不打开窗口。",
+    folders + "接着请" + notes,
+    folders + "并" + notes,
+    folders + "，然后在每个子文件夹内新建一个同名文本文件",
+  ])("parses both operations as one explicit plan: %s", (text) => {
+    expect(desktopFolderCompoundRequest(text)?.plan).toEqual(expected);
+    expect(desktopFolderCompoundRequest(text)?.steps).toEqual(steps);
+    expect(looksLikeDesktopFolderCompound(text)).toBe(true);
+    expect(desktopFolderCreationPlan(text)).toBeUndefined();
+    expect(desktopFolderNotesIntent(text)).toBe(false);
+    expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
+    expect(shouldSearchAssistantPublicWeb(text, { explicitSearch: true })).toBe(
+      false,
+    );
+  });
+
+  it("preserves the named computer and literal child names", () => {
+    const text =
+      "在电脑「样品室」的桌面新建父文件夹「样品」，在父文件夹内建两个子目录，分别叫「商品 A」、商品 B；随后在各个子目录中创建同名空白文本文档";
+    expect(desktopFolderCompoundRequest(text)).toEqual({
+      deviceName: "样品室",
+      plan: { parentName: "样品", folderNames: ["商品 A", "商品 B"] },
+      steps,
+    });
+    expect(classifyAssistantExecution(text)).toEqual({
+      kind: "desktop",
+      deviceName: "样品室",
+    });
+  });
+
+  it("never treats text quoted as a folder name as a second instruction", () => {
+    const name = "春款，然后在每个子文件夹内新建同名记事本";
+    const text = `在桌面新建父文件夹「样品」，在里面新建子目录，命名为「${name}」`;
+    expect(looksLikeDesktopFolderCompound(text)).toBe(false);
+    expect(desktopFolderCompoundRequest(text)).toBeUndefined();
+    expect(desktopFolderCreationPlan(text)?.folderNames).toEqual([name]);
+  });
+
+  it.each([
+    compound + "，然后打开记事本",
+    compound + "，并写入「内容」",
+    compound + "，并覆盖已有文件",
+    compound.replace("100个", "101个"),
+    compound.replace("测试自动化666", "../测试自动化666"),
+    folders + "，然后在每个子文件夹内新建两个同名记事本",
+    folders + "，然后在每个子文件夹内新建记事本，名称为「统一名称」",
+    "在桌面新建父文件夹「样品」，在里面新建子目录，然后" + notes,
+    "在桌面新建父文件夹「样品」，在里面新建10个子目录，给每个子目录生成独立报表",
+    "在桌面新建父文件夹「样品」，在里面新建10个子目录，然后执行 PowerShell 脚本",
+  ])("holds incomplete or mixed requests for clarification: %s", (text) => {
+    expect(looksLikeDesktopFolderCompound(text)).toBe(true);
+    expect(desktopFolderCompoundRequest(text)).toBeUndefined();
+    expect(desktopFolderCreationPlan(text)).toBeUndefined();
+    expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
+  });
+
+  it.each([
+    [
+      "1. 在我的电脑桌面新建父文件夹「测试自动化666」。",
+      "2. 在父文件夹内新建100个子文件夹，命名规则按「XUTI-01......XUTI-n」；",
+      "3. 在每个子文件夹内新建一个同名文本文件。",
+    ].join("\n"),
+    [
+      "请在后台静默执行：",
+      "第一步：在我的电脑桌面新建父文件夹「测试自动化666」",
+      "（二）在父文件夹内新建100个子文件夹，命名按 XUTI-01 至 XUTI-100",
+      "三、在每个子文件夹内新建一个记事本，命名按子文件夹名命名",
+    ].join("\r\n"),
+  ])(
+    "preserves the numbered sequence until the whole request is valid: %s",
+    (text) => {
+      expect(desktopFolderCompoundRequest(text)).toEqual({
+        plan: expected,
+        deviceName: undefined,
+        steps,
+      });
+      expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
+      expect(
+        looksLikeDesktopFolderCompound(text.replace(/(?:3\.|三、)/u, "4.")),
+      ).toBe(true);
+      expect(
+        desktopFolderCompoundRequest(text.replace(/(?:3\.|三、)/u, "4.")),
+      ).toBeUndefined();
+      expect(
+        desktopFolderCompoundRequest(
+          text.replace("测试自动化666", "测试\n自动化666"),
+        ),
+      ).toBeUndefined();
+      expect(
+        desktopFolderCompoundRequest(text + "\n4. 运行任意命令"),
+      ).toBeUndefined();
+      expect(looksLikeDesktopFolderCompound(text + "\n4. 运行任意命令")).toBe(
+        true,
+      );
+    },
+  );
+
+  it("reconstructs the same ordered opcodes to resume the same saved task", () => {
+    expect(desktopFolderSteps("create_folders_with_notes")).toEqual(
+      desktopFolderCompoundRequest(compound)?.steps,
+    );
+    expect(desktopFolderSteps("create_desktop_folders")).toEqual(
+      desktopFolderCreationRequest(folders)?.steps,
+    );
+    expect(desktopFolderSteps("create_folder_notes")).toEqual(
+      desktopFolderNotesSteps(notes),
+    );
+    expect(desktopFolderSteps("run_script")).toBeUndefined();
+  });
+
+  it.each([
+    folders,
+    notes,
+    "不要" + compound,
+    "怎么" + compound + "？",
+    compound + "吗？",
+  ])(
+    "keeps standalone, negative and explanatory inputs separate: %s",
+    (text) => {
+      expect(looksLikeDesktopFolderCompound(text)).toBe(false);
+      expect(desktopFolderCompoundRequest(text)).toBeUndefined();
     },
   );
 });

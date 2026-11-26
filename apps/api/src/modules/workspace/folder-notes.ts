@@ -21,9 +21,11 @@ export async function verifiedFolderSource(
       d.engine_seen_at>now()-interval '20 seconds' AND d.last_seen_at>now()-interval '20 seconds' AS online
     FROM assistant_desktop_tasks t JOIN assistant_desktop_devices d ON d.id=t.device_id AND d.user_id=t.user_id
     WHERE t.id=$1::uuid AND t.request_id=$2::uuid AND t.user_id=$3::bigint
-      AND ($4::uuid IS NULL OR t.device_id=$4::uuid) AND t.native_action='create_desktop_folders'
-      AND t.status='DONE' AND t.step=1 AND t.last_ack IS NOT NULL
-      AND t.history @> '[{"step":1,"action":"create_folders","result":"ok"}]'::jsonb
+      AND ($4::uuid IS NULL OR t.device_id=$4::uuid)
+      AND t.native_action IN ('create_desktop_folders','create_folders_with_notes')
+      AND t.status='DONE' AND t.step>0 AND t.last_ack IS NOT NULL
+      AND t.history->-1 @> jsonb_build_object('step',t.step,'action',
+        CASE WHEN t.native_action='create_folders_with_notes' THEN 'create_folders_and_notes' ELSE 'create_folders' END,'result','ok')
       AND d.platform='windows' AND d.authorization_id=t.authorization_id AND d.revoked_at IS NULL
       AND d.token_hash IS NOT NULL AND d.expires_at>now()
       AND ($6::uuid IS NULL OR EXISTS(SELECT 1 FROM assistant_desktop_tasks stopped

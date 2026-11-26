@@ -206,6 +206,7 @@ beforeAll(async () => {
     "120_desktop_wecom.sql",
     "121_desktop_folder_creation.sql",
     "122_desktop_folder_notes.sql",
+    "123_desktop_folder_batch_notes.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -1044,6 +1045,23 @@ describe("assistant business tools and private memory", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
   const noteInstruction = "在每个子文件夹内新建一个记事本，命名按文件夹名命名";
+  it.each([true,false])("routes an explicit parent-folder, child-folder and txt instruction as one native job (automatic %s)", async automatic => {
+    const deviceId = randomUUID(), authorization = randomUUID();
+    await fixture.database!.exec("UPDATE compass_ai_settings SET enabled=false,verified_at=NULL");
+    await fixture.database!.query(`INSERT INTO assistant_desktop_devices
+      (id,user_id,name,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,authorization_id,folder_creation,folder_notes,folder_batch_notes)
+      VALUES($1,7,'样品室','s','t',now(),now(),true,$2,true,true,true)`, [deviceId,authorization]);
+    const message = '在我的电脑桌面新建父文件夹"测试自动化666"，并在文件内新建100个子文件夹，命名规则按"XUTI-01......XUTI-n"，然后在每个子文件夹内新建一个记事本，命名按子文件夹名命名';
+    const request = {...input(), desktopDeviceId:deviceId, message, model:"unavailable/model", ...(automatic ? {autoExecution:true}:{})};
+    const reply = await sendAssistant(actor(),request);
+    const taskId = reply.messages.at(-1)!.desktopTaskId;
+    expect(taskId).toEqual(expect.any(String));
+    expect((await sendAssistant(actor(),request)).messages.at(-1)!.desktopTaskId).toBe(taskId);
+    expect((await fixture.database!.query("SELECT id,native_action,model_ref,folder_source_task_id,folder_steps FROM assistant_desktop_tasks")).rows)
+      .toEqual([{id:taskId,native_action:"create_folders_with_notes",model_ref:null,folder_source_task_id:null,
+        folder_steps:["ensure_directories","ensure_same_name_text","verify"]}]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   const batchCapabilities = { nativeActions: true, folderCreation: true, folderNotes: true };
   async function verifiedBatchConversation() {
     const deviceId = randomUUID(), grant = randomUUID();

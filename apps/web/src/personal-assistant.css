@@ -897,13 +897,20 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   display: inline-block;
   margin-left: 10px;
 }
+.assistant-desktop-plan,
 .assistant-desktop-receipts {
   margin: 8px 0;
   font-size: 12px;
 }
+.assistant-desktop-plan summary,
 .assistant-desktop-receipts summary {
   color: var(--app-secondary);
   cursor: pointer;
+}
+.assistant-desktop-plan ol {
+  margin: 6px 0;
+  padding-inline-start: 1.6em;
+  line-height: 1.7;
 }
 .assistant-desktop-receipts ol {
   margin: 6px 0;

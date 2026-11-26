@@ -1,19 +1,20 @@
 {
-  "version": "1.2.17",
+  "version": "1.2.18",
   "platform": "win-x64",
-  "sha256": "b79b629e2477d961738fb563e79a6113662954a253792aec185d4d60a7bef7b4",
+  "sha256": "6e564d13443d6d26edbcc76f827beaadeda7f4d0b1b6262914d930acef593ec0",
   "sources": {
-    "apps/desktop/XutiDesktop.cs": "7633cf9847c22d2a19a1e3696cdb679e83dacfe5843cdd8fceec43c02b50c608",
-    "apps/desktop/DesktopExplorer.cs": "7b5ad17f14342a1006c9832ee9ce88d8597e99b0906a633ad927d6104cd9f0aa",
+    "apps/desktop/XutiDesktop.cs": "53578adeacf6997b9304682ddf93fb028287ab5be0409552a795064eafb6427f",
+    "apps/desktop/DesktopExplorer.cs": "36c1b7afd22364f0d810315ce8d6486991dc9759b808ef1bae6b2840dad8f156",
     "apps/desktop/ExplorerCopy.cs": "38e9af3fd727778249d188f482eabdb9b4749fca09539a7d0aa76f630a14570f",
-    "apps/desktop/FolderCreation.cs": "eabb120f6b28b379d907d5014ae8c4826021c4ae1e01ed135f633ac06cf83830",
+    "apps/desktop/FolderCreation.cs": "2ead7fa31febf5b6dfd8958a0e41cd4762a31c4fe08ec605b0339a8217da08bc",
+    "apps/desktop/FilePlanRunner.cs": "fb5574cc251898fcf94c9e64572744fc6b2a9251413fa49a243bd628424243b7",
     "apps/desktop/WeCom.cs": "fbf8f1f75a494dd258e3cce1096d168074ecc0b6770c5354829075ced69f1e87",
     "apps/desktop/DesktopShell.cs": "9971dd142efb05944f12f14ea02991168d4671125c389ad4265689e2447c2a31",
     "apps/desktop/app.manifest": "c58b06b9ed978a75dddc988e2e2fcde120675c3ac0554cc1e45b20076f3ee68d",
     "apps/desktop/启动小序.cmd": "4ea0d09b231966f86284ea78560ef38fa6ad7eb56d3312ba7f391fe3795e75ef",
-    "apps/desktop/README.txt": "a714c6b2a45733339af39a597e8b53f66aadea3b8ca3725d131bb91242345813",
-    "apps/desktop/version.json": "81a2b0cf286d1938572df0a44464d7e93bb672bbd46fa9d4ae29a21996cd3c63",
-    "scripts/build-desktop.mjs": "109611a17c3907b8c44b2b0b28d528b167e4114026bc6ffe619c97843baa2da6",
-    "scripts/desktop-artifact.mjs": "9ef60d4d4a57af47ccdb505b84b3767d386d629a127720654746ffd09ba986ab"
+    "apps/desktop/README.txt": "3bdc8efea5876cd8ffc1787790743084320af03ab43cedebdf68ca7fd1c1277b",
+    "apps/desktop/version.json": "eaca9b8499b737ab4d0b72a07ee6ffbf1f6d78e39a0b635393ea5d73aa3c76f3",
+    "scripts/build-desktop.mjs": "91cf6c9bdbab482668074867bc31837cd393f642b6f388331b1f118e981ed156",
+    "scripts/desktop-artifact.mjs": "3f9e38ece4b298ee58e799a839af824ec593ff1defe44ae43ebec24c33775819"
   }
 }

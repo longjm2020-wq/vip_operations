@@ -21,7 +21,7 @@ import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import { desktopFileCopyIntent, mentionsDesktopFileCopy } from "../../../../../packages/contracts/src/desktop-file-copy.js";
-import { desktopFolderCreationPlan, desktopFolderNotesIntent, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
+import { desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   assistantFollowupAnchor,
   classifyAssistantExecution,
@@ -335,7 +335,7 @@ export async function sendAssistant(
   // A failed reservation already contains the user's native file instruction. A new
   // HTTP attempt may resume it only with the same destination, attachment and mode
   // settings. Keep the task key even if the old queue commit lost its response.
-  const folderPlan = execution?.kind === "desktop" && desktopFolderCreationPlan(body.message);
+  const folderPlan = execution?.kind === "desktop" && (desktopFolderCompoundRequest(body.message)?.plan ?? desktopFolderCreationPlan(body.message));
   const retryDesktop = !voice && execution?.kind === "desktop" && !execution.localBrowser &&
     (folderNotes || folderPlan || mentionsDesktopFileCopy(body.message)) && sameFailedTurn;
   const turnId = retryDesktop ? last.id : body.requestId;

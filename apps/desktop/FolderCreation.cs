@@ -10,6 +10,10 @@ using Microsoft.Win32.SafeHandles;
 
 namespace XutiDesktop {
 static partial class Native {
+    internal const string CreateFolders="create_desktop_folders", CreateNotes="create_folder_notes", CreateFoldersWithNotes="create_folders_with_notes";
+    internal static bool IsFolderBatchAction(string action) {
+        return action==CreateFolders || action==CreateNotes || action==CreateFoldersWithNotes;
+    }
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
     static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
 
@@ -80,11 +84,26 @@ static partial class Native {
         } catch { handle.Dispose();throw; }
     }
 
-    public static Task<int> CreateDesktopFolders(Dictionary<string,object> plan,Func<Task> checkpoint,bool notes) {
-        return EnsureFolderBatch(UserDesktop(),plan,checkpoint,notes);
+    public static Task<int> CreateDesktopFolders(Dictionary<string,object> plan,Func<Task> checkpoint,string action) {
+        return EnsureFolderBatch(UserDesktop(),plan,checkpoint,action);
     }
 
-    static async Task<int> EnsureFolderBatch(string desktop,Dictionary<string,object> plan,Func<Task> checkpoint,bool notes=false) {
+    internal static string[] FolderSteps(string action) {
+        if(!IsFolderBatchAction(action))throw new InvalidOperationException("未知的桌面批量任务类型。");
+        if(action==CreateFolders)return new[]{"ensure_directories","verify"};
+        if(action==CreateNotes)return new[]{"ensure_same_name_text","verify"};
+        return new[]{"ensure_directories","ensure_same_name_text","verify"};
+    }
+
+    static Task<int> EnsureFolderBatch(string desktop,Dictionary<string,object> plan,Func<Task> checkpoint,string action=CreateFolders) {
+        return ExecuteFilePlan(desktop,plan,FolderSteps(action),checkpoint,op=>{});
+    }
+
+    internal static async Task<int> ExecuteFilePlan(string desktop,Dictionary<string,object> plan,string[] steps,Func<Task> checkpoint,Action<string> beforeStep) {
+        if(!new[]{CreateFolders,CreateNotes,CreateFoldersWithNotes}.Any(a=>FolderSteps(a).SequenceEqual(steps)))
+            throw new IOException("文件执行脚本包含不支持的操作或顺序。");
+        bool allowMissingFolders=steps.Contains("ensure_directories");
+        bool includeNotes=steps.Contains("ensure_same_name_text");
         object parentValue,childrenValue;
         plan.TryGetValue("parentName",out parentValue);
         plan.TryGetValue("folderNames",out childrenValue);
@@ -99,53 +118,57 @@ static partial class Native {
         string parent=Path.Combine(desktop,parentName);
         var held=new List<SafeFileHandle>();
         var slots=new SafeFileHandle[names.Length];
+        var notes=new SafeFileHandle[names.Length];
+        string[] folders=names.Select(name=>Path.Combine(parent,name)).ToArray();
+        string[] notePaths=names.Select((name,i)=>Path.Combine(folders[i],name+".txt")).ToArray();
         try {
             var ancestors=new Stack<string>();
             for(var dir=new DirectoryInfo(desktop);dir.Parent!=null;dir=dir.Parent)ancestors.Push(dir.FullName);
             foreach(string ancestor in ancestors)held.Add(PinBatchDirectory(ancestor,false,false));
             await checkpoint();
-            var parentHandle=PinBatchDirectory(parent,!notes,true);
+            var parentHandle=PinBatchDirectory(parent,allowMissingFolders,true);
             if(parentHandle!=null) {
                 held.Add(parentHandle);
-                // Detect a conflicting file or link before adding missing siblings.
+                // Preflight every existing target directory and note before creating siblings.
                 for(int i=0;i<names.Length;i++) {
                     await checkpoint();
-                    slots[i]=PinBatchDirectory(Path.Combine(parent,names[i]),!notes,true);
-                    if(slots[i]!=null)held.Add(slots[i]);
-                }
-            } else {
-                await checkpoint();
-                held.Add(CreateBatchDirectory(parent));
-            }
-            if(notes) {
-                // All folders in the completed parent task must exist. Preflight all
-                // existing files before writing any of the missing ones.
-                var paths=names.Select(name=>Path.Combine(parent,name,name+".txt")).ToArray();
-                for(int i=0;i<paths.Length;i++) {
-                    await checkpoint();
-                    slots[i]=PinBatchNote(paths[i],false);
-                    if(slots[i]!=null)held.Add(slots[i]);
-                }
-                for(int i=0;i<paths.Length;i++) {
-                    await checkpoint();
-                    if(slots[i]!=null)continue;
-                    slots[i]=PinBatchNote(paths[i],true);
+                    slots[i]=PinBatchDirectory(folders[i],allowMissingFolders,true);
+                    if(slots[i]==null)continue;
                     held.Add(slots[i]);
-                }
-                await checkpoint();
-                foreach(var note in slots)ExplorerCopy.VerifyBatchNote(note,false);
-                return slots.Length;
-            }
-            for(int i=0;i<names.Length;i++) {
-                await checkpoint();
-                if(slots[i]==null) {
-                    slots[i]=CreateBatchDirectory(Path.Combine(parent,names[i]));
-                    held.Add(slots[i]);
+                    if(includeNotes) {
+                        notes[i]=PinBatchNote(notePaths[i],false);
+                        if(notes[i]!=null)held.Add(notes[i]);
+                    }
                 }
             }
-            await checkpoint();
-            foreach(var slot in slots)ExplorerCopy.FolderId(slot);
-            return slots.Length;
+            foreach(string step in steps) {
+                beforeStep(step);
+                await checkpoint();
+                switch(step) {
+                    case "ensure_directories":
+                        if(parentHandle==null)held.Add(CreateBatchDirectory(parent));
+                        for(int i=0;i<folders.Length;i++) {
+                            await checkpoint();
+                            if(slots[i]!=null)continue;
+                            slots[i]=CreateBatchDirectory(folders[i]);
+                            held.Add(slots[i]);
+                        }
+                        break;
+                    case "ensure_same_name_text":
+                        for(int i=0;i<notePaths.Length;i++) {
+                            await checkpoint();
+                            if(notes[i]!=null)continue;
+                            notes[i]=PinBatchNote(notePaths[i],true);
+                            held.Add(notes[i]);
+                        }
+                        break;
+                    case "verify":
+                        foreach(var slot in slots)ExplorerCopy.FolderId(slot);
+                        if(includeNotes)foreach(var note in notes)ExplorerCopy.VerifyBatchNote(note,false);
+                        return slots.Length;
+                }
+            }
+            throw new IOException("文件执行脚本缺少结果核验。");
         } finally {foreach(var handle in held)handle.Dispose();}
     }
 
@@ -153,7 +176,7 @@ static partial class Native {
         string desktop=Directory.CreateDirectory(Path.Combine(fixture,"batch-desktop")).FullName;
         string parent=Path.Combine(desktop,"测试自动化999");
         var names=Enumerable.Range(1,10).Select(i=>"XUTI-"+i.ToString("00")).ToArray();
-        try { TestFolderBatch(desktop,parent,names); }
+        try { TestFolderBatch(desktop,parent,names); TestFoldersWithNotes(desktop); }
         finally {
             File.Delete(Path.Combine(parent,"keep.txt"));
             foreach(string name in names.Concat(new[]{"resume-a","resume-b","missing"})) {
@@ -194,7 +217,7 @@ static partial class Native {
     static void TestFolderNotes(string desktop,string parent,string[] names) {
         string[] paths=names.Select(n=>Path.Combine(parent,n,n+".txt")).ToArray();
         var plan=new Dictionary<string,object>{{"parentName",Path.GetFileName(parent)},{"folderNames",names}};
-        Func<int> run=()=>EnsureFolderBatch(desktop,plan,()=>Task.FromResult(0),true).GetAwaiter().GetResult();
+        Func<int> run=()=>EnsureFolderBatch(desktop,plan,()=>Task.FromResult(0),CreateNotes).GetAwaiter().GetResult();
         Action invalid=()=>{try{run();}catch(IOException){return;}catch(InputNotSent){return;}throw new Exception("Accepted a conflicting batch of text files");};
         try {
             plan["folderNames"]=new[]{names[0],"missing"};
@@ -209,13 +232,47 @@ static partial class Native {
                 EnsureFolderBatch(desktop,plan,()=>{
                     if(File.Exists(paths[0]))throw new OperationCanceledException();
                     return Task.FromResult(0);
-                },true).GetAwaiter().GetResult();
+                },CreateNotes).GetAwaiter().GetResult();
                 throw new Exception("Background note creation ignored cancellation");
             } catch(OperationCanceledException) {}
             if(File.Exists(paths[2]) || run()!=names.Length || run()!=names.Length ||
                 File.ReadAllText(paths[1])!="original content" || paths.Where(p=>p!=paths[1]).Any(p=>!File.Exists(p)||new FileInfo(p).Length!=0))
                 throw new Exception("Text notes were lost, modified or not verified after resuming");
         } finally {foreach(string path in paths)File.Delete(path);}
+    }
+
+    static void TestFoldersWithNotes(string desktop) {
+        string parent=Path.Combine(desktop,"combined");
+        var names=new[]{"CHATGPT-01","CHATGPT-02","CHATGPT-03"};
+        var folders=names.Select(n=>Path.Combine(parent,n)).ToArray();
+        var files=names.Select((n,i)=>Path.Combine(folders[i],n+".txt")).ToArray();
+        var plan=new Dictionary<string,object>{{"parentName","combined"},{"folderNames",names}};
+        Func<int> run=()=>EnsureFolderBatch(desktop,plan,()=>Task.FromResult(0),CreateFoldersWithNotes).GetAwaiter().GetResult();
+        try {
+            try {
+                EnsureFolderBatch(desktop,plan,()=>{
+                    if(Directory.Exists(folders[0]))throw new OperationCanceledException();
+                    return Task.FromResult(0);
+                },CreateFoldersWithNotes).GetAwaiter().GetResult();
+                throw new Exception("Combined task ignored cancellation between mkdir and file creation");
+            } catch(OperationCanceledException) {}
+            if(!Directory.Exists(folders[0]) || File.Exists(files[0]) || Directory.Exists(folders[1]))
+                throw new Exception("Combined task cancellation changed unexpected entries");
+            Directory.CreateDirectory(files[2]); // a directory at the intended .txt filename
+            try {
+                try {run();throw new Exception("Combined batch accepted a conflicting destination");}catch(IOException){}
+                if(File.Exists(files[0]) || Directory.Exists(folders[1]))throw new Exception("Combined task wrote before checking all targets");
+            } finally {Directory.Delete(files[2]);}
+            File.WriteAllText(files[0],"original");
+            if(run()!=3 || run()!=3 || File.ReadAllText(files[0])!="original" ||
+                files.Skip(1).Any(p=>!File.Exists(p) || new FileInfo(p).Length!=0))
+                throw new Exception("Combined task failed to recover and verify the original folder and file pairs");
+        } finally {
+            for(int i=0;i<names.Length;i++)if(Directory.Exists(folders[i])) {
+                File.Delete(files[i]);Directory.Delete(folders[i]);
+            }
+            if(Directory.Exists(parent))Directory.Delete(parent);
+        }
     }
 }
 }

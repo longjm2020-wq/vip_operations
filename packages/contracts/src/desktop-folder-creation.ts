@@ -35,6 +35,29 @@ export type DesktopFolderCreationPlan = z.infer<
   typeof desktopFolderCreationPlanSchema
 >;
 
+export type DesktopFolderStep =
+  "ensure_directories" | "ensure_same_name_text" | "verify";
+
+type DesktopFolderRequest = {
+  plan: DesktopFolderCreationPlan;
+  deviceName?: string;
+  steps: DesktopFolderStep[];
+};
+
+/** Reconstruct the ordered operations for an already stored task. */
+export function desktopFolderSteps(
+  action: unknown,
+): DesktopFolderStep[] | undefined {
+  switch (action) {
+    case "create_desktop_folders":
+      return ["ensure_directories", "verify"];
+    case "create_folder_notes":
+      return ["ensure_same_name_text", "verify"];
+    case "create_folders_with_notes":
+      return ["ensure_directories", "ensure_same_name_text", "verify"];
+  }
+}
+
 export const folderCreationGuidance = {
   format:
     "请单独说明桌面父文件夹名称、子文件夹名称或连续编号，例如「在我的电脑桌面新建文件夹“样品”，在里面新建 10 个文件夹，命名为 XUTI-01 至 XUTI-10」。",
@@ -53,6 +76,13 @@ export const folderNotesGuidance = {
   platform: "请在原来创建这些文件夹的 Windows 电脑继续执行。",
 } as const;
 
+export const folderCompoundGuidance = {
+  format:
+    "请写明桌面父文件夹、所需子文件夹名称或连续编号，以及每个子文件夹建立一个同名空白文本文档。其他操作请单独下达。",
+  update:
+    "请更新所选 Windows 电脑的小序桌面端并重新连接，以便在同一任务中后台批量建目录和同名文本文档。",
+} as const;
+
 const politePrefix = /^(?:小序[，,、\s]*)?(?:(?:请你?|帮我|替我|麻烦你?)\s*)*/u;
 const backgroundPrefix =
   /^(?:(?:在)?后台(?:静默)?(?:运行|执行|处理)?|静默(?:运行|执行|处理))[，,：:\s]*/u;
@@ -60,14 +90,15 @@ const desktopPrefix =
   /^(?:在\s*)?(?:(?:(?:我的|这台|当前这台|本地的?)?\s*(?:Windows\s*)?(?:电脑|计算机)|本机)(?:上|里|中)?\s*(?:的)?\s*(?:在\s*)?|(?:我的|本地|Windows)\s*)?桌面(?:上|下|里|中)?\s*[，,：:\s]*/iu;
 const devicePrefix =
   /^(?:在|用|使用|通过)\s*(?:(?:电脑|设备)\s*)?(?:「([^」\n]+)」|『([^』\n]+)』|“([^”\n]+)”|"([^"\n]+)"|([^\s，。！？：、；]{2,32}电脑))(?:这台(?:电脑|设备)|电脑|设备)?(?:上|里|中)?\s*(?:的)?\s*[，,：:\s]*/u;
-const quotedName = String.raw`「[^」\r\n]*」|『[^』\r\n]*』|“[^”\r\n]*”|"[^"\r\n]*"|‘[^’\r\n]*’|'[^'\r\n]*'`;
+const quotedName = String.raw`「[^」]*」|『[^』]*』|“[^”]*”|"[^"]*"|‘[^’]*’|'[^']*'`;
 const unquotedName = String.raw`[\p{L}\p{N}_-][\p{L}\p{N}_. -]{0,99}?`;
 const nameToken = `(?:${quotedName}|${unquotedName})`;
 const create = String.raw`(?:新建|创建|建立|建)`;
 const nameAs = String.raw`(?:(?:命名|取名)(?:为|叫)?|叫作?|名为)`;
-const afterParent = String.raw`[，,、；;\s]*(?:(?:然后|再|接着|并且?)\s*)?(?:在\s*)?(?:(?:(?:该|此|这个|新建的|刚(?:刚)?(?:新建|创建)的)?(?:文件夹?|目录)(?:里(?:面)?|下(?:面)?|内|中))|(?:(?:它|其)?(?:里(?:面)?|下(?:面)?|内|中)))\s*`;
+const afterParent = String.raw`[，,、；;\s]*(?:(?:然后|再|接着|并且?)\s*)?(?:在\s*)?(?:(?:(?:该|此|这个|新建的|刚(?:刚)?(?:新建|创建)的)?(?:父)?(?:文件夹?|目录)(?:里(?:面)?|下(?:面)?|内|中))|(?:(?:它|其)?(?:里(?:面)?|下(?:面)?|内|中)))\s*`;
+const parentFolder = String.raw`(?:父)?(?:文件夹|目录)`;
 const parentCommand = new RegExp(
-  String.raw`^(?:先\s*)?${create}(?:(?:一个|1个|个)\s*)?(?:新的?\s*)?(?:(?:文件夹|目录)\s*(?:[，,]\s*)?(?:${nameAs}\s*)?(?:[：:]\s*)?(${nameToken})|${nameAs}\s*(${nameToken})\s*的?\s*(?:文件夹|目录))${afterParent}`,
+  String.raw`^(?:先\s*)?${create}(?:(?:一个|1个|个)\s*)?(?:新的?\s*)?(?:${parentFolder}\s*(?:[，,]\s*)?(?:${nameAs}\s*)?(?:[：:]\s*)?(${nameToken})|${nameAs}\s*(${nameToken})\s*的?\s*${parentFolder})${afterParent}`,
   "u",
 );
 const underParent = new RegExp(
@@ -116,6 +147,51 @@ function countFolders(raw?: string): number | undefined {
     ? (tens[1] ? digits.indexOf(tens[1]) + 1 : 1) * 10 +
         (tens[2] ? digits.indexOf(tens[2]) + 1 : 0)
     : NaN;
+}
+
+const clauseNumber = String.raw`[0-9０-９]{1,3}|[一二两三四五六七八九十百]+`;
+const numberedClause = new RegExp(
+  String.raw`^(?:[（(](${clauseNumber})[）)]\s*|(?:第(${clauseNumber})步|步骤\s*(${clauseNumber}))[：:、.．]?\s*|(${clauseNumber})[.．、:：)）]\s*)`,
+  "u",
+);
+
+function joinFolderClauses(text: string) {
+  if (text.length > 4000) return;
+  if (!/[\r\n]/u.test(text)) return { command: text, ordered: true };
+  const wrapsLiteral = Array.from(text.matchAll(quotation)).some(([literal]) =>
+    /[\r\n]/u.test(literal),
+  );
+  const lines = text
+    .split(/\r\n?|\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const labels = lines.map((line) => numberedClause.exec(line));
+  const opening = lines[0]?.replace(politePrefix, "") ?? "";
+  const preamble =
+    backgroundPrefix.test(opening) &&
+    opening.replace(backgroundPrefix, "") === ""
+      ? 1
+      : 0;
+  const ordered =
+    !wrapsLiteral &&
+    (labels.every((label) => label === null) ||
+      labels
+        .slice(preamble)
+        .every(
+          (label, index) =>
+            label !== null &&
+            countFolders(label[1] ?? label[2] ?? label[3] ?? label[4]) ===
+              index + 1,
+        ));
+  const command = lines
+    .map((line, index) => {
+      const clause = line.slice(labels[index]?.[0].length ?? 0);
+      return index < lines.length - 1
+        ? clause.replace(/[。；;，,]$/u, "")
+        : clause;
+    })
+    .join("，");
+  return { command, ordered };
 }
 
 function expandFolderRange(
@@ -174,8 +250,9 @@ function parseFolderNames(value: string, count?: number): string[] | undefined {
 }
 
 function readBatchCommand(text: string) {
-  if (text.length > 4000 || /[\r\n]/u.test(text)) return;
-  let command = text
+  const clauses = joinFolderClauses(text);
+  if (!clauses) return;
+  let command = clauses.command
     .trim()
     .replace(politePrefix, "")
     .replace(backgroundPrefix, "");
@@ -206,6 +283,7 @@ function readBatchCommand(text: string) {
     .replace(/^[，,、：:\s]+/u, "")
     .trim();
   return {
+    ordered: clauses.ordered,
     deviceName: device?.slice(1).find(Boolean)?.trim(),
     parentName: unquote(parent[1] ?? parent[2]),
     count: countFolders(child[1]),
@@ -226,9 +304,9 @@ export function looksLikeDesktopFolderCreation(text: string): boolean {
 
 export function desktopFolderCreationRequest(
   text: string,
-): { plan: DesktopFolderCreationPlan; deviceName?: string } | undefined {
+): DesktopFolderRequest | undefined {
   const batch = readBatchCommand(text);
-  if (!batch?.explicitlyBatch) return;
+  if (!batch?.explicitlyBatch || !batch.ordered) return;
   const folderNames = parseFolderNames(batch.value, batch.count);
   if (
     !folderNames ||
@@ -239,7 +317,12 @@ export function desktopFolderCreationRequest(
     parentName: batch.parentName,
     folderNames,
   });
-  if (plan.success) return { plan: plan.data, deviceName: batch.deviceName };
+  if (plan.success)
+    return {
+      plan: plan.data,
+      deviceName: batch.deviceName,
+      steps: ["ensure_directories", "verify"],
+    };
 }
 
 export function desktopFolderCreationPlan(
@@ -250,7 +333,7 @@ export function desktopFolderCreationPlan(
 
 const notesTarget = String.raw`(?:在|给)\s*(?:刚(?:刚|才)?(?:新建|创建|建好)的\s*)?(?:每(?:一)?个|各个|所有)\s*(?:子文件夹|子目录)\s*(?:里(?:面)?|内(?:部)?|中|下(?:面)?)?\s*`;
 const notesCreate = String.raw`(?:(?:再|批量)\s*)?${create}\s*`;
-const textDocument = String.raw`(?:记事本(?:文档|文件)?|文本文(?:档|件)|纯文本(?:文档|文件)|\.?txt\s*(?:文档|文件))`;
+const textDocument = String.raw`(?:记事本(?:文档|文件)?|(?:纯)?文本(?:文档|文件)|\.?txt\s*(?:文档|文件))`;
 const notesRequest = new RegExp(
   String.raw`^${notesTarget}${notesCreate}[^，,。；;]{0,35}${textDocument}`,
   "iu",
@@ -263,9 +346,13 @@ const strictNotesRequest = new RegExp(
   "iu",
 );
 
-function normalizeNotesRequest(text: string): string | undefined {
-  if (text.length > 4000 || /[\r\n]/u.test(text)) return;
-  const command = text
+function normalizeNotesRequest(
+  text: string,
+  requireOrder = true,
+): string | undefined {
+  const clauses = joinFolderClauses(text);
+  if (!clauses || (requireOrder && !clauses.ordered)) return;
+  const command = clauses.command
     .trim()
     .replace(politePrefix, "")
     .replace(/^(?:接着|继续|然后|再)[，,、\s]*/u, "")
@@ -285,12 +372,69 @@ function normalizeNotesRequest(text: string): string | undefined {
 }
 
 export function looksLikeDesktopFolderNotes(text: string): boolean {
-  const command = normalizeNotesRequest(text);
+  const command = normalizeNotesRequest(text, false);
   return command !== undefined && notesRequest.test(command);
 }
 
 /** Recognizes a new empty .txt with the existing folder name; target identities are resolved separately. */
 export function desktopFolderNotesIntent(text: string): boolean {
+  return desktopFolderNotesSteps(text) !== undefined;
+}
+
+export function desktopFolderNotesSteps(
+  text: string,
+): DesktopFolderStep[] | undefined {
   const command = normalizeNotesRequest(text);
-  return command !== undefined && strictNotesRequest.test(command);
+  if (command !== undefined && strictNotesRequest.test(command))
+    return ["ensure_same_name_text", "verify"];
+}
+
+const compoundConnector = String.raw`(?:然后|接着|随后|之后|再|并且?|同时)\s*`;
+const compoundBoundary = new RegExp(
+  String.raw`(?:[，,。；;]\s*(?:${compoundConnector})?|${compoundConnector})(?=(?:请(?:你)?\s*)?${notesTarget})`,
+  "gu",
+);
+
+function readCompoundRequest(text: string) {
+  const clauses = joinFolderClauses(text);
+  if (!clauses) return;
+  const outside = clauses.command.replace(quotation, (literal) =>
+    " ".repeat(literal.length),
+  );
+  // The length-preserving mask keeps separators within literal folder names out of the grammar.
+  for (const boundary of outside.matchAll(compoundBoundary)) {
+    const folders = clauses.command.slice(0, boundary.index);
+    const notes = clauses.command.slice(boundary.index + boundary[0].length);
+    if (looksLikeDesktopFolderNotes(notes) && readBatchCommand(folders))
+      return { folders, notes, ordered: clauses.ordered };
+  }
+}
+
+export function looksLikeDesktopFolderCompound(text: string): boolean {
+  if (readCompoundRequest(text)) return true;
+  const batch = readBatchCommand(text);
+  if (!batch || (!batch.explicitlyBatch && batch.count === undefined))
+    return false;
+  const outside = batch.value.replace(quotation, "");
+  // Follow-up verbs tied to the batch need a complete typed plan. Explicit window
+  // actions and the separately recognized Explorer file-copy workflow keep their own routes.
+  const batchContinuation =
+    /(?:^|[，,。；;]\s*)(?:(?:然后|接着|随后|之后|再|并且?|同时)\s*)?(?:(?:在|给|为)\s*(?:每(?:一)?个|各(?:个)?|所有)\s*(?:子)?(?:文件夹|目录)|(?:写入|新建|创建|生成|新增|添加|删除|移动|重命名|压缩|打包|执行|运行)(?:一个|一份|\s|[\p{L}\p{N}]))/u;
+  return (
+    batchContinuation.test(outside) &&
+    !/(?:点击|双击|右键|菜单|快捷键|在记事本(?:里|内|中)写入|(?:将|把|从).{1,160}(?:复制|拷贝))/u.test(
+      outside,
+    )
+  );
+}
+
+export function desktopFolderCompoundRequest(
+  text: string,
+): DesktopFolderRequest | undefined {
+  const compound = readCompoundRequest(text);
+  if (!compound?.ordered) return;
+  const folders = desktopFolderCreationRequest(compound.folders);
+  const notes = desktopFolderNotesSteps(compound.notes);
+  if (folders && notes)
+    return { ...folders, steps: [...folders.steps.slice(0, -1), ...notes] };
 }

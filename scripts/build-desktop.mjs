@@ -115,6 +115,7 @@ const args = [
   path.join(root, "apps/desktop/DesktopExplorer.cs"),
   path.join(root, "apps/desktop/ExplorerCopy.cs"),
   path.join(root, "apps/desktop/FolderCreation.cs"),
+  path.join(root, "apps/desktop/FilePlanRunner.cs"),
   path.join(root, "apps/desktop/WeCom.cs"),
   path.join(root, "apps/desktop/DesktopShell.cs"),
   versionSource,

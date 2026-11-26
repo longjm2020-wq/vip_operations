@@ -7,7 +7,11 @@ import {
   isNativeDesktopAppCommand,
 } from "../../../../../packages/contracts/src/assistant-execution.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
-import { desktopFolderCreationPlan, desktopFolderNotesIntent, folderCreationGuidance, folderNotesGuidance, looksLikeDesktopFolderCreation, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
+import {
+  desktopFolderCompoundRequest, desktopFolderCreationPlan, desktopFolderNotesIntent,
+  folderCompoundGuidance, folderCreationGuidance, folderNotesGuidance,
+  looksLikeDesktopFolderCompound, looksLikeDesktopFolderCreation, looksLikeDesktopFolderNotes,
+} from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   desktopFileCopyIntent,
   explicitlyRequestsBackgroundCopy, backgroundCopyScope, backgroundCopyUnavailable, requestsBackgroundDesktopExecution,
@@ -129,7 +133,10 @@ export async function resolveAutomaticAssistantExecution(
     return { kind: "clarify", message: desktopFolderNotesIntent(instruction) ? folderNotesGuidance.source : folderNotesGuidance.format };
   const windowsCopy = desktopFileCopyIntent(instruction);
   const macCopy = desktopFileCopyIntent(instruction, "macos");
-  const folderPlan = desktopFolderCreationPlan(instruction);
+  const compound = desktopFolderCompoundRequest(instruction);
+  if (!compound && looksLikeDesktopFolderCompound(instruction))
+    fail("INVALID_FOLDER_COMPOUND", folderCompoundGuidance.format, 400);
+  const folderPlan = compound?.plan ?? desktopFolderCreationPlan(instruction);
   if (!folderPlan && looksLikeDesktopFolderCreation(instruction))
     fail("INVALID_FOLDER_CREATION", folderCreationGuidance.format, 400);
   if (!folderPlan && !windowsCopy && !macCopy && requestsBackgroundDesktopExecution(instruction))
@@ -198,7 +205,7 @@ export async function resolveAutomaticAssistantExecution(
 
   const devices = await rows(
     db,
-    `SELECT id,name,platform,native_actions,desktop_folder_copy,background_file_copy,folder_creation,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
+    `SELECT id,name,platform,native_actions,desktop_folder_copy,background_file_copy,folder_creation,folder_batch_notes,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
             coalesce(last_seen_at > now() - interval '20 seconds', false) AS online
        FROM assistant_desktop_devices
       WHERE user_id = $1::bigint AND token_hash IS NOT NULL
@@ -227,6 +234,8 @@ export async function resolveAutomaticAssistantExecution(
     fail("DEVICE_PLATFORM_MISMATCH", desktopFolderCopyGuidance.platform, 400);
   if (folderPlan && devices[0].platform !== "windows")
     fail("DEVICE_PLATFORM_MISMATCH", folderCreationGuidance.platform, 400);
+  if (compound && !devices[0].folder_batch_notes)
+    fail("FOLDER_COMPOUND_UPDATE_REQUIRED", folderCompoundGuidance.update, 409);
   if (folderPlan && !devices[0].folder_creation)
     fail("FOLDER_CREATION_UPDATE_REQUIRED", folderCreationGuidance.update, 409);
   if (filePlatform && explicitlyRequestsBackgroundCopy(instruction) && (devices[0].platform !== "windows" || !devices[0].background_file_copy))

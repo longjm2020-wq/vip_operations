@@ -14,12 +14,25 @@ import { desktopReceiverProblem } from "./desktop-setup";
 export const isActiveDesktopTask = (task: DesktopTask) =>
   ["WAITING", "RUNNING", "PAUSED", "NEEDS_USER"].includes(task.status);
 
+const backgroundTaskLabels: Partial<Record<NonNullable<DesktopTask["nativeAction"]>, string>> = {
+  create_desktop_folders: "后台批量建文件夹",
+  create_folder_notes: "后台批量建文本",
+  create_folders_with_notes: "后台批量建目录和文本",
+};
+
+const folderStepLabels: Record<NonNullable<DesktopTask["folderSteps"]>[number], string> = {
+  ensure_directories: "按名称清单补齐父目录和子目录",
+  ensure_same_name_text: "在每个子目录中补齐同名 .txt 文件",
+  verify: "核对清单中的所有目标并返回结果",
+};
+
 type StepReceipt = NonNullable<DesktopTask["recentSteps"]>[number];
 const actionLabels: Record<StepReceipt["action"], string> = {
   locate_wecom: "定位企业微信",
   file_copy: "后台复制文件",
   create_folders: "批量创建文件夹",
   create_notes: "核对同名文本文件",
+  create_folders_and_notes: "创建并核验目录和同名文本",
   click: "点击",
   scroll: "滚动",
   type: "输入文字",
@@ -42,12 +55,14 @@ function receiptAction(receipt: StepReceipt) {
 function receiptResult(receipt: StepReceipt) {
   if (receipt.action === "key" && receipt.fileShortcut === "paste" && receipt.verifiedAfterPaste)
     return "事后已核验";
-  if ((receipt.action === "file_copy" || receipt.action === "create_folders" || receipt.action === "create_notes") && receipt.result === "ok") return "已核验";
+  if (["file_copy", "create_folders", "create_notes", "create_folders_and_notes"].includes(receipt.action) && receipt.result === "ok") return "已核验";
   return resultLabels[receipt.result];
 }
 
 function handoffHint(task: DesktopTask, device?: DesktopDevice) {
   if (task.status !== "NEEDS_USER" && task.status !== "PAUSED") return;
+  if (task.nativeAction === "create_folders_with_notes")
+    return "请核对任务提示中的目录或文件，处理后继续，客户端会补齐缺少的目录和同名文本。";
   if (task.nativeAction === "create_folder_notes")
     return "请在执行电脑核对提示中的目录或文件，处理后可继续补齐缺少的同名文本。";
   if (task.nativeAction === "create_desktop_folders")
@@ -98,8 +113,8 @@ export function AssistantDesktopTaskCard({
   const active = isActiveDesktopTask(task);
   const receiverProblem = device ? desktopReceiverProblem(device) : "";
   const taskLabel = task.localBrowser ? "本地浏览器任务" : "电脑任务";
-  const folderCreation = task.nativeAction === "create_desktop_folders";
-  const folderNotes = task.nativeAction === "create_folder_notes";
+  const backgroundLabel = task.fileCopyMode === "background" ? "后台文件复制" :
+    task.nativeAction && backgroundTaskLabels[task.nativeAction];
   const awaitingVerification = task.status === "NEEDS_USER" && task.fileCopyProgress === "awaiting_verification";
   const retrying = task.status === "WAITING" && task.fileCopyProgress === "retrying";
   const verified = task.status === "DONE" && (task.fileCopyProgress === "verified" ||
@@ -153,18 +168,22 @@ export function AssistantDesktopTaskCard({
         : task.stage}</p>
       <div className="assistant-desktop-task-meta">
         {task.localBrowser && "本地浏览器 · "}
-        {folderCreation && "后台批量建文件夹 · "}
-        {folderNotes && "后台批量建文本 · "}
-        {task.fileCopyMode === "background" && "后台文件复制 · "}
+        {backgroundLabel && `${backgroundLabel} · `}
         {task.deviceName || device?.name || "所选电脑"} · 步骤回执 {task.step}{" "}
         次
         {typeof task.confirmedSteps === "number" &&
           ` · 已确认执行 ${task.confirmedSteps} 步`}
-        {!folderCreation && !folderNotes && task.fileCopyMode !== "background" && (task.window ? ` · ${task.window}` : " · 暂无窗口记录")}
+        {!backgroundLabel && (task.window ? ` · ${task.window}` : " · 暂无窗口记录")}
         <time dateTime={task.updatedAt}>
           更新于 {new Date(task.updatedAt).toLocaleTimeString("zh-CN")}
         </time>
       </div>
+      {task.nativeAction === "create_folders_with_notes" && !!task.folderSteps?.length && (
+        <details className="assistant-desktop-plan">
+          <summary>后台执行计划</summary>
+          <ol>{task.folderSteps.map(step => <li key={step}>{folderStepLabels[step]}</li>)}</ol>
+        </details>
+      )}
       {!!task.recentSteps?.length && (
         <details className="assistant-desktop-receipts">
           <summary>最近步骤回执</summary>

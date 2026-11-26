@@ -566,3 +566,45 @@ test("聊天将桌面连续编号目录作为一项后台任务下发并显示�
     await revoke();
   }
 });
+
+test("整句建父目录、编号子目录和同名文本只投递一个后台任务", async ({ page, request, baseURL }) => {
+  const name = "目录和文本合并测试电脑";
+  const { client, deviceId, revoke } = await pairTestReceiver(page, request, baseURL!, name);
+  const receiving = { nativeActions: true, folderCreation: true, folderNotes: true, folderBatchNotes: true };
+  const instruction = '在我的电脑桌面新建父文件夹"测试自动化666"，并在文件内新建100个子文件夹，命名规则按"XUTI-01……XUTI-n"，然后在每个子文件夹内新建一个记事本，命名按子文件夹名命名';
+  try {
+    const { authorizationId } = await client("authorization", { enabled: true });
+    await client("poll", receiving);
+    await page.goto("/my-workspace");
+    await selectAssistantPanel(page, "我的电脑");
+    await page.locator(".assistant-desktop-item").filter({ hasText: name })
+      .getByRole("button", { name: "设为常用电脑" }).click();
+    const composer = page.locator(".assistant-compose:visible");
+    await composer.getByRole("textbox").fill(instruction);
+    await client("poll", receiving);
+    await composer.getByRole("button", { name: "发送给个人助理" }).click();
+    const card = page.getByRole("region", { name: "电脑任务：" + instruction }).filter({ visible: true }).first();
+    await expect(card).toContainText("后台批量建目录和文本");
+    await card.getByText("后台执行计划", { exact: true }).click();
+    await expect(card.locator(".assistant-desktop-plan li")).toHaveText([
+      "按名称清单补齐父目录和子目录", "在每个子目录中补齐同名 .txt 文件", "核对清单中的所有目标并返回结果",
+    ]);
+    const { task } = await client("poll", receiving);
+    expect(task).toMatchObject({
+      deviceId, nativeAction: "create_folders_with_notes",
+      folderSteps: ["ensure_directories", "ensure_same_name_text", "verify"],
+      folderCreation: {
+        parentName: "测试自动化666",
+        folderNames: Array.from({ length: 100 }, (_, index) => "XUTI-" + String(index + 1).padStart(2, "0")),
+      },
+    });
+    const claim = { authorizationId, attemptId: task.folderCreationAttemptId };
+    const route = "tasks/" + task.id + "/folder-creation";
+    await client(route, { ...claim, action: "start" });
+    const done = await client(route, { ...claim, action: "complete", verifiedCount: 100 });
+    expect(done.recentSteps).toEqual([{ step: 1, action: "create_folders_and_notes", result: "ok" }]);
+    await expect(card.getByRole("status")).toContainText("100", { timeout: 15000 });
+  } finally {
+    await revoke();
+  }
+});

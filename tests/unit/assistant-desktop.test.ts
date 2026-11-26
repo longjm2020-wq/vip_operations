@@ -152,6 +152,7 @@ beforeAll(async () => {
   await fixture.db.exec(await readFile("packages/database/migrations/120_desktop_wecom.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/121_desktop_folder_creation.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/122_desktop_folder_notes.sql", "utf8"));
+  await fixture.db.exec(await readFile("packages/database/migrations/123_desktop_folder_batch_notes.sql", "utf8"));
 });
 beforeEach(async () => {
   fixture.session = true;
@@ -234,6 +235,67 @@ async function shot() {
 describe("paired desktop task execution", () => {
   const folderInstruction = '在我的电脑桌面新建文件夹"测试自动化999"，并在文件内新建10个文件夹，命名规则按"XUTI-01......XUTI-n"';
   const folderCapabilities = { nativeActions: true, folderCreation: true };
+  const compoundInstruction = '在我的电脑桌面新建父文件夹"测试自动化666"，并在文件内新建100个子文件夹，命名规则按"XUTI-01......XUTI-n"，然后在每个子文件夹内新建一个记事本，命名按子文件夹名命名';
+  const compoundCapabilities = { ...folderCapabilities, folderNotes: true, folderBatchNotes: true };
+  it("claims a compound batch only on its capable device and accepts one complete set of verified pairs", async () => {
+    const c = actor(), { deviceId } = await paired();
+    const { authorizationId } = await setDesktopAuthorization(c, deviceId, true);
+    const input = { deviceId, requestId: randomUUID(), instruction: compoundInstruction };
+    await pollDesktop(c, deviceId, false, { ...folderCapabilities, folderNotes:true });
+    await expect(queueDesktopTask(c, input)).rejects.toMatchObject({response:{error:{code:"FOLDER_COMPOUND_UPDATE_REQUIRED"}}});
+    const poll = async () => (await pollDesktop(c, deviceId, false, compoundCapabilities)).task;
+    await poll();
+    await expect(queueDesktopTask(c, { ...input, instruction: compoundInstruction.replace("XUTI-n", "XUTI-20") }))
+      .rejects.toMatchObject({response:{error:{code:"INVALID_FOLDER_COMPOUND"}}});
+    const task = await queueDesktopTask(c, input);
+    const steps = ["ensure_directories", "ensure_same_name_text", "verify"];
+    expect(await queueDesktopTask(c, input)).toMatchObject({id:task.id, nativeAction:"create_folders_with_notes", folderSteps:steps});
+    expect((await pollDesktop(c, deviceId, false, { ...folderCapabilities, folderNotes:true })).task).toBeNull();
+    const delivery = await poll();
+    expect(delivery?.folderSteps).toEqual(steps);
+    expect(delivery?.folderCreation).toEqual({ parentName:"测试自动化666", folderNames:
+      Array.from({length:100},(_,i) => "XUTI-" + String(i+1).padStart(2,"0")) });
+    const attemptId = delivery!.folderCreationAttemptId;
+    const claim = (action: string, count?:number) => controlFolderCreation(c,deviceId,task.id,
+      {action,authorizationId,attemptId,...(count===undefined ? {} : {verifiedCount:count})});
+    expect(await claim("start")).toMatchObject({folderSteps:steps,folderCreation:delivery!.folderCreation});
+    await expect(claim("complete",99)).rejects.toThrow();
+    const done = await claim("complete",100);
+    expect(done).toMatchObject({status:"DONE",recentSteps:[{action:"create_folders_and_notes", result:"ok"}],confirmedSteps:1});
+    expect(await claim("complete",100)).toEqual(done);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(["recover","grant","malformed"] as const)("fences legacy compound GUI commands before %s", async mode => {
+    const c = actor(), { deviceId } = await paired();
+    const { authorizationId } = await setDesktopAuthorization(c, deviceId, true);
+    const taskId = randomUUID(), commandId = randomUUID();
+    const instruction = mode === "malformed" ? compoundInstruction + "，然后删除父目录" : compoundInstruction;
+    await fixture.db!.query(`INSERT INTO assistant_desktop_tasks(id,user_id,device_id,request_id,instruction,status,authorization_id,
+      window_id,application,step,history,pending,planning_id,started_at) VALUES($1,7,$2,$3,$4,'RUNNING',$5,$6,'explorer',1,
+      '[{"step":1,"action":"click","result":"ok","confirmedTotal":1}]',$7,$8,now())`,
+      [taskId,deviceId,randomUUID(),instruction,authorizationId,randomUUID(),JSON.stringify({id:commandId,action:{kind:"click"}}),randomUUID()]);
+    expect(await permitDesktop(c,deviceId,taskId,{commandId})).toEqual({allowed:false});
+    await expect(planDesktop(c,deviceId,taskId,await shot())).rejects.toThrow();
+    const pause = (await pollDesktop(c,deviceId,false,compoundCapabilities)).task;
+    expect(pause).toMatchObject({id:taskId,status:"PAUSED"});
+    await acknowledgeDesktop(c,deviceId,taskId,{commandId,outcome:"ok",note:"旧步骤"});
+    if (mode === "grant") {
+      await setDesktopAuthorization(c,deviceId,false);
+      await setDesktopAuthorization(c,deviceId,true);
+    }
+    const resume = () => desktopControl(c,taskId,{action:"resume"});
+    if (mode !== "recover") {
+      await expect(resume()).rejects.toMatchObject({response:{error:{code:mode === "grant" ? "AUTHORIZATION_CHANGED":"INVALID_FOLDER_COMPOUND"}}});
+    } else {
+      expect(await resume()).toMatchObject({id:taskId,status:"WAITING",step:1,nativeAction:"create_folders_with_notes"});
+      const delivery = (await pollDesktop(c,deviceId,false,compoundCapabilities)).task!;
+      const claim = { attemptId:delivery.folderCreationAttemptId,authorizationId };
+      await controlFolderCreation(c,deviceId,taskId,{...claim,action:"start"});
+      expect(await controlFolderCreation(c,deviceId,taskId,{...claim,action:"complete",verifiedCount:100}))
+        .toMatchObject({status:"DONE",step:2,confirmedSteps:2,recentSteps:[{action:"click"},{action:"create_folders_and_notes"}]});
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
   async function queuedFolderBatch() {
     const c = actor();
     const { deviceId } = await paired();
