@@ -29,8 +29,9 @@ import {
   type DesktopPlatform,
 } from "../../../../../packages/contracts/src/desktop-file-copy.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
-import { desktopFolderCreationRequest, folderCreationGuidance, looksLikeDesktopFolderCreation } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
+import { desktopFolderCreationRequest, desktopFolderNotesIntent, folderCreationGuidance, folderNotesGuidance, looksLikeDesktopFolderCreation, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
+  assistantFollowupAnchor,
   assistantFollowupText,
   desktopExplorerIntent,
   desktopWecomIntent,
@@ -41,6 +42,47 @@ import { requireAssistant } from "./assistant-memory.js";
 import { matchesAgentModel, resolveAgentModel } from "./agent-models.js";
 import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
+import { verifiedFolderSource, type FolderSourceAnchor } from "./folder-notes.js";
+
+function isFolderBatch(action: unknown) {
+  return action === "create_desktop_folders" || action === "create_folder_notes";
+}
+
+function legacyFolderNotes(t: Row) {
+  return !t.native_action && !t.browser_only && !t.previous_task_id && !t.file_copy_flow && desktopFolderNotesIntent(t.instruction);
+}
+
+async function resumeLegacyFolderNotes(c: Context, old: Row) {
+  return db.$transaction(async (tx) => {
+    // A new receiver must have completed a fresh authenticated poll before it can take over.
+    const device = await one(tx, `SELECT authorization_id,folder_notes FROM assistant_desktop_devices
+      WHERE id=$1::uuid AND user_id=$2::bigint AND platform='windows' AND native_actions
+        AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()
+        AND last_seen_at>now()-interval '20 seconds' AND engine_seen_at>now()-interval '20 seconds' FOR UPDATE`,
+      old.device_id, c.actor.id);
+    if (!device?.folder_notes) fail("FOLDER_NOTES_UPDATE_REQUIRED", folderNotesGuidance.update, 409);
+    const conversation = await one(tx, "SELECT messages FROM personal_assistant_conversations WHERE user_id=$1::bigint FOR SHARE", c.actor.id);
+    const messages = conversation?.messages ?? [];
+    const index = messages.findIndex((m: { desktopTaskId?: string }) => m.desktopTaskId === old.id);
+    const user = messages[index - 1];
+    const ownTurn = index >= 3 && assistantFollowupAnchor(messages.slice(0, index + 1), user?.voiceSessionId);
+    const anchor = ownTurn && ownTurn.requestId === old.request_id && user?.text === old.instruction &&
+      assistantFollowupAnchor(messages.slice(0, index - 1), user.voiceSessionId);
+    const source = anchor && await verifiedFolderSource(tx, c.actor.id, anchor, old.device_id, old.request_id);
+    if (!source || (old.authorization_id && old.authorization_id !== source.authorizationId))
+      fail("FOLDER_NOTES_SOURCE_REQUIRED", folderNotesGuidance.source, 409);
+    // Pause or handoff already fenced the last foreground lease. Preserve all receipts from that attempt.
+    const updated = await one(tx, `UPDATE assistant_desktop_tasks SET native_action='create_folder_notes',
+      folder_source_task_id=$4::uuid,folder_creation=$5::jsonb,authorization_id=$6::uuid,model_ref=NULL,
+      status='WAITING',stage='等待本机在原子文件夹中创建并核验同名文本文件',delivered_at=NULL,
+      window_name='',window_id=NULL,application='',updated_at=now()
+      WHERE id=$1::uuid AND user_id=$2::bigint AND xmin::text=$3 AND status IN ('PAUSED','NEEDS_USER')
+        AND native_action IS NULL AND pending IS NULL AND planning_id IS NULL RETURNING *`,
+      old.id, c.actor.id, old.control_revision, source.id, JSON.stringify(source.plan), source.authorizationId);
+    if (!updated) fail("FOLDER_TASK_CHANGED", "任务状态已变化，请暂停原任务并核对后继续", 409);
+    return desktopTaskView(updated);
+  });
+}
 
 const active = ["WAITING", "RUNNING", "PAUSED", "NEEDS_USER"];
 const engineUnavailable =
@@ -311,6 +353,7 @@ const stepReceipt = z.object({
     "wait",
     "file_copy",
     "create_folders",
+    "create_notes",
     "locate_wecom",
   ]),
   fileShortcut: z.enum(["copy", "paste"]).optional(),
@@ -364,7 +407,7 @@ function desktopStepReceipts(
 export function desktopTaskView(row: Row): DesktopTask {
   return {
     id: row.id,
-    ...(row.file_copy_flow || row.native_action === "copy_finder_files" || row.native_action === "create_desktop_folders"
+    ...(row.file_copy_flow || row.native_action === "copy_finder_files" || isFolderBatch(row.native_action)
       ? { requestId: row.request_id }
       : {}),
     deviceId: row.device_id,
@@ -623,13 +666,17 @@ export async function setDesktopAuthorization(
 export async function queueDesktopTask(
   c: Context,
   input: unknown,
-  context?: { previousTaskId: string },
+  context?: { previousTaskId?: string; folderSource?: FolderSourceAnchor },
 ) {
   requireAssistant(c);
   const b = parse(desktopTaskSchema, input);
-  const previousId = context
+  const previousId = context?.previousTaskId
     ? parse(z.string().uuid(), context.previousTaskId)
     : null;
+  const notes = desktopFolderNotesIntent(b.instruction);
+  if ((!notes && (context?.folderSource || looksLikeDesktopFolderNotes(b.instruction))) ||
+      (notes && (!context?.folderSource || b.localBrowser || previousId)))
+    fail("FOLDER_NOTES_SOURCE_REQUIRED", notes ? folderNotesGuidance.source : folderNotesGuidance.format, 409);
   const source = previousId
     ? await one(
         db,
@@ -711,7 +758,7 @@ export async function queueDesktopTask(
       400,
     );
   const winCopy = !mac && !previousId && !b.localBrowser && !!windowsSpec;
-  if (explicitBackground && !winCopy && !folderPlan)
+  if (explicitBackground && !winCopy && !folderPlan && !notes)
     fail("BACKGROUND_COPY_UNAVAILABLE", backgroundCopyScope, 400);
   const namedDevice =
     folderRequest?.deviceName ?? ((mac || winCopy) && desktopFileCopyDeviceName(b.instruction));
@@ -732,7 +779,7 @@ export async function queueDesktopTask(
     );
   const nativeAction = mac
     ? "copy_finder_files"
-    : folderPlan ? "create_desktop_folders" : capability?.use_native
+    : notes ? "create_folder_notes" : folderPlan ? "create_desktop_folders" : capability?.use_native
       ? requestedAction
       : undefined;
   const model =
@@ -758,10 +805,11 @@ export async function queueDesktopTask(
       if (
         existing.device_id !== b.deviceId ||
         (existing.previous_task_id ?? null) !== previousId ||
+        (existing.folder_source_task_id ?? null) !== (context?.folderSource?.taskId ?? null) ||
         existing.instruction !== b.instruction ||
         (!existing.file_copy_flow && wecom !== "open" &&
           (existing.native_action
-            ? existing.native_action !== "copy_finder_files" && existing.native_action !== "create_desktop_folders" &&
+            ? existing.native_action !== "copy_finder_files" && !isFolderBatch(existing.native_action) &&
               b.model !== undefined &&
               existing.model_ref !== b.model
             : existing.model_ref !== (model?.id ?? null))) ||
@@ -777,6 +825,9 @@ export async function queueDesktopTask(
       c.actor.id,
     );
     if (!d) fail("DEVICE_OFFLINE", "请先打开本机助手并连接电脑", 409);
+    const noteSource = context?.folderSource && await verifiedFolderSource(tx, c.actor.id, context.folderSource, b.deviceId, b.requestId);
+    if (notes && !noteSource) fail("FOLDER_NOTES_SOURCE_REQUIRED", folderNotesGuidance.source, 409);
+    if (noteSource && !noteSource.capable) fail("FOLDER_NOTES_UPDATE_REQUIRED", folderNotesGuidance.update, 409);
     if (wecom && !d.wecom_app) fail("WECOM_UPDATE_REQUIRED", wecomUpdate, 409);
     if (wecom && !d.authorization_id)
       fail("AUTHORIZATION_CHANGED", "请先在这台电脑允许并记住设备授权，小序才能自动定位企业微信。", 409);
@@ -784,7 +835,7 @@ export async function queueDesktopTask(
       fail("FOLDER_CREATION_UPDATE_REQUIRED", folderCreationGuidance.update, 409);
     if (folderPlan && !d.authorization_id)
       fail("AUTHORIZATION_CHANGED", "请先在所选 Windows 电脑的小序桌面端允许设备操作，再发送建目录任务。", 409);
-    if (explicitBackground && !folderPlan && !d.background_file_copy)
+    if (explicitBackground && !folderPlan && !notes && !d.background_file_copy)
       fail("BACKGROUND_COPY_UNAVAILABLE", backgroundCopyUnavailable, 409);
     if (createsDesktopFolder && !d.desktop_folder_copy)
       fail("DESKTOP_FOLDER_COPY_UPDATE", desktopFolderCopyGuidance.update, 409);
@@ -853,14 +904,14 @@ export async function queueDesktopTask(
       fail("DESKTOP_BUSY", "这台电脑已有任务，请完成或停止后再发送", 409);
     const row = await one(
       tx,
-      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only,native_action,authorization_id,previous_task_id,window_id,window_name,application,file_copy_flow,creates_desktop_folder,background_copy,folder_creation) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8,$9,$10::uuid,$11::uuid,$12::uuid,$13,$14,$15,$16,$17,$18::jsonb) RETURNING *",
+      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only,native_action,authorization_id,previous_task_id,window_id,window_name,application,file_copy_flow,creates_desktop_folder,background_copy,folder_creation,folder_source_task_id) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8,$9,$10::uuid,$11::uuid,$12::uuid,$13,$14,$15,$16,$17,$18::jsonb,$19::uuid) RETURNING *",
       randomUUID(),
       b.deviceId,
       c.actor.id,
       b.requestId,
       b.instruction,
       model?.id ?? null,
-      folderPlan ? "等待本机在后台批量创建并核验文件夹" : wecom ? "等待本机定位企业微信窗口" : createsDesktopFolder
+      notes ? "等待本机在已核验的子文件夹中创建同名文本文件" : folderPlan ? "等待本机在后台批量创建并核验文件夹" : wecom ? "等待本机定位企业微信窗口" : createsDesktopFolder
         ? "等待本机在桌面新建文件夹并复制指定内容"
         : previous
           ? "等待本机核对上次操作的窗口"
@@ -881,7 +932,8 @@ export async function queueDesktopTask(
       winCopy,
       createsDesktopFolder,
       winCopy && !!d.background_file_copy && !explicitlyRequestsCopyShortcuts(b.instruction),
-      folderPlan ? JSON.stringify(folderPlan) : null,
+      folderPlan || noteSource ? JSON.stringify(noteSource?.plan ?? folderPlan) : null,
+      noteSource?.id ?? null,
     );
     return desktopTaskView(row!);
   });
@@ -1188,7 +1240,7 @@ export async function desktopControl(
   if (b.startupFailure && (!deviceId || b.action !== "handoff"))
     fail("FORBIDDEN", "启动失败只能由本机助手上报", 403);
   const wecom = wecomTask(old);
-  if (old.native_action === "create_desktop_folders" && b.action === "handoff" && !b.attemptId)
+  if (isFolderBatch(old.native_action) && b.action === "handoff" && !b.attemptId)
     fail("FOLDER_TASK_CHANGED", "请在当前批量建目录任务中上报执行结果", 409);
   if (b.attemptId && (!b.startupFailure || (!old.native_action && !wecom)))
     fail("FORBIDDEN", "只有本机记事本任务可上报执行尝试", 403);
@@ -1196,6 +1248,8 @@ export async function desktopControl(
   if (b.startupFailure && !["WAITING", "RUNNING"].includes(old.status))
     return desktopTaskView(old);
   if (!active.includes(old.status)) return desktopTaskView(old);
+  if (b.action === "allow" && legacyFolderNotes(old))
+    fail("FOLDER_NOTES_UPDATE_REQUIRED", folderNotesGuidance.update, 409);
   if (wecom && b.action === "allow")
     fail("WECOM_WINDOW_REQUIRED", "请使用已授权的新版客户端核对企业微信窗口后开始", 409);
   if ((old.native_action || old.background_copy) && b.action === "allow")
@@ -1285,7 +1339,7 @@ export async function desktopControl(
     b.action === "resume"
       ? await one(
           db,
-          "SELECT platform,wecom_app,file_copy_shortcuts,desktop_folder_copy,background_file_copy,folder_creation,file_copy_verification,authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
+          "SELECT platform,wecom_app,file_copy_shortcuts,desktop_folder_copy,background_file_copy,folder_creation,folder_notes,file_copy_verification,authorization_id,native_actions,window_continuations,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
           old.device_id,
           c.actor.id,
         )
@@ -1304,6 +1358,12 @@ export async function desktopControl(
       );
     if (!resumeDevice?.online)
       fail("DEVICE_OFFLINE", "请先恢复所选电脑的连接", 409);
+    if (legacyFolderNotes(old)) return resumeLegacyFolderNotes(c, old);
+    if (old.native_action === "create_folder_notes") {
+      if (!resumeDevice.folder_notes) fail("FOLDER_NOTES_UPDATE_REQUIRED", folderNotesGuidance.update, 409);
+      if (!old.authorization_id || old.authorization_id !== resumeDevice.authorization_id)
+        fail("FOLDER_NOTES_SOURCE_REQUIRED", folderNotesGuidance.source, 409);
+    }
     if (old.native_action === "create_desktop_folders" && !resumeDevice.folder_creation)
       fail("FOLDER_CREATION_UPDATE_REQUIRED", folderCreationGuidance.update, 409);
     if (wecom && !resumeDevice.wecom_app) fail("WECOM_UPDATE_REQUIRED", wecomUpdate, 409);
@@ -1508,6 +1568,7 @@ export async function pollDesktop(
     fileCopyVerification?: boolean;
     backgroundFileCopy?: boolean;
     folderCreation?: boolean;
+    folderNotes?: boolean;
     retainedTaskId?: string | null;
     statusOnly?: boolean;
   } = {},
@@ -1515,6 +1576,8 @@ export async function pollDesktop(
   const platform = options.platform ?? "windows";
   if (options.folderCreation && (platform !== "windows" || !options.nativeActions))
     fail("INVALID_CAPABILITY", "后台批量建目录需要 Windows 本机执行能力", 400);
+  if (options.folderNotes && !options.folderCreation)
+    fail("INVALID_CAPABILITY", "创建同名文本文件需要 Windows 后台目录任务能力", 400);
   if (
     (options.desktopFolderCopy || options.fileCopyVerification || options.backgroundFileCopy) &&
     (platform !== "windows" || !options.fileCopyShortcuts)
@@ -1554,6 +1617,7 @@ export async function pollDesktop(
          file_copy_verification=CASE WHEN $6 THEN file_copy_verification ELSE $12::boolean END,
          background_file_copy=CASE WHEN $6 THEN background_file_copy ELSE $13::boolean END,
          folder_creation=CASE WHEN $6 THEN folder_creation ELSE $15::boolean END,
+         folder_notes=CASE WHEN $6 THEN folder_notes ELSE $16::boolean END,
          wecom_app=CASE WHEN $6 THEN wecom_app ELSE $14::boolean END,
          desktop_folder_copy=CASE WHEN $6 THEN desktop_folder_copy ELSE $11::boolean END,
          file_copy_shortcuts=CASE WHEN $6 THEN file_copy_shortcuts ELSE $10::boolean END,
@@ -1575,6 +1639,7 @@ export async function pollDesktop(
       !!options.backgroundFileCopy,
       !!options.wecomApp,
       !!options.folderCreation,
+      !!options.folderNotes,
     );
     if (!d || options.statusOnly)
       return { task: null, authorizationId: d?.authorization_id ?? null };
@@ -1585,6 +1650,7 @@ export async function pollDesktop(
        AND (NOT browser_only OR $4::boolean) AND (CASE WHEN $7='macos' THEN native_action='copy_finder_files'
          ELSE native_action IS DISTINCT FROM 'copy_finder_files' AND (native_action IS NULL OR $5::boolean) END)
        AND (native_action IS DISTINCT FROM 'create_desktop_folders' OR $11::boolean)
+       AND (native_action IS DISTINCT FROM 'create_folder_notes' OR $12::boolean)
        AND (NOT file_copy_flow OR $8::boolean) AND (NOT creates_desktop_folder OR $9::boolean) AND (NOT background_copy OR $10::boolean) AND (previous_task_id IS NULL OR $6::boolean) ORDER BY created_at LIMIT 1`,
       deviceId,
       c.actor.id,
@@ -1597,6 +1663,7 @@ export async function pollDesktop(
       !!options.desktopFolderCopy,
       !!options.backgroundFileCopy,
       !!options.folderCreation,
+      !!options.folderNotes,
     );
     if (
       row?.status === "WAITING" &&
@@ -1611,7 +1678,7 @@ export async function pollDesktop(
     const wecom = row && wecomTask(row);
     if (wecom && (!options.wecomApp || !d.authorization_id || (row!.authorization_id && row!.authorization_id !== d.authorization_id)))
       return {task:null,authorizationId:d.authorization_id ?? null};
-    if (row?.native_action === "create_desktop_folders" && ["WAITING", "RUNNING"].includes(row.status)) {
+    if (row && isFolderBatch(row.native_action) && ["WAITING", "RUNNING"].includes(row.status)) {
       if (!d.authorization_id || d.authorization_id !== row.authorization_id)
         return { task: null, authorizationId: d.authorization_id ?? null };
       if (row.status === "WAITING")
@@ -1754,6 +1821,7 @@ export async function permitDesktop(
     input,
   );
   const t = await deviceTask(c, deviceId, id);
+  if (legacyFolderNotes(t)) return { allowed: false };
   if (wecomTask(t) && (!t.wecom_app || !t.wecom_attempt_id || !wecomProcess.test(t.application) || !t.authorization_id))
     return {allowed:false};
   const key = t.pending?.action?.key;
@@ -2010,7 +2078,7 @@ export async function controlFolderCreation(c: Context, deviceId: string, id: st
   const b = parse(folderCreationControl, input);
   return db.$transaction(async (tx) => {
     const device = await one(tx,
-      `SELECT id FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint
+      `SELECT id,folder_notes FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint
        AND platform='windows' AND native_actions AND folder_creation AND authorization_id=$3::uuid
        AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`,
       deviceId, c.actor.id, b.authorizationId);
@@ -2018,9 +2086,12 @@ export async function controlFolderCreation(c: Context, deviceId: string, id: st
     const task = await one(tx,
       `SELECT *,delivered_at>now()-interval '30 seconds' AS delivered FROM assistant_desktop_tasks
        WHERE id=$1::uuid AND user_id=$2::bigint AND device_id=$3::uuid AND authorization_id=$4::uuid
-       AND native_action='create_desktop_folders' FOR UPDATE`,
+       AND native_action IN ('create_desktop_folders','create_folder_notes') FOR UPDATE`,
       id, c.actor.id, deviceId, b.authorizationId);
     if (!task) fail("FOLDER_TASK_CHANGED", "请核对原批量建目录任务及其授权", 409);
+    const notes = task.native_action === "create_folder_notes";
+    if (notes && !device.folder_notes)
+      fail("FOLDER_NOTES_UPDATE_REQUIRED", folderNotesGuidance.update, 409);
     if (b.action === "complete") {
       if (task.folder_creation.folderNames.length !== b.verifiedCount)
         fail("FOLDER_COUNT_MISMATCH", "本机核验的目录数量与计划不符", 409);
@@ -2032,16 +2103,20 @@ export async function controlFolderCreation(c: Context, deviceId: string, id: st
     if (b.action === "start") {
       if (task.status === "RUNNING") return folderCreationDelivery(task);
       const started = await one(tx,
-        `UPDATE assistant_desktop_tasks SET status='RUNNING',stage='正在后台批量创建并核验文件夹',
-         started_at=now(),updated_at=now() WHERE id=$1::uuid RETURNING *`, id);
+        `UPDATE assistant_desktop_tasks SET status='RUNNING',stage=$2,
+         started_at=now(),updated_at=now() WHERE id=$1::uuid RETURNING *`, id,
+        notes ? "正在后台创建并核验子文件夹中的同名文本文件" : "正在后台批量创建并核验文件夹");
       return folderCreationDelivery(started!);
     }
-    const stage = `已核验桌面文件夹「${task.folder_creation.parentName}」中的 ${b.verifiedCount} 个指定子文件夹`;
-    const receipt = { step: 1, action: "create_folders", result: "ok", description: stage, confirmedTotal: 1 };
+    const stage = notes ? `已核验「${task.folder_creation.parentName}」中 ${b.verifiedCount} 个指定子文件夹内的同名 .txt 文件` :
+      `已核验桌面文件夹「${task.folder_creation.parentName}」中的 ${b.verifiedCount} 个指定子文件夹`;
+    const previousTotal = desktopStepReceipts(task).confirmedSteps;
+    const receipt = { step: task.step + 1, action: notes ? "create_notes" : "create_folders", result: "ok", description: stage,
+      ...(previousTotal !== undefined ? { confirmedTotal: previousTotal + 1 } : {}) };
     const complete = await one(tx,
-      `UPDATE assistant_desktop_tasks SET status='DONE',stage=$2,step=1,history=$3::jsonb,
+      `UPDATE assistant_desktop_tasks SET status='DONE',stage=$2,step=step+1,history=$3::jsonb,
        last_ack=$4::uuid,planning_id=NULL,updated_at=now() WHERE id=$1::uuid RETURNING *`,
-      id, stage, JSON.stringify([receipt]), b.attemptId);
+      id, stage, JSON.stringify([...task.history, receipt].slice(-12)), b.attemptId);
     return desktopTaskView(complete!);
   });
 }
@@ -2342,6 +2417,7 @@ export async function planDesktop(
   try {
     const b = parse(desktopObservationSchema, input);
     const old = await deviceTask(c, deviceId, id);
+    if (legacyFolderNotes(old)) fail("FOLDER_NOTES_UPDATE_REQUIRED", folderNotesGuidance.update, 409);
     const localBrowser = "localBrowser" in b && b.localBrowser;
     const desktopExplorer = "desktopExplorer" in b && b.desktopExplorer;
     if ("fileCopy" in b && !old.file_copy_flow)

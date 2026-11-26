@@ -102,6 +102,7 @@ export class AssistantDesktopController {
             fileCopyVerification: z.literal(true).optional(),
             backgroundFileCopy: z.literal(true).optional(),
             folderCreation: z.literal(true).optional(),
+            folderNotes: z.literal(true).optional(),
             desktopFolderCopy: z.literal(true).optional(),
             retainedTaskId: z.string().uuid().nullable().optional(),
           })
@@ -120,6 +121,7 @@ export class AssistantDesktopController {
           fileCopyVerification: b.fileCopyVerification,
           backgroundFileCopy: b.backgroundFileCopy,
           folderCreation: b.folderCreation,
+          folderNotes: b.folderNotes,
           desktopFolderCopy: b.desktopFolderCopy,
           platform: b.platform,
           retainedTaskId: b.retainedTaskId,

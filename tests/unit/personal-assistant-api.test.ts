@@ -105,6 +105,9 @@ import {
 } from "../../apps/api/src/modules/workspace/assistant-realtime.js";
 import {
   desktopControl,
+  controlFolderCreation,
+  pollDesktop,
+  queueDesktopTask,
   planDesktop,
   permitDesktop,
   acknowledgeDesktop,
@@ -202,6 +205,7 @@ beforeAll(async () => {
     "119_desktop_file_copy_verification.sql",
     "120_desktop_wecom.sql",
     "121_desktop_folder_creation.sql",
+    "122_desktop_folder_notes.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -1037,6 +1041,80 @@ describe("assistant business tools and private memory", () => {
     expect((await fixture.database!.query(
       "SELECT id,device_id,authorization_id,native_action,model_ref FROM assistant_desktop_tasks",
     )).rows).toEqual([{ id: taskId, device_id: deviceId, authorization_id: authorization, native_action: "create_desktop_folders", model_ref: null }]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  const noteInstruction = "在每个子文件夹内新建一个记事本，命名按文件夹名命名";
+  const batchCapabilities = { nativeActions: true, folderCreation: true, folderNotes: true };
+  async function verifiedBatchConversation() {
+    const deviceId = randomUUID(), grant = randomUUID();
+    await fixture.database!.query(`INSERT INTO assistant_desktop_devices
+      (id,user_id,name,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,authorization_id,folder_creation,folder_notes)
+      VALUES($1,7,'样品室','s','t',now(),now(),true,$2,true,true)`, [deviceId, grant]);
+    const folder = await sendAssistant(actor(), { ...input(), desktopDeviceId: deviceId, autoExecution: true,
+      message: '在我的电脑桌面新建文件夹"测试自动化999"，并在文件内新建100个文件夹，命名规则按"XUTI-01......XUTI-n"' });
+    const folderId = folder.messages.at(-1)!.desktopTaskId!;
+    const poll = async () => (await pollDesktop(actor(), deviceId, false, batchCapabilities)).task!;
+    const finish = async (id: string) => {
+      const delivery = await poll();
+      expect(delivery.id).toBe(id);
+      const claim = { authorizationId: grant, attemptId: delivery.folderCreationAttemptId };
+      await controlFolderCreation(actor(), deviceId, id, { ...claim, action: "start" });
+      return controlFolderCreation(actor(), deviceId, id, { ...claim, action: "complete", verifiedCount: 100 });
+    };
+    await finish(folderId);
+    return { deviceId, grant, folder, folderId, poll, finish };
+  }
+  it.each([true,false])("binds notes to the preceding verified folder receipt (automatic %s)", async automatic => {
+    const { deviceId, folder, folderId, finish } = await verifiedBatchConversation();
+    const send = { ...input(folder.version), message: noteInstruction,
+      ...(automatic ? { autoExecution: true } : { desktopDeviceId: deviceId }) };
+    const noteId = (await sendAssistant(actor(), send)).messages.at(-1)!.desktopTaskId!;
+    expect(noteId).toEqual(expect.any(String));
+    expect((await sendAssistant(actor(), send)).messages.at(-1)!.desktopTaskId).toBe(noteId);
+    const recorded = (await fixture.database!.query(
+      "SELECT folder_source_task_id,model_ref,native_action,folder_creation->'folderNames' AS names FROM assistant_desktop_tasks WHERE id=$1", [noteId])).rows[0];
+    expect(recorded).toMatchObject({ folder_source_task_id: folderId, model_ref: null, native_action: "create_folder_notes" });
+    expect((recorded as Row).names).toHaveLength(100);
+    expect((await pollDesktop(actor(), deviceId, false, { nativeActions: true, folderCreation: true })).task).toBeNull();
+    expect(await finish(noteId)).toMatchObject({ status: "DONE", recentSteps: [{ action: "create_notes", result: "ok" }] });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(["grant","unverified","unrelated","wrong-device"] as const)("refuses relative file operations after %s drift", async reason => {
+    const { deviceId, folder, folderId } = await verifiedBatchConversation();
+    if (reason === "grant")
+      await fixture.database!.query("UPDATE assistant_desktop_devices SET authorization_id=$2 WHERE id=$1", [deviceId, randomUUID()]);
+    if (reason === "unverified") await fixture.database!.query("UPDATE assistant_desktop_tasks SET history='[]' WHERE id=$1", [folderId]);
+    if (reason === "unrelated") await fixture.database!.query(`INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,status)
+        VALUES($1,$2,7,$3,'unrelated','CANCELED')`, [randomUUID(), deviceId, randomUUID()]);
+    const reply = await sendAssistant(actor(), { ...input(folder.version), message: noteInstruction, autoExecution: true,
+      desktopDeviceId: reason === "wrong-device" ? randomUUID() : deviceId });
+    expect(reply.messages.at(-1)?.desktopTaskId).toBeUndefined();
+    await expect(queueDesktopTask(actor(), { deviceId, instruction: noteInstruction, requestId: randomUUID() })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(["resume","resubmit"] as const)("recovers the screenshot's old visual follow-up on explicit %s", async recovery => {
+    const { deviceId, folder, folderId, grant, finish } = await verifiedBatchConversation();
+    const id = randomUUID(), requestId = randomUUID(), timestamp = new Date().toISOString();
+    const messages = [...folder.messages, {id:requestId,role:"user",text:noteInstruction,createdAt:timestamp},
+      {id:randomUUID(),role:"assistant",text:"任务已提交",desktopTaskId:id,createdAt:timestamp}];
+    await fixture.database!.query("UPDATE personal_assistant_conversations SET messages=$1 WHERE user_id=7", [JSON.stringify(messages)]);
+    await fixture.database!.query(`INSERT INTO assistant_desktop_tasks
+      (id,user_id,device_id,request_id,instruction,status,step,history,authorization_id,window_id,window_name,application)
+      VALUES($1,7,$2,$3,$4,'PAUSED',1,'[{"step":1,"action":"click","result":"ok","confirmedTotal":1}]',$5,$6,'资源管理器','explorer')`,
+      [id, deviceId, requestId, noteInstruction, grant, randomUUID()]);
+    let target = id;
+    if (recovery === "resume") {
+      expect(await desktopControl(actor(), id, {action:"resume"})).toMatchObject({id, status:"WAITING",nativeAction:"create_folder_notes"});
+    } else {
+      await desktopControl(actor(), id, {action:"stop"});
+      target = (await sendAssistant(actor(), {...input(folder.version), message:noteInstruction, autoExecution:true})).messages.at(-1)!.desktopTaskId!;
+      expect(target).not.toBe(id);
+    }
+    const done = await finish(target);
+    expect(done.step).toBe(recovery === "resume" ? 2 : 1);
+    expect(done.recentSteps?.at(-1)).toMatchObject({ action:"create_notes", result:"ok" });
+    expect((await fixture.database!.query("SELECT folder_source_task_id FROM assistant_desktop_tasks WHERE id=$1", [target])).rows[0])
+      .toEqual({folder_source_task_id:folderId});
     expect(fetch).not.toHaveBeenCalled();
   });
   it.each([true, false])("submits create-desktop-folder and copy-contents together (automatic %s)", async automatic => {

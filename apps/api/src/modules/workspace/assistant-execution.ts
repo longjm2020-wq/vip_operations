@@ -7,7 +7,7 @@ import {
   isNativeDesktopAppCommand,
 } from "../../../../../packages/contracts/src/assistant-execution.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
-import { desktopFolderCreationPlan, folderCreationGuidance, looksLikeDesktopFolderCreation } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
+import { desktopFolderCreationPlan, desktopFolderNotesIntent, folderCreationGuidance, folderNotesGuidance, looksLikeDesktopFolderCreation, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   desktopFileCopyIntent,
   explicitlyRequestsBackgroundCopy, backgroundCopyScope, backgroundCopyUnavailable, requestsBackgroundDesktopExecution,
@@ -16,6 +16,7 @@ import {
 } from "../../../../../packages/contracts/src/desktop-file-copy.js";
 import { fail, type Context } from "../../core.js";
 import { canContinueBrowserGoal } from "./assistant-browser.js";
+import { verifiedFolderSource, type FolderSourceAnchor } from "./folder-notes.js";
 
 export type AutomaticAssistantExecution =
   | { kind: "site" }
@@ -25,6 +26,7 @@ export type AutomaticAssistantExecution =
       deviceId: string;
       localBrowser?: true;
       previousTaskId?: string;
+      folderSource?: FolderSourceAnchor;
     }
   | { kind: "clarify"; message: string };
 
@@ -44,10 +46,19 @@ export const clarifyFollowup = {
 export async function resolveAssistantFollowup(
   c: Context,
   text: string,
-  anchor: AssistantFollowupAnchor | undefined,
+  anchor: FolderSourceAnchor | undefined,
   preferredDeviceId?: string,
   explicitSurface?: "desktop" | "browser",
+  requestId?: string,
 ): Promise<AutomaticAssistantExecution | FollowupCandidate | undefined> {
+  if (desktopFolderNotesIntent(text) || looksLikeDesktopFolderNotes(text)) {
+    if (!desktopFolderNotesIntent(text)) return { kind: "clarify", message: folderNotesGuidance.format };
+    const source = anchor && explicitSurface !== "browser" && await verifiedFolderSource(db, c.actor.id, anchor, preferredDeviceId, requestId);
+    if (!source) return { kind: "clarify", message: folderNotesGuidance.source };
+    if (!source.online) fail("DEVICE_OFFLINE", "请在原 Windows 电脑重新连接小序桌面端，再继续创建同名文本文件。", 409);
+    if (!source.capable) fail("FOLDER_NOTES_UPDATE_REQUIRED", folderNotesGuidance.update, 409);
+    return { kind: "desktop", deviceId: source.deviceId, folderSource: anchor };
+  }
   const operation = classifyAssistantFollowup(text);
   if (!operation && !canConsiderAssistantFollowup(text)) return;
   if (!anchor || (explicitSurface && explicitSurface !== anchor.kind))
@@ -114,6 +125,8 @@ export async function resolveAutomaticAssistantExecution(
   nativeDesktopDeviceId?: string,
   options?: Parameters<typeof classifyAssistantExecution>[1],
 ): Promise<AutomaticAssistantExecution> {
+  if (desktopFolderNotesIntent(instruction) || looksLikeDesktopFolderNotes(instruction))
+    return { kind: "clarify", message: desktopFolderNotesIntent(instruction) ? folderNotesGuidance.source : folderNotesGuidance.format };
   const windowsCopy = desktopFileCopyIntent(instruction);
   const macCopy = desktopFileCopyIntent(instruction, "macos");
   const folderPlan = desktopFolderCreationPlan(instruction);

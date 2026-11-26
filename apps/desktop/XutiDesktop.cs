@@ -187,7 +187,7 @@ sealed class AssistantForm : Form {
     Func<WindowChoice> startWindowOverride;
     Func<string,Action,Task<WindowChoice>> notepadOverride;
     Func<Action,Action,Task<WindowChoice>> wecomOverride;
-    Func<Dictionary<string,object>,Func<Task>,Task<int>> executeFolderBatch=Native.CreateDesktopFolders;
+    Func<Dictionary<string,object>,Func<Task>,bool,Task<int>> executeFolderBatch=Native.CreateDesktopFolders;
     long epoch;
     Dictionary<string, object> task;
     bool BrowserOnly { get { return task!=null&&task.ContainsKey("localBrowser")&&Object.Equals(task["localBrowser"],true); } }
@@ -195,6 +195,7 @@ sealed class AssistantForm : Form {
     const string folderReceipt="file-copy-folder.bin";
     string ReadFolderReceipt() {return File.Exists(Path.Combine(folder,folderReceipt))?ReadProtected(folderReceipt):"";}
     string NativeAction { get { return task==null?"":S(task,"nativeAction"); } }
+    bool IsFolderBatch {get {return NativeAction=="create_desktop_folders" || NativeAction=="create_folder_notes";}}
     readonly Dictionary<string, string> journal = new Dictionary<string, string>();
     Native.Hook inputHook;
     Native.StopKey stopKey;
@@ -587,10 +588,10 @@ sealed class AssistantForm : Form {
     async Task StartTask(bool automatic) {
         if(!EngineReady && !isolatedPreview) throw new Exception(EngineError??"本机执行器尚未就绪。");
         if (working || (polling && !automatic) || changingAuthorization || allowing || task == null || !new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state)) throw new Exception("请等待当前状态更新后再试。");
-        if(NativeAction=="create_desktop_folders") {
-            if(!Authorized || BrowserOnly || BoundTask)throw new Exception("批量建目录需要当前电脑已记住的本机操作授权。");
+        if(IsFolderBatch) {
+            if(!Authorized || BrowserOnly || BoundTask)throw new Exception("桌面批量任务需要当前电脑已记住的本机操作授权。");
             if(state=="WAITING")await RunFolderCreation();
-            else await Control("resume","继续原批量建目录任务");
+            else await Control("resume","继续原桌面批量任务");
             return;
         }
         if(IsBackgroundCopy && state=="WAITING") {await RunBackgroundCopy();return;}
@@ -779,7 +780,7 @@ sealed class AssistantForm : Form {
         string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
             string retainedTaskId=continuation==null?null:continuation.RetainedTaskId(authorizationId);
-            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, desktopFolderCopy=true, fileCopyVerification=true, backgroundFileCopy=true, folderCreation=true, wecomApp=true, retainedTaskId });
+            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, desktopFolderCopy=true, fileCopyVerification=true, backgroundFileCopy=true, folderCreation=true, folderNotes=true, wecomApp=true, retainedTaskId });
             if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
@@ -791,7 +792,7 @@ sealed class AssistantForm : Form {
             if (state != "RUNNING" && armed) LocalPause();
             if (state=="PAUSED" || state=="NEEDS_USER") { autoAttemptedId="";startFailureNote=""; }
             if(authorizationId.Length>0 && !manualPausePending && !working && !allowing) {
-                if(NativeAction=="create_desktop_folders" && (state=="WAITING" || state=="RUNNING")) {
+                if(IsFolderBatch && (state=="WAITING" || state=="RUNNING")) {
                     BeginFolderCreation();
                     return;
                 }
@@ -986,24 +987,26 @@ sealed class AssistantForm : Form {
     async Task Ack(string id,string commandId,string outcome,string note) { await Request("tasks/"+id+"/ack",new {commandId,outcome,note}); }
     async void BeginFolderCreation() { await Safe(RunFolderCreation); }
     async Task RunFolderCreation() {
-        if(working || allowing || !Authorized || BrowserOnly || BoundTask || NativeAction!="create_desktop_folders")return;
+        if(working || allowing || !Authorized || BrowserOnly || BoundTask || !IsFolderBatch)return;
+        string expectedAction=NativeAction;
+        bool notes=expectedAction=="create_folder_notes";
         string id=taskId,grant=authorizationId,connectionToken=token,attempt=S(task,"folderCreationAttemptId");
         long version=epoch;
         Guid parsed;
-        if(!Guid.TryParse(attempt,out parsed))throw new Exception("未收到本次批量建目录任务的编号。");
+        if(!Guid.TryParse(attempt,out parsed))throw new Exception("未收到本次桌面批量任务的编号。");
         working=true;backgroundAttemptId=attempt;
         string route="tasks/"+id+"/folder-creation";
         Action check=()=>{
             CheckStart(id,connectionToken,version,grant);
-            if(backgroundAttemptId!=attempt || S(task,"folderCreationAttemptId")!=attempt || (state!="WAITING" && state!="RUNNING"))
-                throw new OperationCanceledException("批量建目录任务已停止。");
+            if(backgroundAttemptId!=attempt || NativeAction!=expectedAction || S(task,"folderCreationAttemptId")!=attempt || (state!="WAITING" && state!="RUNNING"))
+                throw new OperationCanceledException("桌面批量任务已停止。");
         };
         Func<Task<Dictionary<string,object>>> claim=async()=>{
             check();
             var result=await Request(route,new {action="start",authorizationId=grant,attemptId=attempt});
             check();
-            if(S(result,"id")!=id || S(result,"folderCreationAttemptId")!=attempt || S(result,"status")!="RUNNING" || S(result,"nativeAction")!="create_desktop_folders")
-                throw new OperationCanceledException("本次建目录授权已失效。");
+            if(S(result,"id")!=id || S(result,"folderCreationAttemptId")!=attempt || S(result,"status")!="RUNNING" || S(result,"nativeAction")!=expectedAction)
+                throw new OperationCanceledException("本次桌面批量任务授权已失效。");
             return result;
         };
         string handoff=null;
@@ -1011,7 +1014,7 @@ sealed class AssistantForm : Form {
             try {
             var start=await claim();
             task=start;state="RUNNING";
-            status.Text="正在后台创建并核对文件夹，可以继续使用键鼠。";
+            status.Text=notes?"正在各子目录中创建并核对同名文本文件，可以继续使用键鼠。":"正在后台创建并核对文件夹，可以继续使用键鼠。";
             var lease=Stopwatch.StartNew();
             var ui=Stopwatch.StartNew();
             Func<Task> checkpoint=async()=>{
@@ -1020,7 +1023,7 @@ sealed class AssistantForm : Form {
                 if(lease.ElapsedMilliseconds>=2000) {await claim();lease.Restart();}
             };
             var plan=D(start.ContainsKey("folderCreation")?start["folderCreation"]:null);
-            int verified=await executeFolderBatch(plan,checkpoint);
+            int verified=await executeFolderBatch(plan,checkpoint,notes);
             check();
             var result=await Request(route,new {action="complete",authorizationId=grant,attemptId=attempt,verifiedCount=verified});
             if(CurrentStart(id,connectionToken,version,grant)) {task=result;state=S(result,"status");status.Text=TaskStage(result);}
@@ -1174,9 +1177,10 @@ sealed class AssistantForm : Form {
                 form.RefreshStatus().GetAwaiter().GetResult();
                 if(form.Authorized||revocations!=1)throw new Exception("Status elevated an unconfirmed local grant");
                 Action newTask=()=>{seed();form.taskId=Guid.NewGuid().ToString();form.task=new Dictionary<string,object>{{"id",form.taskId},{"status","WAITING"},{"stage","Waiting"}};form.state="WAITING";form.armed=false;form.allowing=false;form.working=false;form.manualPauseSent=false;form.manualPausePending=false;form.manualPauseVersion=-1;form.startFailureNote="";form.autoAttemptedId="";form.epoch++;};
+                foreach(string batchAction in new[]{"create_desktop_folders","create_folder_notes"}) {
                 newTask();
                 string batchAttempt=Guid.NewGuid().ToString();
-                form.task["nativeAction"]="create_desktop_folders";form.task["folderCreationAttemptId"]=batchAttempt;
+                form.task["nativeAction"]=batchAction;form.task["folderCreationAttemptId"]=batchAttempt;
                 int batchRequests=0,batchExecutions=0;
                 fake.Reply=req=>{
                     var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));
@@ -1184,12 +1188,13 @@ sealed class AssistantForm : Form {
                     if(!req.RequestUri.AbsolutePath.EndsWith("/folder-creation") || S(body,"attemptId")!=batchAttempt || S(body,"authorizationId")!=form.authorizationId)
                         throw new Exception("Folder batch used the wrong authorization, attempt or endpoint");
                     if(batchRequests==1 && S(body,"action")=="start")
-                        return TestResponse(200,form.json.Serialize(new{data=new{id=form.taskId,status="RUNNING",nativeAction="create_desktop_folders",folderCreationAttemptId=batchAttempt,folderCreation=new{parentName="test",folderNames=new[]{"A","B"}}}}));
+                        return TestResponse(200,form.json.Serialize(new{data=new{id=form.taskId,status="RUNNING",nativeAction=batchAction,folderCreationAttemptId=batchAttempt,folderCreation=new{parentName="test",folderNames=new[]{"A","B"}}}}));
                     if(batchRequests==2 && S(body,"action")=="complete" && S(body,"verifiedCount")=="2")
                         return TestResponse(200,"{\"data\":{\"status\":\"DONE\"}}");
                     throw new Exception("Unexpected folder batch request");
                 };
-                form.executeFolderBatch=async(plan,checkpoint)=>{
+                form.executeFolderBatch=async(plan,checkpoint,notes)=>{
+                    if(notes!=(batchAction=="create_folder_notes"))throw new Exception("Wrong folder operation");
                     batchExecutions++;
                     form.ManualInput(Native.MouseInputReason(0x0201,0));
                     form.ManualInput(Native.KeyInputReason(0x0100,0));
@@ -1199,6 +1204,7 @@ sealed class AssistantForm : Form {
                 };
                 form.StartTask(true).GetAwaiter().GetResult();
                 if(batchExecutions!=1 || batchRequests!=2 || form.state!="DONE" || form.armed)throw new Exception("Background folder batch used foreground input or completed without verification");
+                }
                 newTask();int calls=0;string firstTask=form.taskId,firstToken=form.token;
                 var queued=new List<Action>();form.manualPauseDispatch=queued.Add;form.allowing=true;form.executingKind="type";
                 form.ManualInput(Native.KeyInputReason(0x0100,0));

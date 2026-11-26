@@ -208,11 +208,18 @@ static partial class Native {
         [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true,ExactSpelling=true)]
         internal static extern bool CreateDirectoryW(string path,IntPtr security);
         [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true,ExactSpelling=true)]
-        static extern SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
+        internal static extern SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
         [StructLayout(LayoutKind.Sequential)] struct HandleInfo {
             public uint attributes,creationLow,creationHigh,accessLow,accessHigh,writeLow,writeHigh,volume,sizeHigh,sizeLow,links,indexHigh,indexLow;
         }
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle handle,out HandleInfo info);
+        internal static void VerifyBatchNote(SafeFileHandle handle,bool justCreated) {
+            HandleInfo info;
+            var excluded=FileAttributes.Directory|FileAttributes.ReparsePoint|FileAttributes.System|FileAttributes.Hidden|FileAttributes.Offline|FileAttributes.Device;
+            if(handle.IsInvalid || !GetFileInformationByHandle(handle,out info) ||
+                (info.attributes&(uint)excluded)!=0 || info.links!=1 || (justCreated && (info.sizeHigh!=0 || info.sizeLow!=0)))
+                throw new IOException("目标文本文件不是普通本地文件，或文件存在链接，请核对后继续。");
+        }
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileInformationByHandle(SafeFileHandle handle,int infoClass,IntPtr data,uint size);
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileTime(SafeFileHandle handle,IntPtr created,IntPtr accessed,ref long lastWrite);
         static void PublishFile(SafeFileHandle handle,string path) {

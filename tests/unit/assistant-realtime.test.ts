@@ -180,6 +180,7 @@ beforeAll(async () => {
   await f.db.exec(await readFile("packages/database/migrations/119_desktop_file_copy_verification.sql", "utf8"));
   await f.db.exec(await readFile("packages/database/migrations/120_desktop_wecom.sql", "utf8"));
   await f.db.exec(await readFile("packages/database/migrations/121_desktop_folder_creation.sql", "utf8"));
+  await f.db.exec(await readFile("packages/database/migrations/122_desktop_folder_notes.sql", "utf8"));
 });
 beforeEach(async () => {
   await f.db!

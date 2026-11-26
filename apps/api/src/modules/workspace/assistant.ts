@@ -21,7 +21,7 @@ import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import { desktopFileCopyIntent, mentionsDesktopFileCopy } from "../../../../../packages/contracts/src/desktop-file-copy.js";
-import { desktopFolderCreationPlan } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
+import { desktopFolderCreationPlan, desktopFolderNotesIntent, looksLikeDesktopFolderNotes } from "../../../../../packages/contracts/src/desktop-folder-creation.js";
 import {
   assistantFollowupAnchor,
   classifyAssistantExecution,
@@ -42,6 +42,7 @@ import {
 } from "../../../../../packages/contracts/src/assistant-web-command.js";
 import { runAssistantVoiceCommand } from "./assistant-voice-commands.js";
 import { queueDesktopTask } from "./desktop.js";
+import { folderSourceAnchor } from "./folder-notes.js";
 import { queueBrowserTask } from "./assistant-browser.js";
 import {
   clarifyFollowup,
@@ -230,8 +231,15 @@ export async function sendAssistant(
     existing.request_count >= 20
   )
     fail("AI_RATE_LIMIT", "每小时最多发送20条消息，请稍后再试", 429);
+  const folderNotes = desktopFolderNotesIntent(body.message) || looksLikeDesktopFolderNotes(body.message);
+  const last: AssistantMessage | undefined = existing.messages.at(-1);
+  const previousVersion = existing.version - (expired(existing) ? 1 : 2);
+  const sameFailedTurn = !voice && (existing.state === "FAILED" || expired(existing)) &&
+    last?.role === "user" && !last.source && last.text === body.message &&
+    (last.attemptId ?? last.id) === existing.request_id &&
+    hash(JSON.stringify({ ...body, requestId: existing.request_id, version: previousVersion })) === existing.request_hash;
   const direct =
-    autoExecution && !hasAttachments
+    autoExecution && !hasAttachments && !folderNotes
       ? await resolveAutomaticAssistantExecution(
           c,
           body.message,
@@ -252,8 +260,7 @@ export async function sendAssistant(
     !hasAttachments &&
     !body.webSearch &&
     !searchRequested &&
-    (direct?.kind ?? classifyAssistantExecution(body.message).kind) ===
-      "site" &&
+    (folderNotes || (direct?.kind ?? classifyAssistantExecution(body.message).kind) === "site") &&
     !parseVoiceCommand(body.message) &&
     !parseAssistantWebsiteRequest(body.message);
   const followup = allowFollowup
@@ -261,10 +268,12 @@ export async function sendAssistant(
         c,
         body.message,
         !voice || voice.sessionId
-          ? assistantFollowupAnchor(existing.messages, voice?.sessionId)
+          ? folderNotes ? folderSourceAnchor(sameFailedTurn ? existing.messages.slice(0, -1) : existing.messages, voice?.sessionId)
+            : assistantFollowupAnchor(existing.messages, voice?.sessionId)
           : undefined,
         body.desktopDeviceId,
         explicitSurface,
+        sameFailedTurn ? last.id : body.requestId,
       )
     : undefined;
   let execution: AutomaticAssistantExecution | undefined =
@@ -326,14 +335,9 @@ export async function sendAssistant(
   // A failed reservation already contains the user's native file instruction. A new
   // HTTP attempt may resume it only with the same destination, attachment and mode
   // settings. Keep the task key even if the old queue commit lost its response.
-  const last: AssistantMessage | undefined = existing.messages.at(-1);
-  const previousVersion = existing.version - (expired(existing) ? 1 : 2);
   const folderPlan = execution?.kind === "desktop" && desktopFolderCreationPlan(body.message);
   const retryDesktop = !voice && execution?.kind === "desktop" && !execution.localBrowser &&
-    (folderPlan || mentionsDesktopFileCopy(body.message)) && (existing.state === "FAILED" || expired(existing)) &&
-    last?.role === "user" && !last.source && last.text === body.message &&
-    (last.attemptId ?? last.id) === existing.request_id &&
-    hash(JSON.stringify({ ...body, requestId: existing.request_id, version: previousVersion })) === existing.request_hash;
+    (folderNotes || folderPlan || mentionsDesktopFileCopy(body.message)) && sameFailedTurn;
   const turnId = retryDesktop ? last.id : body.requestId;
   const messages: AssistantMessage[] = [
     ...(await hydrateTeamMessages(c.actor.id, retryDesktop ? existing.messages.slice(-39, -1) : existing.messages.slice(-38))),
@@ -416,12 +420,12 @@ export async function sendAssistant(
             deviceId: desktopExecution.deviceId,
             requestId: turnId,
             instruction: body.message,
-            model: folderPlan || desktopFileCopyIntent(body.message) || desktopFileCopyIntent(body.message, "macos")
+            model: folderNotes || folderPlan || desktopFileCopyIntent(body.message) || desktopFileCopyIntent(body.message, "macos")
               ? undefined
               : executionModel,
             localBrowser: desktopExecution?.localBrowser,
           },
-          desktopExecution.previousTaskId
+          desktopExecution.folderSource ? { folderSource: desktopExecution.folderSource } : desktopExecution.previousTaskId
             ? { previousTaskId: desktopExecution.previousTaskId }
             : undefined,
         )

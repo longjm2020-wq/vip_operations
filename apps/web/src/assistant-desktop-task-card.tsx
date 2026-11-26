@@ -19,6 +19,7 @@ const actionLabels: Record<StepReceipt["action"], string> = {
   locate_wecom: "定位企业微信",
   file_copy: "后台复制文件",
   create_folders: "批量创建文件夹",
+  create_notes: "核对同名文本文件",
   click: "点击",
   scroll: "滚动",
   type: "输入文字",
@@ -41,12 +42,14 @@ function receiptAction(receipt: StepReceipt) {
 function receiptResult(receipt: StepReceipt) {
   if (receipt.action === "key" && receipt.fileShortcut === "paste" && receipt.verifiedAfterPaste)
     return "事后已核验";
-  if ((receipt.action === "file_copy" || receipt.action === "create_folders") && receipt.result === "ok") return "已核验";
+  if ((receipt.action === "file_copy" || receipt.action === "create_folders" || receipt.action === "create_notes") && receipt.result === "ok") return "已核验";
   return resultLabels[receipt.result];
 }
 
 function handoffHint(task: DesktopTask, device?: DesktopDevice) {
   if (task.status !== "NEEDS_USER" && task.status !== "PAUSED") return;
+  if (task.nativeAction === "create_folder_notes")
+    return "请在执行电脑核对提示中的目录或文件，处理后可继续补齐缺少的同名文本。";
   if (task.nativeAction === "create_desktop_folders")
     return "请在执行电脑的桌面核对目标文件夹，处理任务提示后可继续，已有的普通目录会再次核验。";
   if (task.nativeAction === "copy_finder_files")
@@ -96,6 +99,7 @@ export function AssistantDesktopTaskCard({
   const receiverProblem = device ? desktopReceiverProblem(device) : "";
   const taskLabel = task.localBrowser ? "本地浏览器任务" : "电脑任务";
   const folderCreation = task.nativeAction === "create_desktop_folders";
+  const folderNotes = task.nativeAction === "create_folder_notes";
   const awaitingVerification = task.status === "NEEDS_USER" && task.fileCopyProgress === "awaiting_verification";
   const retrying = task.status === "WAITING" && task.fileCopyProgress === "retrying";
   const verified = task.status === "DONE" && (task.fileCopyProgress === "verified" ||
@@ -150,12 +154,13 @@ export function AssistantDesktopTaskCard({
       <div className="assistant-desktop-task-meta">
         {task.localBrowser && "本地浏览器 · "}
         {folderCreation && "后台批量建文件夹 · "}
+        {folderNotes && "后台批量建文本 · "}
         {task.fileCopyMode === "background" && "后台文件复制 · "}
         {task.deviceName || device?.name || "所选电脑"} · 步骤回执 {task.step}{" "}
         次
         {typeof task.confirmedSteps === "number" &&
           ` · 已确认执行 ${task.confirmedSteps} 步`}
-        {!folderCreation && task.fileCopyMode !== "background" && (task.window ? ` · ${task.window}` : " · 暂无窗口记录")}
+        {!folderCreation && !folderNotes && task.fileCopyMode !== "background" && (task.window ? ` · ${task.window}` : " · 暂无窗口记录")}
         <time dateTime={task.updatedAt}>
           更新于 {new Date(task.updatedAt).toLocaleTimeString("zh-CN")}
         </time>

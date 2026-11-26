@@ -43,8 +43,19 @@ export const folderCreationGuidance = {
   platform: "请在「我的电脑」选择 Windows 电脑执行批量建目录。",
 } as const;
 
+export const folderNotesGuidance = {
+  format:
+    "请写明每个子文件夹建立一个同名的空白文本文档，例如「在每个子文件夹内新建一个记事本，命名按文件夹名命名」。",
+  source:
+    "请先在这段对话中完成批量创建桌面文件夹的任务，然后对已核验的目录发送同名文本文档指令。",
+  update:
+    "请更新原 Windows 电脑的小序桌面端并重新连接，以便在后台创建同名文本文档。",
+  platform: "请在原来创建这些文件夹的 Windows 电脑继续执行。",
+} as const;
+
 const politePrefix = /^(?:小序[，,、\s]*)?(?:(?:请你?|帮我|替我|麻烦你?)\s*)*/u;
-const backgroundPrefix = /^(?:在)?后台(?:运行|执行|处理)?[，,：:\s]*/u;
+const backgroundPrefix =
+  /^(?:(?:在)?后台(?:静默)?(?:运行|执行|处理)?|静默(?:运行|执行|处理))[，,：:\s]*/u;
 const desktopPrefix =
   /^(?:在\s*)?(?:(?:(?:我的|这台|当前这台|本地的?)?\s*(?:Windows\s*)?(?:电脑|计算机)|本机)(?:上|里|中)?\s*(?:的)?\s*(?:在\s*)?|(?:我的|本地|Windows)\s*)?桌面(?:上|下|里|中)?\s*[，,：:\s]*/iu;
 const devicePrefix =
@@ -81,7 +92,7 @@ const quotedLiteral = new RegExp(`^(?:${quotedName})$`, "u");
 const questionOrDiscussion =
   /[?？]|(?:如何|怎么|怎样|能否|是否|教程|举个例|示例|是什么意思|可不可以|可以吗|行不行|没成功|没反应|失败了|(?:不要|别|不用|不必|停止|取消|暂停)(?:再|继续)?(?:新建|创建|建立|执行|操作))|[吗嘛么呢]\s*$/u;
 const trailingExecutionMode =
-  /(?:[，,、；;]\s*(?:也|并且?|且)?\s*(?:请\s*)?(?:(?:在)?后台(?:执行|运行|处理)|(?:不要|别|不用|不必|无需|不需要|勿|不)\s*(?:动用?|使用|占用|抢占|移动|操作|干扰|打断)?\s*(?:我(?:的)?)?\s*(?:鼠标|键盘|键鼠)(?:\s*(?:和|及|或|、|与)\s*(?:鼠标|键盘|键鼠))?))+\s*$/u;
+  /(?:[，,、；;]\s*(?:也|并且?|且)?\s*(?:请\s*)?(?:(?:(?:在)?后台(?:静默)?|静默)(?:执行|运行|处理)|(?:不要|别|不用|不必|无需|不需要|勿|不)\s*(?:(?:打开|弹出|显示)\s*(?:任何|新的?)?窗口|(?:动用?|使用|占用|抢占|移动|操作|干扰|打断)?\s*(?:我(?:的)?)?\s*(?:鼠标|键盘|键鼠)(?:\s*(?:和|及|或|、|与)\s*(?:鼠标|键盘|键鼠))?)))+\s*$/u;
 const unquotedDirective =
   /^(?:(?:也|并且?|且|再)\s*)?(?:请|勿|切勿|别|不要|不用|不必|无需|不需要|禁止|务必|帮我|替我|确保|修改|重命名|不(?:动|改|碰|影响))|(?:然后|接着|以及|并且|同时|分别|再建|新建|创建|删除|覆盖|打开|移动|复制|运行|执行|(?:动|使用|占用|抢占|操作)(?:鼠标|键盘|键鼠)|[0-9](?:到|至)[\p{L}\p{N}])/u;
 
@@ -235,4 +246,51 @@ export function desktopFolderCreationPlan(
   text: string,
 ): DesktopFolderCreationPlan | undefined {
   return desktopFolderCreationRequest(text)?.plan;
+}
+
+const notesTarget = String.raw`(?:在|给)\s*(?:刚(?:刚|才)?(?:新建|创建|建好)的\s*)?(?:每(?:一)?个|各个|所有)\s*(?:子文件夹|子目录)\s*(?:里(?:面)?|内(?:部)?|中|下(?:面)?)?\s*`;
+const notesCreate = String.raw`(?:(?:再|批量)\s*)?${create}\s*`;
+const textDocument = String.raw`(?:记事本(?:文档|文件)?|文本文(?:档|件)|纯文本(?:文档|文件)|\.?txt\s*(?:文档|文件))`;
+const notesRequest = new RegExp(
+  String.raw`^${notesTarget}${notesCreate}[^，,。；;]{0,35}${textDocument}`,
+  "iu",
+);
+const folderNameReference = String.raw`(?:对应的?|各自的?|所在的?|该|这个)?(?:子?文件夹|子?目录)(?:的)?(?:名称|名字|名)`;
+const notesNameRule = String.raw`(?:命名(?:规则)?|文件名|名称|名字)?\s*(?:(?:按(?:照)?|用|以|采用|取为|为)\s*${folderNameReference}(?:\s*(?:命名|作为文件名|为名))?|(?:与|和|跟)\s*${folderNameReference}(?:\s*(?:相同|一致|一样|同名)))`;
+const blankDocument = String.raw`(?:空白(?:的)?|空的)?\s*`;
+const strictNotesRequest = new RegExp(
+  String.raw`^${notesTarget}${notesCreate}(?:(?:一个|[1１]个|个)\s*)?${blankDocument}(?:同名的?\s*${blankDocument}${textDocument}|${textDocument}\s*[，,、；;：:]?\s*(?:并(?:且)?\s*)?${notesNameRule})$`,
+  "iu",
+);
+
+function normalizeNotesRequest(text: string): string | undefined {
+  if (text.length > 4000 || /[\r\n]/u.test(text)) return;
+  const command = text
+    .trim()
+    .replace(politePrefix, "")
+    .replace(/^(?:接着|继续|然后|再)[，,、\s]*/u, "")
+    .replace(backgroundPrefix, "")
+    .replace(politePrefix, "")
+    .replace(/[。!！]$/u, "")
+    .replace(trailingExecutionMode, "")
+    .trim();
+  if (
+    questionOrDiscussion.test(command) ||
+    /(?:为什么|为何|是不是|能不能|要不要|需不需要|会不会|没效果|没有反应)/u.test(
+      command,
+    )
+  )
+    return;
+  return command;
+}
+
+export function looksLikeDesktopFolderNotes(text: string): boolean {
+  const command = normalizeNotesRequest(text);
+  return command !== undefined && notesRequest.test(command);
+}
+
+/** Recognizes a new empty .txt with the existing folder name; target identities are resolved separately. */
+export function desktopFolderNotesIntent(text: string): boolean {
+  const command = normalizeNotesRequest(text);
+  return command !== undefined && strictNotesRequest.test(command);
 }

@@ -3,11 +3,14 @@ import {
   desktopFolderCreationPlan,
   desktopFolderCreationPlanSchema,
   desktopFolderCreationRequest,
+  desktopFolderNotesIntent,
   looksLikeDesktopFolderCreation,
+  looksLikeDesktopFolderNotes,
 } from "../../packages/contracts/src/desktop-folder-creation.js";
 import {
   classifyAssistantExecution,
   desktopExplorerIntent,
+  shouldSearchAssistantPublicWeb,
 } from "../../packages/contracts/src/assistant-execution.js";
 
 const batch =
@@ -27,6 +30,10 @@ describe("Windows Desktop folder creation plans", () => {
     "在我的电脑桌面新建文件夹“测试自动化999”，并在文件夹内新建10个文件夹，命名规则按“XUTI-01……XUTI-10”。",
     "在我的电脑桌面新建文件夹「测试自动化999」，并在文件夹内新建10个文件夹，命名规则按「XUTI-01……XUTI-10」",
     batch + "，在后台执行，不要占用鼠标，也不要动键盘。",
+    "请在后台静默执行，" + batch,
+    "静默执行：" + batch,
+    batch + "，后台静默执行，不打开窗口。",
+    batch + "，静默执行，别弹出任何窗口。",
     batch.replace("XUTI-01 至 XUTI-10", "「XUTI-01......XUTI-n」"),
     batch.replace("XUTI-01 至 XUTI-10", "XUTI-01……XUTI-n"),
     "请在后台执行，在本机桌面先创建一个叫「测试自动化999」的文件夹，并在里面批量创建10个子目录，名称为XUTI-01~XUTI-10。",
@@ -136,4 +143,63 @@ describe("Windows Desktop folder creation plans", () => {
       }).success,
     ).toBe(false);
   });
+});
+
+describe("empty documents for the previous verified folder batch", () => {
+  const followup = "在每个子文件夹内新建一个记事本，命名按文件夹名命名";
+
+  it.each([
+    followup,
+    "请在后台静默执行，" + followup,
+    "静默执行：" + followup,
+    followup + "，后台静默执行，不打开窗口。",
+    followup + "，静默执行，别弹出任何窗口。",
+    "请在各个子目录里创建一个空白文本文档，名称以子目录名称为名。",
+    "接着请在刚建好的每个子目录下新建一个同名的空白 .txt 文件。",
+    "在所有子文件夹内建立同名纯文本文件，在后台执行，不要占用鼠标。",
+  ])(
+    "recognizes a standalone instruction to create same-name documents: %s",
+    (text) => {
+      expect(desktopFolderNotesIntent(text)).toBe(true);
+      expect(looksLikeDesktopFolderNotes(text)).toBe(true);
+      expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
+      expect(
+        shouldSearchAssistantPublicWeb(text, { explicitSearch: true }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    "在每个子文件夹内新建一个记事本",
+    followup + "，再写入一段说明",
+    followup + "，然后打开记事本",
+    followup + "，在命令行静默执行",
+    followup + "，如果有同名文件就覆盖",
+    "在每个子文件夹内新建三个同名记事本",
+    "在每个子文件夹里创建记事本，文件名使用 test",
+  ])(
+    "keeps incomplete or compound instructions out of the typed operation: %s",
+    (text) => {
+      expect(desktopFolderNotesIntent(text)).toBe(false);
+      expect(looksLikeDesktopFolderNotes(text)).toBe(true);
+    },
+  );
+
+  it.each([
+    "没有反应了",
+    "不要" + followup,
+    "怎么才能" + followup + "？",
+    followup + "会不会有问题",
+    "想了解「" + followup + "」的操作方法",
+    "在浏览器的每个子文件夹内新建一个同名记事本",
+    "在研发电脑上" + followup,
+    "后台静默执行 PowerShell 命令",
+  ])(
+    "does not dispatch questions, negations or arbitrary targets: %s",
+    (text) => {
+      expect(desktopFolderNotesIntent(text)).toBe(false);
+      expect(looksLikeDesktopFolderNotes(text)).toBe(false);
+      expect(classifyAssistantExecution(text)).toEqual({ kind: "site" });
+    },
+  );
 });
