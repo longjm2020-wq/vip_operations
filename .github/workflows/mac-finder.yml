@@ -1,0 +1,29 @@
+name: Mac Finder client
+on:
+  push:
+    paths:
+      - 'apps/desktop-mac/**'
+      - 'scripts/mac-finder-artifact.mjs'
+      - '.github/workflows/mac-finder.yml'
+  pull_request:
+    paths:
+      - 'apps/desktop-mac/**'
+      - 'scripts/mac-finder-artifact.mjs'
+      - '.github/workflows/mac-finder.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/mac-finder-artifact.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xuti-finder-macos
+          path: apps/desktop-mac/release/
+          if-no-files-found: error
