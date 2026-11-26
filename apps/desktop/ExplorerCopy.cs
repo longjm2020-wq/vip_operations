@@ -34,6 +34,7 @@ static partial class Native {
         public WindowChoice SourceWindow {get;private set;}
         public WindowChoice DestinationWindow {get;private set;}
         uint copiedSequence;
+        uint? clipboardAtSelection;
         bool pasteSent;
         public bool PasteIssued { get {return pasteSent;} }
         readonly bool verificationOnly;
@@ -402,6 +403,7 @@ static partial class Native {
         // needs its own server permit. Release COM proxies on the same thread.
         public async Task SelectSourceFiles(Action check) {
             check();ValidateWindow(SourceWindow,true);
+            if(!clipboardAtSelection.HasValue)clipboardAtSelection=GetClipboardSequenceNumber();
             dynamic view=null,doc=null,folder=null,self=null;
             try {
                 view=UniqueView(SourceWindow);
@@ -509,6 +511,8 @@ static partial class Native {
         public void CheckDispatch(WindowChoice window,string key,string evidence) {
             if(key!="COPY" && key!="PASTE")throw Block("此文件快捷键无效。");
             bool copy=key=="COPY";
+            if(copy && (!clipboardAtSelection.HasValue || GetClipboardSequenceNumber()!=clipboardAtSelection.Value))
+                throw Block("选定文件后系统剪贴板被更新，为保留你的新复制内容，本步没有按 Ctrl+C。");
             if(pasteSent || evidence!=(copy?"copy":"paste") || !ExplorerListFocused(window) || !ModifiersReleased() ||
                 !SameWindow(window,copy?SourceWindow:DestinationWindow) ||
                 (copy?copiedSequence!=0:!ClipboardMatches(copiedSequence,SourceWindow.Pid)))

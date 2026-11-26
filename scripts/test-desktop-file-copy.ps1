@@ -21,6 +21,6 @@ try {
     Write-Output $_.Exception.ToString()
     throw
 }
-$message = 'Explorer Ctrl+C / Ctrl+V passed for an existing target and a newly named folder on a redirected Desktop. The two file-only fixtures and complete nested tree were verified, including empty directories, same-task resume and duplicate prevention.'
+$message = 'Verified 420 background items while typing in another foreground window. The clipboard stayed unchanged, a concurrent target file was preserved, and cancellation exposed no partial file. Explicit Explorer Ctrl+C / Ctrl+V, newer user clipboard protection, redirected Desktop, nested and empty folders, old-task recovery, delayed completion and byte-for-byte checks also passed.'
 Write-Output $message
 Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $message
