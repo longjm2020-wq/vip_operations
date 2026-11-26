@@ -14,7 +14,13 @@ if ($unavailable) {
 }
 $fixture = Join-Path $env:RUNNER_TEMP ('xuti-explorer-smoke-' + [Guid]::NewGuid().ToString('N'))
 $smoke = [ExplorerCopySmoke]::new((Resolve-Path -LiteralPath $Executable).Path)
-$smoke.Run($fixture)
+try {
+    $smoke.Run($fixture)
+} catch {
+    # Windows PowerShell normally prints only the outer reflection exception.
+    Write-Output $_.Exception.ToString()
+    throw
+}
 $message = 'Explorer Ctrl+C / Ctrl+V: passed. Two fixture files were copied by Explorer, verified byte-for-byte, and retained in the source. The nested directory was excluded.'
 Write-Output $message
 Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $message

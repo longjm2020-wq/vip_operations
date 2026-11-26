@@ -71,18 +71,24 @@ public class ExplorerCopySmoke {
         };
         foreach(var pair in files)File.WriteAllBytes(Path.Combine(source,pair.Key),pair.Value);
         var spec=new Dictionary<string,object>{{"selection","files"},{"source",source},{"destination",target}};
+        Console.WriteLine("Verifying the disposable local source and target");
         session=Activator.CreateInstance(copyType,new object[]{spec,"copy all files from "+source+" to "+target});
+        Console.WriteLine("Opening source and target in Explorer");
         await (Task)Call("Open",own,check);
         var from=copyType.GetProperty("SourceWindow").GetValue(session,null);
         var to=copyType.GetProperty("DestinationWindow").GetValue(session,null);
+        Console.WriteLine("Verifying and selecting the source files");
         await Activate(from);
         await (Task)Call("CheckStart",from);
         await (Task)Call("SelectSourceFiles",check);
+        Console.WriteLine("Dispatching COPY with verified Explorer selection");
         await Shortcut(from,"COPY","copy");
         var switchAction=new Dictionary<string,object>{{"kind","switch_window"},{"windowId",to.GetType().GetField("Id").GetValue(to)}};
         Call("VerifyOtherAction",switchAction,from);
+        Console.WriteLine("Switching to the destination file list");
         await Activate(to);
         await (Task)Call("PrepareSwitchedWindow",to,check);
+        Console.WriteLine("Dispatching PASTE with verified clipboard metadata");
         await Shortcut(to,"PASTE","paste");
         foreach(var pair in files) {
             if(!File.ReadAllBytes(Path.Combine(target,pair.Key)).SequenceEqual(pair.Value) ||
