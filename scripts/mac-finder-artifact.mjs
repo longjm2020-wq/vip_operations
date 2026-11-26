@@ -56,7 +56,7 @@ async function buildMacFinder() {
     run("xcrun", ["lipo", "-create", path.join(build, "arm64"), path.join(build, "x86_64"), "-output", executable]);
     run("codesign", ["--force", "--sign", "-", bundle]);
     run("codesign", ["--verify", "--strict", "--verbose", bundle]);
-    run("xcrun", ["lipo", "-verify_arch", "arm64", "x86_64", executable]);
+    run("xcrun", ["lipo", executable, "-verify_arch", "arm64", "x86_64"]);
     run(executable, ["--self-test"]);
     const version = execFileSync("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleShortVersionString", plist], { encoding: "utf8" }).trim();
     if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Invalid Finder client version");
