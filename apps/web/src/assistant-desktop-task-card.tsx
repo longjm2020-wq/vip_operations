@@ -16,6 +16,7 @@ export const isActiveDesktopTask = (task: DesktopTask) =>
 
 type StepReceipt = NonNullable<DesktopTask["recentSteps"]>[number];
 const actionLabels: Record<StepReceipt["action"], string> = {
+  file_copy: "后台复制文件",
   click: "点击",
   scroll: "滚动",
   type: "输入文字",
@@ -28,6 +29,19 @@ const resultLabels: Record<StepReceipt["result"], string> = {
   blocked: "未执行",
   uncertain: "未确认",
 };
+
+function receiptAction(receipt: StepReceipt) {
+  if (receipt.action === "key" && receipt.fileShortcut === "copy") return "复制文件";
+  if (receipt.action === "key" && receipt.fileShortcut === "paste") return "粘贴文件";
+  return actionLabels[receipt.action];
+}
+
+function receiptResult(receipt: StepReceipt) {
+  if (receipt.action === "key" && receipt.fileShortcut === "paste" && receipt.verifiedAfterPaste)
+    return "事后已核验";
+  if (receipt.action === "file_copy" && receipt.result === "ok") return "已核验";
+  return resultLabels[receipt.result];
+}
 
 function handoffHint(task: DesktopTask, device?: DesktopDevice) {
   if (task.status !== "NEEDS_USER" && task.status !== "PAUSED") return;
@@ -77,7 +91,13 @@ export function AssistantDesktopTaskCard({
   const active = isActiveDesktopTask(task);
   const receiverProblem = device ? desktopReceiverProblem(device) : "";
   const taskLabel = task.localBrowser ? "本地浏览器任务" : "电脑任务";
-  const hint = handoffHint(task, device);
+  const awaitingVerification = task.status === "NEEDS_USER" && task.fileCopyProgress === "awaiting_verification";
+  const retrying = task.status === "WAITING" && task.fileCopyProgress === "retrying";
+  const verified = task.status === "DONE" && (task.fileCopyProgress === "verified" ||
+    (task.fileCopyMode === "background" && task.recentSteps?.some(receipt => receipt.action === "file_copy" && receipt.result === "ok")));
+  const statusLabel = awaitingVerification ? "等待自动核验" : retrying ? "等待自动重试" :
+    verified ? "复制已核验" : desktopStatusLabels[task.status];
+  const hint = awaitingVerification ? undefined : handoffHint(task, device);
   const control = async (action: "pause" | "resume" | "stop") => {
     if (pending.current) return;
     pending.current = true;
@@ -106,7 +126,7 @@ export function AssistantDesktopTaskCard({
       <div className="assistant-desktop-task-heading">
         <Tag
           color={
-            task.status === "RUNNING"
+            task.status === "RUNNING" || awaitingVerification || retrying
               ? "processing"
               : ["PAUSED", "NEEDS_USER"].includes(task.status)
                 ? "warning"
@@ -115,18 +135,21 @@ export function AssistantDesktopTaskCard({
                   : undefined
           }
         >
-          {desktopStatusLabels[task.status]}
+          {statusLabel}
         </Tag>
         <strong>{task.instruction}</strong>
       </div>
-      <p role="status">{task.stage}</p>
+      <p role="status">{awaitingVerification
+        ? "请保持所选电脑的最新版桌面端连接。接单后会自动检查目标文件，无需再次粘贴。"
+        : task.stage}</p>
       <div className="assistant-desktop-task-meta">
         {task.localBrowser && "本地浏览器 · "}
+        {task.fileCopyMode === "background" && "后台文件复制 · "}
         {task.deviceName || device?.name || "所选电脑"} · 步骤回执 {task.step}{" "}
         次
         {typeof task.confirmedSteps === "number" &&
           ` · 已确认执行 ${task.confirmedSteps} 步`}
-        {task.window ? ` · ${task.window}` : " · 暂无窗口记录"}
+        {task.fileCopyMode !== "background" && (task.window ? ` · ${task.window}` : " · 暂无窗口记录")}
         <time dateTime={task.updatedAt}>
           更新于 {new Date(task.updatedAt).toLocaleTimeString("zh-CN")}
         </time>
@@ -138,8 +161,8 @@ export function AssistantDesktopTaskCard({
             {task.recentSteps.map((receipt) => (
               <li key={receipt.step}>
                 <span>第 {receipt.step} 步</span>
-                <span>{actionLabels[receipt.action]}</span>
-                <span>{resultLabels[receipt.result]}</span>
+                <span>{receiptAction(receipt)}</span>
+                <span>{receiptResult(receipt)}</span>
               </li>
             ))}
           </ol>
@@ -153,7 +176,7 @@ export function AssistantDesktopTaskCard({
             手动接管请到所选电脑上操作。这里显示任务进度，不提供实时画面。
           </p>
         )}
-      {task.status === "WAITING" && receiverProblem && (
+      {(task.status === "WAITING" || awaitingVerification) && receiverProblem && (
         <p className="assistant-desktop-task-hint">{receiverProblem}</p>
       )}
       {task.status === "WAITING" &&
@@ -166,7 +189,7 @@ export function AssistantDesktopTaskCard({
         )}
       {active && (
         <Space wrap className="assistant-desktop-task-actions">
-          {task.status === "RUNNING" && (
+          {(task.status === "RUNNING" || awaitingVerification || retrying) && (
             <Button
               size="small"
               icon={<PauseOutlined aria-hidden />}
@@ -177,7 +200,7 @@ export function AssistantDesktopTaskCard({
               暂停任务
             </Button>
           )}
-          {["PAUSED", "NEEDS_USER"].includes(task.status) && (
+          {["PAUSED", "NEEDS_USER"].includes(task.status) && !awaitingVerification && (
             <Button
               type="primary"
               size="small"

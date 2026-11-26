@@ -84,8 +84,18 @@ function copyInstruction(text: string) {
 }
 
 export function desktopFileCopyDeviceName(text: string): string | undefined {
-  return namedComputer.exec(copyInstruction(text))?.[1]?.trim();
+  return namedComputer
+    .exec(copyInstruction(text).replace(backgroundPrefix, ""))?.[1]
+    ?.trim();
 }
+
+// A page named “后台管理” and a literal path containing “后台” are not execution modes.
+const backgroundPrefix =
+  /^(?:在|用|使用)?后台(?:运行|执行|处理|(?=[，,\s]|把|将|从|复制|拷贝|新建|创建|点击|单击|双击|按|输入|打开|启动|切换|选择|保存|粘贴|下载|查看|操作|在(?:我的|本机|这台|电脑|设备|桌面|Windows|Mac)))[，,\s]*/iu;
+export const backgroundCopyUnavailable =
+  "请在执行电脑启动支持后台文件复制的 Windows 桌面端（1.2.14 或更新版本），连接并授权后重试。";
+export const backgroundCopyScope =
+  "后台执行支持明确路径的普通文件复制。请写明来源和目标目录，其他桌面窗口操作需要使用前台。";
 
 function newDesktopCopy(
   command: string,
@@ -132,10 +142,7 @@ export function looksLikeDesktopFolderCopy(text: string): boolean {
   );
 }
 
-export function desktopFileCopyIntent(
-  text: string,
-  platform: DesktopPlatform = "windows",
-): DesktopFileCopy | undefined {
+function copyCommand(text: string, platform: DesktopPlatform) {
   const modifier =
     platform === "macos" ? "(?:Command|Cmd|⌘)" : "(?:Control|Ctrl)";
   const keys =
@@ -143,8 +150,9 @@ export function desktopFileCopyIntent(
     "\\s*\\+?\\s*C\\s*(?:、|，|,|和|及|/|与|然后按|再按|and)\\s*" +
     modifier +
     "\\s*\\+?\\s*V";
-  const input = copyInstruction(text);
-  const command = input
+  const raw = copyInstruction(text);
+  const input = raw.replace(backgroundPrefix, "");
+  const withScope = input
     .replace(namedComputer, "")
     .replace(/^在\s*(?:我的电脑|这台电脑|本机)(?:上|中|里)?[，,\s]*/u, "")
     .replace(
@@ -153,16 +161,60 @@ export function desktopFileCopyIntent(
         : /^在\s*(?:我的\s*)?(?:Windows(?:电脑)?|资源管理器)(?:\s*(?:上|中|里))?[，,\s]*/iu,
       "",
     )
+    .replace(/[。！!]$/u, "");
+  const scoped = withScope
+    .replace(backgroundPrefix, "")
+    .replace(/[，,]\s*(?:在|用|使用)?后台(?:运行|执行|处理|复制)?\s*$/u, "");
+  const withoutKeys = scoped
     .replace(
       new RegExp("^(?:使用|用|按)\\s*" + keys + "\\s*[，,]?\\s*", "iu"),
       "",
     )
-    .replace(/[。！!]$/u, "")
-    .replace(new RegExp("[，,]\\s*(?:使用|用)\\s*" + keys + "\\s*$", "iu"), "")
-    .replace(
-      /[，,]\s*(?:保留源文件|保留原文件|不要覆盖(?:已有|现有)?文件)\s*$/u,
-      "",
-    );
+    .replace(new RegExp("[，,]\\s*(?:使用|用)\\s*" + keys + "\\s*$", "iu"), "");
+  const command = withoutKeys.replace(
+    /[，,]\s*(?:保留源文件|保留原文件|不要覆盖(?:已有|现有)?文件)\s*$/u,
+    "",
+  );
+  return {
+    input,
+    command,
+    explicitShortcut: scoped !== withoutKeys,
+    background: raw !== input || withScope !== scoped,
+  };
+}
+
+export function explicitlyRequestsCopyShortcuts(text: string): boolean {
+  return copyCommand(text, "windows").explicitShortcut;
+}
+export function explicitlyRequestsBackgroundCopy(text: string): boolean {
+  return (
+    copyCommand(text, "windows").background ||
+    copyCommand(text, "macos").background
+  );
+}
+
+/** Only a direct instruction for a local computer or a literal filesystem operation. */
+export function requestsBackgroundDesktopExecution(text: string): boolean {
+  if (
+    !explicitlyRequestsBackgroundCopy(text) ||
+    /[?？]|(?:吗|么)[。.！!]?$/u.test(text.trim())
+  )
+    return false;
+  const scope = copyInstruction(text).replace(backgroundPrefix, "");
+  return (
+    namedComputer.test(scope) ||
+    /^在\s*(?:我的电脑|本机|这台电脑|(?:我的\s*)?(?:Windows|Mac|Finder|资源管理器))/iu.test(
+      scope,
+    ) ||
+    mentionsDesktopFileCopy(text)
+  );
+}
+
+export function desktopFileCopyIntent(
+  text: string,
+  platform: DesktopPlatform = "windows",
+): DesktopFileCopy | undefined {
+  const { input, command } = copyCommand(text, platform);
   if (/[\r\n?？]|(?:吗|行不行)[。.！!]?$/u.test(command)) return;
   if (platform === "windows") {
     const compound = newDesktopCopy(

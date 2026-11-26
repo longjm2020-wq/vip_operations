@@ -7,6 +7,7 @@ import {
   acknowledgeDesktop,
   createDesktopPair,
   controlMacFileCopy,
+  controlBackgroundCopy,
   desktopControl,
   desktopIdentity,
   desktopState,
@@ -18,6 +19,7 @@ import {
   revokeDesktop,
   setDesktopAuthorization,
   setDesktopPurpose,
+  yieldDesktopObservation,
 } from "./desktop.js";
 
 @Controller("api/v1/my-workspace/assistant/desktop")
@@ -95,6 +97,8 @@ export class AssistantDesktopController {
             desktopExplorer: z.literal(true).optional(),
             platform: z.enum(["windows", "macos"]).optional(),
             fileCopyShortcuts: z.literal(true).optional(),
+            fileCopyVerification: z.literal(true).optional(),
+            backgroundFileCopy: z.literal(true).optional(),
             desktopFolderCopy: z.literal(true).optional(),
             retainedTaskId: z.string().uuid().nullable().optional(),
           })
@@ -109,6 +113,8 @@ export class AssistantDesktopController {
           windowContinuations: b.windowContinuations,
           desktopExplorer: b.desktopExplorer,
           fileCopyShortcuts: b.fileCopyShortcuts,
+          fileCopyVerification: b.fileCopyVerification,
+          backgroundFileCopy: b.backgroundFileCopy,
           desktopFolderCopy: b.desktopFolderCopy,
           platform: b.platform,
           retainedTaskId: b.retainedTaskId,
@@ -138,6 +144,12 @@ export class AssistantDesktopController {
     const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
     return controlMacFileCopy(d.c, d.deviceId, id, input);
   }
+  @Public() @Post("client/tasks/:id/background-copy") async backgroundCopy(
+    @Req() r: AuthRequest, @Param("id") id: string, @Body() input: unknown,
+  ) {
+    const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
+    return controlBackgroundCopy(d.c, d.deviceId, id, input);
+  }
   @Public() @Post("client/tasks/:id/plan") async plan(
     @Req() r: AuthRequest,
     @Param("id") id: string,
@@ -153,6 +165,14 @@ export class AssistantDesktopController {
   ) {
     const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
     return permitDesktop(d.c, d.deviceId, id, input);
+  }
+  @Public() @Post("client/tasks/:id/yield-observation") async yieldObservation(
+    @Req() r: AuthRequest,
+    @Param("id") id: string,
+    @Body() input: unknown,
+  ) {
+    const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
+    return yieldDesktopObservation(d.c, d.deviceId, id, input);
   }
   @Public() @Post("client/tasks/:id/ack") async ack(
     @Req() r: AuthRequest,

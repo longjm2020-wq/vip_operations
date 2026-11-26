@@ -72,6 +72,7 @@ import {
   acknowledgeDesktop,
   createDesktopPair,
   controlMacFileCopy,
+  controlBackgroundCopy,
   desktopControl,
   desktopTaskView,
   desktopProviderDiagnostic,
@@ -86,6 +87,7 @@ import {
   revokeDesktop,
   setDesktopAuthorization,
   setDesktopPurpose,
+  yieldDesktopObservation,
 } from "../../apps/api/src/modules/workspace/desktop.js";
 const actor = (id = "7"): Context => ({
   actor: {
@@ -140,6 +142,7 @@ beforeAll(async () => {
   );
   await fixture.db.exec(await readFile("packages/database/migrations/117_desktop_file_shortcuts.sql", "utf8"));
   await fixture.db.exec(await readFile("packages/database/migrations/118_desktop_folder_copy.sql", "utf8"));
+  await fixture.db.exec(await readFile("packages/database/migrations/119_desktop_file_copy_verification.sql", "utf8"));
 });
 beforeEach(async () => {
   fixture.session = true;
@@ -220,6 +223,399 @@ async function shot() {
 }
 
 describe("paired desktop task execution", () => {
+  const newCapabilities = {
+    fileCopyShortcuts: true,
+    desktopFolderCopy: true,
+    backgroundFileCopy: true,
+    fileCopyVerification: true,
+  };
+  const compound = String.raw`在我的电脑新建文件夹"自动化112601"，并将路径D:\Desktop\AI0520下的内容复制进来`;
+  async function oldUncertainCopy() {
+    const c = actor(),
+      { deviceId } = await paired();
+    const { authorizationId } = await setDesktopAuthorization(
+      c,
+      deviceId,
+      true,
+    );
+    await pollDesktop(c, deviceId, false, {
+      fileCopyShortcuts: true,
+      desktopFolderCopy: true,
+    });
+    const task = await queueDesktopTask(c, {
+      deviceId,
+      requestId: randomUUID(),
+      instruction: compound,
+    });
+    const commandId = randomUUID();
+    const history = [
+      {
+        step: 7,
+        action: "key",
+        description: "复制已选中的源文件",
+        result: "ok",
+        confirmedTotal: 6,
+      },
+      {
+        step: 8,
+        action: "switch_window",
+        description: "切换到指定的目标目录",
+        result: "ok",
+        confirmedTotal: 7,
+      },
+      {
+        step: 9,
+        action: "key",
+        description: "向目标目录粘贴并核验文件",
+        result: "uncertain",
+        confirmedTotal: 7,
+      },
+    ];
+    await fixture.db!.query(
+      `UPDATE assistant_desktop_tasks SET status='NEEDS_USER',stage='操作已中止，请核对窗口。',
+      application='explorer',window_id=$2,step=9,history=$3::jsonb,last_ack=$4 WHERE id=$1`,
+      [task.id, randomUUID(), JSON.stringify(history), commandId],
+    );
+    const migration = await readFile(
+      "packages/database/migrations/119_desktop_file_copy_verification.sql",
+      "utf8",
+    );
+    const backfill = () =>
+      fixture.db!.exec(
+        migration.slice(migration.indexOf("UPDATE assistant_desktop_tasks")),
+      );
+    const poll = () => pollDesktop(c, deviceId, false, newCapabilities);
+    const verify = (outcome: string, extra = {}) =>
+      acknowledgeDesktop(c, deviceId, task.id, {
+        commandId,
+        authorizationId,
+        fileCopyVerified: true,
+        outcome,
+        note: "本机已核对",
+        ...extra,
+      });
+    return {
+      c,
+      deviceId,
+      task,
+      authorizationId,
+      commandId,
+      poll,
+      verify,
+      backfill,
+    };
+  }
+  it("reconciles the old uncertain paste against its own verified files without issuing a command", async () => {
+    const r = await oldUncertainCopy();
+    expect((await r.poll()).task?.fileCopyVerification).toBeUndefined();
+    await r.backfill();
+    expect((await r.poll()).task?.fileCopyVerification).toEqual({
+      commandId: r.commandId,
+      authorizationId: r.authorizationId,
+    });
+    await expect(r.verify("ok", { commandId: randomUUID() })).rejects.toThrow();
+    await expect(
+      r.verify("ok", { authorizationId: randomUUID() }),
+    ).rejects.toThrow();
+    const done = await r.verify("ok");
+    expect(done).toMatchObject({
+      status: "DONE",
+      step: 9,
+      confirmedSteps: 8,
+      fileCopyProgress: "verified",
+    });
+    expect(done.recentSteps?.at(-1)).toEqual({
+      step: 9,
+      action: "key",
+      fileShortcut: "paste",
+      result: "ok",
+      verifiedAfterPaste: true,
+    });
+    expect((await r.verify("ok")).step).toBe(9);
+    expect((await r.poll()).task).toBeNull();
+  });
+  it.each(["stop", "pause", "revoke"])(
+    "never revives a %s against a delayed verification",
+    async (action) => {
+      const r = await oldUncertainCopy();
+      await r.backfill();
+      await r.poll();
+      if (action === "revoke")
+        await setDesktopAuthorization(r.c, r.deviceId, false);
+      else await desktopControl(r.c, r.task.id, { action });
+      await expect(r.verify("blocked")).rejects.toThrow();
+      await expect(r.verify("ok")).rejects.toThrow();
+      expect((await r.poll()).task?.fileCopyVerification).toBeUndefined();
+    },
+  );
+  it("requeues only the original proven unsent paste once and claims it in background", async () => {
+    const r = await oldUncertainCopy();
+    await r.backfill();
+    await r.poll();
+    const retry = await r.verify("blocked");
+    expect(retry).toMatchObject({
+      id: r.task.id,
+      status: "WAITING",
+      fileCopyMode: "background",
+      fileCopyProgress: "retrying",
+      step: 9,
+      confirmedSteps: 7,
+    });
+    expect(retry.recentSteps?.at(-1)?.result).toBe("blocked");
+    expect((await r.verify("blocked")).status).toBe("WAITING");
+    expect(
+      (
+        await pollDesktop(r.c, r.deviceId, false, {
+          fileCopyShortcuts: true,
+          desktopFolderCopy: true,
+        })
+      ).task,
+    ).toBeNull();
+    await r.poll();
+    const attemptId = randomUUID();
+    const bg = (action: string, extra = {}) =>
+      controlBackgroundCopy(r.c, r.deviceId, r.task.id, {
+        action,
+        attemptId,
+        authorizationId: r.authorizationId,
+        ...extra,
+      });
+    await expect(bg("permit")).rejects.toThrow();
+    await bg("start");
+    await expect(bg("complete")).rejects.toThrow();
+    await bg("permit");
+    await expect(bg("permit")).rejects.toThrow();
+    await expect(bg("complete", { attemptId: randomUUID() })).rejects.toThrow();
+    expect((await r.poll()).task?.backgroundCopyAttempt).toEqual({
+      attemptId,
+      permitted: true,
+    });
+    expect((await bg("check")).status).toBe("RUNNING");
+    expect(await bg("complete")).toMatchObject({
+      status: "DONE",
+      step: 10,
+      confirmedSteps: 8,
+    });
+    expect((await bg("complete")).recentSteps?.at(-1)?.action).toBe(
+      "file_copy",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("keeps an inconclusive check stopped and preserves the reason on repeated reports", async () => {
+    const r = await oldUncertainCopy();
+    await r.backfill();
+    await r.poll();
+    expect(await r.verify("uncertain")).toMatchObject({
+      status: "NEEDS_USER",
+      step: 9,
+      confirmedSteps: 7,
+      stage: "本机已核对",
+    });
+    expect((await r.poll()).task?.fileCopyVerification).toBeUndefined();
+    await expect(r.verify("blocked")).rejects.toThrow();
+    expect((await r.verify("uncertain")).step).toBe(9);
+  });
+  it("can stop the same task while a definitive never-sent result is being committed", async () => {
+    const r = await oldUncertainCopy();
+    await r.backfill();
+    await r.poll();
+    fixture.beforeControlUpdate = async () => {
+      expect((await r.verify("blocked")).status).toBe("WAITING");
+    };
+    expect(
+      (await desktopControl(r.c, r.task.id, { action: "stop" })).status,
+    ).toBe("CANCELED");
+    expect((await r.poll()).task).toBeNull();
+  });
+  it.each(["pause", "different grant", "wrong history"])(
+    "skips legacy backfill with %s",
+    async (cause) => {
+      const r = await oldUncertainCopy();
+      if (cause === "pause")
+        await desktopControl(r.c, r.task.id, { action: "pause" });
+      if (cause === "different grant")
+        await fixture.db!.query(
+          "UPDATE assistant_desktop_tasks SET authorization_id=$2 WHERE id=$1",
+          [r.task.id, randomUUID()],
+        );
+      if (cause === "wrong history")
+        await fixture.db!.query(
+          "UPDATE assistant_desktop_tasks SET history=history-1 WHERE id=$1",
+          [r.task.id],
+        );
+      await r.backfill();
+      expect((await r.poll()).task?.fileCopyVerification).toBeUndefined();
+      await expect(r.verify("ok")).rejects.toThrow();
+    },
+  );
+  it.each([true, false])(
+    "reconciles a newly uncertain receipt only with its original paste permit (%s)",
+    async (permitted) => {
+      const r = await oldUncertainCopy();
+      const pending = {
+        id: r.commandId,
+        action: {
+          kind: "key",
+          key: "PASTE",
+          description: "向目标目录粘贴并核验文件",
+        },
+      };
+      await fixture.db!.query(
+        `UPDATE assistant_desktop_tasks SET status='RUNNING',history=history-2,step=8,
+      pending=$2,last_ack=NULL,file_copy_phase=$3 WHERE id=$1`,
+        [
+          r.task.id,
+          JSON.stringify(pending),
+          permitted ? "paste_permitted" : "at_target",
+        ],
+      );
+      await acknowledgeDesktop(r.c, r.deviceId, r.task.id, {
+        commandId: r.commandId,
+        outcome: "uncertain",
+        note: "正在等待核验",
+      });
+      expect(!!(await r.poll()).task?.fileCopyVerification).toBe(permitted);
+      if (permitted)
+        expect(await r.verify("ok")).toMatchObject({
+          status: "DONE",
+          step: 9,
+          confirmedSteps: 8,
+        });
+      else await expect(r.verify("ok")).rejects.toThrow();
+    },
+  );
+  it("fences a still-running paste before considering a never-sent confirmation", async () => {
+    const r = await oldUncertainCopy();
+    const pending = {
+      id: r.commandId,
+      action: {
+        kind: "key",
+        key: "PASTE",
+        description: "向目标目录粘贴并核验文件",
+      },
+    };
+    await fixture.db!.query(
+      `UPDATE assistant_desktop_tasks SET status='RUNNING',history=history-2,step=8,
+      pending=$2,last_ack=NULL,file_copy_phase='paste_permitted' WHERE id=$1`,
+      [r.task.id, JSON.stringify(pending)],
+    );
+    expect((await r.poll()).task?.fileCopyVerification?.commandId).toBe(
+      r.commandId,
+    );
+    expect(await r.verify("blocked")).toMatchObject({
+      status: "NEEDS_USER",
+      fileCopyProgress: "awaiting_verification",
+    });
+    expect(
+      await permitDesktop(r.c, r.deviceId, r.task.id, {
+        commandId: r.commandId,
+        fileShortcut: "paste",
+      }),
+    ).toEqual({ allowed: false });
+    expect((await r.poll()).task?.fileCopyVerification?.commandId).toBe(
+      r.commandId,
+    );
+    expect((await r.verify("blocked")).status).toBe("WAITING");
+  });
+  it("defaults to background on a capable Windows receiver, keeps explicit keys and rejects background downgrades", async () => {
+    const c = actor(),
+      { deviceId } = await paired();
+    const { authorizationId } = await setDesktopAuthorization(
+      c,
+      deviceId,
+      true,
+    );
+    const standalone = String.raw`把「D:\样品\说明.txt」复制到「D:\归档」`;
+    const create = (instruction: string) =>
+      queueDesktopTask(c, { deviceId, requestId: randomUUID(), instruction });
+    await pollDesktop(c, deviceId, false, { fileCopyShortcuts: true });
+    await expect(create("在后台" + standalone)).rejects.toMatchObject({
+      response: { error: { code: "BACKGROUND_COPY_UNAVAILABLE" } },
+    });
+    await pollDesktop(c, deviceId, false, newCapabilities);
+    for (const text of [
+      "在我的电脑上后台点击记事本",
+      String.raw`在后台复制 D:\样品\说明.txt`,
+    ])
+      await expect(create(text)).rejects.toMatchObject({
+        response: { error: { code: "BACKGROUND_COPY_UNAVAILABLE" } },
+      });
+    const keys = await create("用 Ctrl+C、Ctrl+V " + standalone);
+    expect(keys.fileCopyMode).toBeUndefined();
+    await desktopControl(c, keys.id, { action: "stop" });
+    const task = await create(standalone);
+    expect(task.fileCopyMode).toBe("background");
+    const attemptId = randomUUID();
+    const bg = (action: string) =>
+      controlBackgroundCopy(c, deviceId, task.id, {
+        action,
+        attemptId,
+        authorizationId,
+      });
+    await expect(bg("start")).rejects.toThrow();
+    await pollDesktop(c, deviceId, false, newCapabilities);
+    await bg("start");
+    await bg("permit");
+    await desktopControl(c, task.id, { action: "pause" });
+    await expect(bg("check")).rejects.toThrow();
+    await expect(bg("complete")).rejects.toThrow();
+    await desktopControl(c, task.id, { action: "resume" });
+    await pollDesktop(c, deviceId, false, newCapabilities);
+    await expect(bg("start")).rejects.toThrow();
+  });
+  it("yields only the unpermitted command from the matching foreground observation and replans from a fresh frame", async () => {
+    const { d, t } = await allowed();
+    const original = await shot();
+    const { command } = await planDesktop(actor(), d.deviceId, t.id, original);
+    const body = { commandId: command!.id, requestId: original.requestId };
+    const release = (value = body, device = d.deviceId, c = actor()) => yieldDesktopObservation(c, device, t.id, value);
+    await expect(release({ ...body, requestId: randomUUID() })).rejects.toThrow();
+    await expect(release(body, randomUUID())).rejects.toThrow();
+    await expect(release(body, d.deviceId, actor("8"))).rejects.toThrow();
+    await expect(release()).resolves.toEqual({ yielded: true });
+    expect((await fixture.db!.query("SELECT status,step,history,pending FROM assistant_desktop_tasks WHERE id=$1", [t.id])).rows)
+      .toEqual([{ status: "RUNNING", step: 0, history: [], pending: null }]);
+    expect(await permitDesktop(actor(), d.deviceId, t.id, { commandId: body.commandId })).toEqual({ allowed: false });
+    const latest = await shot();
+    const fresh = await planDesktop(actor(), d.deviceId, t.id, latest);
+    expect(fresh.command?.id).not.toBe(body.commandId);
+    await expect(release()).rejects.toThrow();
+    expect(await permitDesktop(actor(), d.deviceId, t.id, { commandId: fresh.command!.id })).toEqual({ allowed: true });
+    await expect(release({ commandId: fresh.command!.id, requestId: latest.requestId })).rejects.toThrow();
+  });
+
+  it("cannot yield historical commands without permit evidence or supersede pause, stop and device revocation", async () => {
+    const { d, t } = await allowed(), frame = await shot();
+    const { command } = await planDesktop(actor(), d.deviceId, t.id, frame);
+    const body = { requestId: frame.requestId, commandId: command!.id };
+    const release = () => yieldDesktopObservation(actor(), d.deviceId, t.id, body);
+    await fixture.db!.query("UPDATE assistant_desktop_tasks SET pending=pending-'permitIssued' WHERE id=$1", [t.id]);
+    await expect(release()).rejects.toThrow();
+    await fixture.db!.query("UPDATE assistant_desktop_tasks SET pending=pending || '{\"permitIssued\":false}',native_action='focus_notepad' WHERE id=$1", [t.id]);
+    await expect(release()).rejects.toThrow();
+    await fixture.db!.query("UPDATE assistant_desktop_tasks SET native_action=NULL,file_copy_flow=true WHERE id=$1", [t.id]);
+    await expect(release()).rejects.toThrow();
+    await fixture.db!.query("UPDATE assistant_desktop_tasks SET file_copy_flow=false,authorization_id=$2::uuid WHERE id=$1", [t.id, randomUUID()]);
+    await expect(release()).rejects.toThrow();
+    await fixture.db!.query("UPDATE assistant_desktop_tasks SET authorization_id=NULL WHERE id=$1", [t.id]);
+    await desktopControl(actor(), t.id, { action: "pause" });
+    await expect(release()).rejects.toThrow();
+    await desktopControl(actor(), t.id, { action: "stop" });
+    await expect(release()).rejects.toThrow();
+    expect((await desktopState(actor())).tasks[0]).toMatchObject({ status: "CANCELED", step: 0 });
+  });
+
+  it("cannot both issue a permit and discard the same observation concurrently", async () => {
+    const { d, t } = await allowed(), frame = await shot();
+    const { command } = await planDesktop(actor(), d.deviceId, t.id, frame);
+    const commandId = command!.id;
+    const [issued, yielded] = await Promise.allSettled([
+      permitDesktop(actor(), d.deviceId, t.id, { commandId }),
+      yieldDesktopObservation(actor(), d.deviceId, t.id, { commandId, requestId: frame.requestId }),
+    ]);
+    expect(issued.status).toBe("fulfilled");
+    expect(issued.status === "fulfilled" && issued.value.allowed).toBe(yielded.status === "rejected");
+  });
   it("dispatches Finder from chat with one-use permissions and verified native receipts", async () => {
     const p = await createDesktopPair(actor(), "owner-session");
     const { deviceId } = await pairDesktop({ code: p.code, name: "测试 Mac", platform: "macos" });

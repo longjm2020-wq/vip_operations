@@ -199,6 +199,7 @@ beforeAll(async () => {
     "116_browser_goal_continuation.sql",
     "117_desktop_file_shortcuts.sql",
     "118_desktop_folder_copy.sql",
+    "119_desktop_file_copy_verification.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -1050,6 +1051,38 @@ describe("assistant business tools and private memory", () => {
     await fixture.database!.query("UPDATE assistant_desktop_devices SET platform='windows' WHERE id=$1", [device]);
     await expect(resolve(message)).rejects.toMatchObject({ response: {error: {code: "DESKTOP_FOLDER_COPY_UPDATE"}} });
     await expect(resolve(message + "，再清空源目录")).rejects.toMatchObject({ response: {error: {code: "INVALID_COMPOUND_COPY"}} });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("dispatches a background chat copy without a model and refuses a background GUI or ambiguous file request", async () => {
+    const deviceId = randomUUID();
+    await fixture.database!.query(
+      `INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,authorization_id,file_copy_shortcuts,background_file_copy)
+       VALUES($1,7,'样品室','s','t',now(),now(),true,$2,true,true)`,
+      [deviceId, randomUUID()],
+    );
+    for (const text of [
+      "在我的电脑上后台点击记事本",
+      String.raw`在后台复制 D:\样品\说明.txt`,
+    ]) {
+      await expect(
+        resolveAutomaticAssistantExecution(actor(), text, deviceId),
+      ).rejects.toMatchObject({
+        response: { error: { code: "BACKGROUND_COPY_UNAVAILABLE" } },
+      });
+    }
+    const message = String.raw`后台在电脑「样品室」上把「D:\样品\说明.txt」复制到「D:\归档」`;
+    const body = { ...input(), message, autoExecution: true };
+    const reply = await sendAssistant(actor(), body);
+    expect(reply.messages.at(-1)?.desktopTaskId).toEqual(expect.any(String));
+    expect(
+      (
+        await fixture.database!.query(
+          "SELECT device_id,model_ref,background_copy FROM assistant_desktop_tasks",
+        )
+      ).rows,
+    ).toEqual([
+      { device_id: deviceId, model_ref: null, background_copy: true },
+    ]);
     expect(fetch).not.toHaveBeenCalled();
   });
   it.each([["windows", true], ["macos", true], ["macos", false]] as const)("routes a chat file copy to the named %s with AI disabled (automatic %s)", async (platform, automatic) => {

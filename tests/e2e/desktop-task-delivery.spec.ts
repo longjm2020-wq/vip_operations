@@ -288,6 +288,79 @@ test("在工作台一句话新建桌面文件夹并复制内容，升级后重�
   }
 });
 
+test("普通复制从聊天默认派给 Windows 后台，用户可同时编辑草稿并查看原任务回执", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const name = "后台文件复制回归设备";
+  const { client, deviceId, revoke } = await pairTestReceiver(
+    page,
+    request,
+    baseURL!,
+    name,
+  );
+  const receiving = {
+    desktopExplorer: true,
+    fileCopyShortcuts: true,
+    desktopFolderCopy: true,
+    backgroundFileCopy: true,
+  };
+  const instruction =
+    "在我的电脑桌面新建文件夹「后台样品」，并将路径 D:\\测试样品 下的内容复制进来";
+  try {
+    const { authorizationId } = await client("authorization", {
+      enabled: true,
+    });
+    await client("poll", receiving);
+    await page.goto("/my-workspace");
+    await selectAssistantPanel(page, "我的电脑");
+    await page
+      .locator(".assistant-desktop-item")
+      .filter({ hasText: name })
+      .getByRole("button", { name: "设为常用电脑" })
+      .click();
+    await page
+      .locator(".assistant-desktop-panel")
+      .getByRole("button", { name: "下达指令", exact: true })
+      .click();
+    const composer = page.locator(".assistant-compose:visible");
+    const draft = composer.getByRole("textbox");
+    await draft.fill(instruction);
+    await composer.getByRole("button", { name: "发送给个人助理" }).click();
+    const card = page
+      .getByRole("region", { name: "电脑任务：" + instruction })
+      .filter({ visible: true })
+      .first();
+    await expect(card).toContainText(instruction);
+    const { task } = await client("poll", receiving);
+    expect(task).toMatchObject({
+      deviceId,
+      status: "WAITING",
+      fileCopyMode: "background",
+      fileCopy: { destination: "后台样品", selection: "contents" },
+    });
+    const attemptId = randomUUID();
+    const report = (action: string) =>
+      client("tasks/" + task.id + "/background-copy", {
+        action,
+        authorizationId,
+        attemptId,
+      });
+    await report("start");
+    await report("permit");
+    await draft.fill("同时编辑的下一条草稿");
+    await report("check");
+    expect((await report("complete")).status).toBe("DONE");
+    await expect(card).toContainText("已核验后台文件复制结果", {
+      timeout: 15000,
+    });
+    await expect(draft).toHaveValue("同时编辑的下一条草稿");
+  } finally {
+    await revoke();
+  }
+});
+
 test("从小序聊天将文件复制交给配对的 Mac，原任务卡显示 Finder 回执", async ({
   page,
   request,

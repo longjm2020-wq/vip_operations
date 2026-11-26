@@ -1931,6 +1931,77 @@ test("业务页的电脑任务实时显示暂停原因，重复发送保留草�
   expect(sent).toHaveLength(1);
 });
 
+test("文件复制任务区分自动核验、按键回执和人工暂停", async ({ page }) => {
+  const { state } = await desktopScenario(page, false);
+  state.authorized = true;
+  state.engineReady = true;
+  const now = new Date().toISOString();
+  const task: DesktopTask = {
+    id: jobId, deviceId: desktopFixtureId, instruction: "将指定文件复制到桌面新目录",
+    status: "NEEDS_USER", stage: "操作已中止，请核对窗口。", fileCopyProgress: "awaiting_verification",
+    step: 6, confirmedSteps: 4, window: "自动化112601", scope: "device",
+    recentSteps: [
+      { step: 3, action: "key", result: "ok" },
+      { step: 4, action: "key", fileShortcut: "copy", result: "ok" },
+      { step: 5, action: "switch_window", result: "ok" },
+      { step: 6, action: "key", fileShortcut: "paste", result: "uncertain" },
+    ], createdAt: now, updatedAt: now,
+  };
+  state.tasks = [task];
+  await page.goto("/my-workspace");
+  await selectAssistantPanel(page, "我的电脑");
+  const panel = page.locator(".assistant-desktop-panel");
+  await panel.getByText("操作任务", { exact: true }).click();
+  const card = panel.locator(`[data-desktop-task-id="${jobId}"]`);
+  const refresh = () => panel.getByRole("button", { name: /刷新/ }).click();
+  await expect(card).toContainText("等待自动核验");
+  await expect(card).not.toContainText(/需要你接手|操作已中止/);
+  await expect(card.getByRole("button", { name: "继续当前任务" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "暂停任务" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "停止任务" })).toBeVisible();
+  await card.getByText("最近步骤回执", { exact: true }).click();
+  const rows = card.getByRole("list", { name: "最近步骤回执" }).getByRole("listitem");
+  await expect(rows).toHaveText(["第 3 步按键已执行", "第 4 步复制文件已执行", "第 5 步切换窗口已执行", "第 6 步粘贴文件未确认"]);
+
+  task.status = "PAUSED";
+  task.stage = "用户已暂停任务";
+  await refresh();
+  await expect(card.getByRole("status")).toHaveText(task.stage);
+  await expect(card).not.toContainText("等待自动核验");
+  await expect(card.getByRole("button", { name: "继续当前任务" })).toBeVisible();
+  task.status = "NEEDS_USER";
+  task.stage = "目标已有同名文件，请核对目标目录。";
+  delete task.fileCopyProgress;
+  await refresh();
+  await expect(card.getByRole("status")).toHaveText(task.stage);
+  await expect(card).toContainText("需要你接手");
+
+  task.status = "WAITING";
+  task.stage = "本机已确认此前没有发送粘贴，正在等待自动重试";
+  task.fileCopyProgress = "retrying";
+  task.recentSteps![3].result = "blocked";
+  await refresh();
+  await expect(card).toContainText("等待自动重试");
+  await expect(rows.last()).toHaveText("第 6 步粘贴文件未执行");
+  await expect(card.getByRole("button", { name: "继续当前任务" })).toHaveCount(0);
+
+  task.status = "DONE";
+  task.stage = "已核验指定目录的复制结果";
+  task.fileCopyProgress = "verified";
+  task.recentSteps![3] = { step: 6, action: "key", fileShortcut: "paste", result: "ok", verifiedAfterPaste: true };
+  await refresh();
+  await expect(card).toContainText("复制已核验");
+  await expect(rows.last()).toHaveText("第 6 步粘贴文件事后已核验");
+  await expect(card.getByRole("button", { name: "继续当前任务" })).toHaveCount(0);
+  delete task.fileCopyProgress;
+  task.fileCopyMode = "background";
+  task.recentSteps = [{ step: 1, action: "file_copy", result: "ok" }];
+  await refresh();
+  await expect(rows).toHaveText(["第 1 步后台复制文件已核验"]);
+  await expect(card).not.toContainText("粘贴文件");
+  expect(state.taskControls).toEqual([]);
+});
+
 test("桌面文件任务受遮挡时核对回执并继续原任务，旧记录和其他窗口按实际状态展示", async ({
   page,
 }) => {

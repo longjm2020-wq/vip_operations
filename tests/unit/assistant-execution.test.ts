@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { desktopFileCopyIntent } from "../../packages/contracts/src/desktop-file-copy.js";
+import { desktopFileCopyDeviceName, desktopFileCopyIntent, explicitlyRequestsBackgroundCopy, explicitlyRequestsCopyShortcuts, requestsBackgroundDesktopExecution } from "../../packages/contracts/src/desktop-file-copy.js";
 import {
   classifyAssistantExecution,
   desktopExplorerIntent,
@@ -12,6 +12,44 @@ import {
 } from "../../packages/contracts/src/assistant-execution.js";
 
 describe("workbench execution from direct instructions", () => {
+  it("reads the requested file execution mode only from an imperative modifier", () => {
+    const copy = String.raw`把「D:\样品\说明.txt」复制到「D:\归档」`;
+    const expected = desktopFileCopyIntent(copy);
+    for (const message of [
+      "在后台" + copy,
+      "在我的电脑后台" + copy,
+      "后台在电脑「样品室」上" + copy,
+      copy + "，在后台执行",
+      String.raw`后台复制 D:\样品\说明.txt 到 D:\归档`,
+    ]) {
+      expect(desktopFileCopyIntent(message)).toEqual(expected);
+      expect(explicitlyRequestsBackgroundCopy(message)).toBe(true);
+    }
+    expect(desktopFileCopyDeviceName("后台在电脑「样品室」上" + copy)).toBe(
+      "样品室",
+    );
+    const compound = String.raw`在我的电脑新建文件夹"自动化112601"，并将路径D:\Desktop\AI0520下的内容复制进来`;
+    expect(desktopFileCopyIntent("后台" + compound)).toEqual(
+      desktopFileCopyIntent(compound),
+    );
+    expect(
+      requestsBackgroundDesktopExecution("在我的电脑上后台点击记事本"),
+    ).toBe(true);
+    expect(
+      requestsBackgroundDesktopExecution("在我的电脑上后台点击记事本吗？"),
+    ).toBe(false);
+    expect(explicitlyRequestsCopyShortcuts("用 Ctrl+C、Ctrl+V " + copy)).toBe(
+      true,
+    );
+    for (const text of [
+      "在后台管理页面点击订单",
+      "在后台系统打开报表",
+      String.raw`把「D:\后台\Ctrl+C、Ctrl+V.txt」复制到「D:\归档」`,
+    ]) {
+      expect(explicitlyRequestsBackgroundCopy(text)).toBe(false);
+      expect(explicitlyRequestsCopyShortcuts(text)).toBe(false);
+    }
+  });
   it("keeps the screenshot's folder creation and contents copy together", () => {
     const source = String.raw`D:\Desktop\AI0520`;
     const expected = { source, destination: "自动化112601", destinationKind: "newDesktopFolder", selection: "contents" };

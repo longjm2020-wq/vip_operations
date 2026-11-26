@@ -9,6 +9,7 @@ import {
 import { db, rows } from "../../../../../packages/database/src/index.js";
 import {
   desktopFileCopyIntent,
+  explicitlyRequestsBackgroundCopy, backgroundCopyScope, backgroundCopyUnavailable, requestsBackgroundDesktopExecution,
   desktopFolderCopyGuidance,
   looksLikeDesktopFolderCopy,
 } from "../../../../../packages/contracts/src/desktop-file-copy.js";
@@ -112,6 +113,10 @@ export async function resolveAutomaticAssistantExecution(
   nativeDesktopDeviceId?: string,
   options?: Parameters<typeof classifyAssistantExecution>[1],
 ): Promise<AutomaticAssistantExecution> {
+  const windowsCopy = desktopFileCopyIntent(instruction);
+  const macCopy = desktopFileCopyIntent(instruction, "macos");
+  if (!windowsCopy && !macCopy && requestsBackgroundDesktopExecution(instruction))
+    fail("BACKGROUND_COPY_UNAVAILABLE", backgroundCopyScope, 400);
   if (nativeDesktopDeviceId && isNativeDesktopAppCommand(instruction)) {
     const [device] =
       nativeDesktopDeviceId === preferredDeviceId
@@ -139,7 +144,6 @@ export async function resolveAutomaticAssistantExecution(
             "请在「我的电脑」核对当前设备、连接和本机跨窗口授权，再重新下达指令。",
         };
   }
-  const windowsCopy = desktopFileCopyIntent(instruction);
   if (!windowsCopy && looksLikeDesktopFolderCopy(instruction)) {
     if (
       /~\/|\/Users\/|在\s*(?:我的\s*)?Mac(?:OS)?\s*[上中里]?/iu.test(
@@ -160,7 +164,7 @@ export async function resolveAutomaticAssistantExecution(
     };
 
   const deviceName = target.deviceName;
-  const filePlatform = desktopFileCopyIntent(instruction, "macos")
+  const filePlatform = macCopy
     ? "macos"
     : windowsCopy
       ? "windows"
@@ -177,7 +181,7 @@ export async function resolveAutomaticAssistantExecution(
 
   const devices = await rows(
     db,
-    `SELECT id,name,platform,native_actions,desktop_folder_copy,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
+    `SELECT id,name,platform,native_actions,desktop_folder_copy,background_file_copy,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
             coalesce(last_seen_at > now() - interval '20 seconds', false) AS online
        FROM assistant_desktop_devices
       WHERE user_id = $1::bigint AND token_hash IS NOT NULL
@@ -204,6 +208,8 @@ export async function resolveAutomaticAssistantExecution(
     };
   if (windowsCopy?.destinationKind && devices[0].platform !== "windows")
     fail("DEVICE_PLATFORM_MISMATCH", desktopFolderCopyGuidance.platform, 400);
+  if (filePlatform && explicitlyRequestsBackgroundCopy(instruction) && (devices[0].platform !== "windows" || !devices[0].background_file_copy))
+    fail("BACKGROUND_COPY_UNAVAILABLE", backgroundCopyUnavailable, 409);
   if (filePlatform && devices[0].platform !== filePlatform)
     return {
       kind: "clarify",

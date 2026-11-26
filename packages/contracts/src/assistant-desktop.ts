@@ -181,13 +181,21 @@ export type DesktopTask = {
   confirmedSteps?: number;
   recentSteps?: {
     step: number;
-    action: "click" | "scroll" | "type" | "key" | "switch_window" | "wait";
+    action: "click" | "scroll" | "type" | "key" | "switch_window" | "wait" | "file_copy";
     result: "ok" | "blocked" | "uncertain";
+    fileShortcut?: "copy" | "paste";
+    verifiedAfterPaste?: true;
   }[];
   /** Hint for the authorized client's automatic start on its real execution poll. */
   startLocation?: "desktopExplorer";
   /** Available to file-copy capable native clients on their execution polls. */
   fileCopy?: DesktopFileCopy;
+  /** Execution poll only. This command refers to the original paste permit. */
+  fileCopyVerification?: { commandId: string; authorizationId: string };
+  fileCopyProgress?: "awaiting_verification" | "verified" | "retrying";
+  fileCopyMode?: "background";
+  /** Authenticated receiver only; a restarted client may inspect previous work without replaying writes. */
+  backgroundCopyAttempt?: { attemptId: string; permitted: boolean };
   window: string;
   scope: "window" | "device";
   nativeAction?:
