@@ -2,6 +2,7 @@ import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import {
   afterAll,
   afterEach,
+  assert,
   beforeAll,
   beforeEach,
   describe,
@@ -1064,8 +1065,8 @@ describe("assistant business tools and private memory", () => {
     const request = { ...input(), message:attachmentInstruction, desktopDeviceId:deviceId, attachmentIds:[file.id],
       ...(automatic ? { autoExecution:true } : {}) };
     const reply = await sendAssistant(c, request);
-    const taskId = reply.messages.at(-1)?.desktopTaskId!;
-    expect(taskId).toEqual(expect.any(String));
+    const taskId = reply.messages.at(-1)?.desktopTaskId;
+    assert.isString(taskId);
     expect(reply.messages.at(-2)?.attachments).toMatchObject([{id:file.id,name:file.name}]);
     expect((await sendAssistant(c,request)).messages.at(-1)?.desktopTaskId).toBe(taskId);
     const poll = async () => (await pollDesktop(c,deviceId,false,attachmentCapabilities)).task!;
