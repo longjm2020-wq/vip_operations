@@ -91,6 +91,7 @@ export class AssistantDesktopController {
             localBrowser: z.literal(true).optional(),
             nativeActions: z.literal(true).optional(),
             windowContinuations: z.literal(true).optional(),
+            desktopExplorer: z.literal(true).optional(),
             retainedTaskId: z.string().uuid().nullable().optional(),
           })
           .strict(),
@@ -102,6 +103,7 @@ export class AssistantDesktopController {
       : pollDesktop(d.c, d.deviceId, b.localBrowser, {
           nativeActions: b.nativeActions,
           windowContinuations: b.windowContinuations,
+          desktopExplorer: b.desktopExplorer,
           retainedTaskId: b.retainedTaskId,
         });
   }

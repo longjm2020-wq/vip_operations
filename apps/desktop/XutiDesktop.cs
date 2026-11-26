@@ -102,6 +102,8 @@ sealed class WindowChoice {
     public override string ToString() { return App + " · " + Title; }
 }
 sealed class Shot {
+    public string ExplorerFolder;
+    public Native.PopupMenu Popup;
     public string Image, Controls;
     public int Width, Height;
     public Native.RECT Rect;
@@ -169,6 +171,7 @@ sealed class AssistantForm : Form {
     long manualPauseVersion=-1;
     string manualPauseNote="", startFailureNote="", executingKind="";
     string nativeAttemptId="";
+    string desktopExplorerTaskId="";
     string failureTaskId="", failureDiagnostic="";
     Action<Action> manualPauseDispatch;
     Func<WindowChoice> startWindowOverride;
@@ -488,11 +491,15 @@ sealed class AssistantForm : Form {
         if(!CurrentOperation(id,connectionToken,version))return;
         var api=error as ApiFailure;failureTaskId=id;failureDiagnostic=api==null?"":api.Diagnostic;
         string note=FailureText(error);status.Text=note;
-        if(commandId.Length>0)note="操作已中止，请核对窗口。"+note;
+        bool blocked=commandId.Length>0 && error is Native.InputNotSent;
+        if(blocked) {
+            try { Record(commandId,"blocked"); } catch { /* The previous uncertain record still prevents replay. */ }
+        }
+        if(commandId.Length>0)note=(blocked?"本步未发送输入。":"操作已中止，请核对窗口。")+note;
         note=note.Substring(0,Math.Min(300,note.Length));
         // The conditional handoff preserves a server/user pause or stop that won the race.
         var result=commandId.Length>0
-            ? await Request("tasks/"+id+"/ack",new {commandId,outcome="uncertain",note})
+            ? await Request("tasks/"+id+"/ack",new {commandId,outcome=blocked?"blocked":"uncertain",note})
             : await Request("tasks/"+id+"/control",new {action="handoff",startupFailure=true,note});
         if(!CurrentOperation(id,connectionToken,version))return;
         state=S(result,"status");task=result;status.Text=TaskStage(result);ShowTaskControls();
@@ -582,11 +589,22 @@ sealed class AssistantForm : Form {
         }
         if(captureBlocked)throw new Exception("窗口截取未响应，请重启本机助手后继续此任务。");
         bool browserOnly=BrowserOnly;
+        bool explorerTask=!browserOnly && !BoundTask && grant.Length>0 && S(task,"startLocation")=="desktopExplorer";
+        desktopExplorerTaskId="";
+        if(automatic && explorerTask && state!="WAITING") {
+            var resumed=await Request("tasks/"+id+"/control",new {action="resume"});
+            CheckStart(id,connectionToken,version,grant);
+            if(S(resumed,"status")!="WAITING")throw new Exception("原任务状态已变化，请核对后继续。");
+            task=resumed;state="WAITING";autoAttemptedId="";ShowTaskControls();return;
+        }
         if(BoundTask) {
             selected=BoundWindow();
         } else if(browserOnly) {
             selected=automatic?Native.Windows(Handle).FirstOrDefault(w=>Native.LocalBrowserWindows.ContainsKey(w.Handle)):windows.SelectedItem as WindowChoice;
             Native.LocalBrowser(selected).ValidateLocalPage();
+        } else if(automatic && explorerTask) {
+            status.Text="正在核对资源管理器的桌面目录。";
+            selected=await Native.OpenDesktopExplorer(Handle,()=>CheckStart(id,connectionToken,version,grant));
         } else {
             selected=startWindowOverride!=null?startWindowOverride():automatic?Native.InitialWindow(Native.Windows(Handle)):windows.SelectedItem as WindowChoice;
         }
@@ -596,6 +614,8 @@ sealed class AssistantForm : Form {
         if(automatic) { status.Text="已收到电脑任务，即将按设备授权开始；"+StopShortcut+" 可停止。"; await Task.Delay(1500); }
         CheckStart(id,connectionToken,version,grant);
         if(BoundTask)BoundWindow();
+        if(automatic && explorerTask)await Native.CheckDesktopExplorerStart(selected);
+        CheckStart(id,connectionToken,version,grant);
         var payload=new Dictionary<string,object>{{"action","allow"},{"window",selected.Title},{"application",selected.App},{"windowId",selected.Id}};
         if(grant.Length>0) payload["authorizationId"]=grant;
         if(browserOnly)payload["localBrowser"]=true;
@@ -603,10 +623,13 @@ sealed class AssistantForm : Form {
         CheckStart(id,connectionToken,version,grant);
         if(S(result,"status")!="RUNNING") throw new Exception("任务已暂停或停止，请刷新后核对。");
         approvedId = id; activeAuthorizationId=grant;
-        if(!Native.SetForegroundWindow(selected.Handle)) throw new Exception("无法激活操作窗口，请手动切换后继续。");
+        if(!Native.IsForeground(selected) && !Native.SetForegroundWindow(selected.Handle)) throw new Exception("无法激活操作窗口，请手动切换后继续。");
         await Task.Delay(700);
         CheckStart(id,connectionToken,version,grant);
         Native.ValidateWindow(selected, true);
+        if(automatic && explorerTask)await Native.CheckDesktopExplorerStart(selected);
+        CheckStart(id,connectionToken,version,grant);
+        if(explorerTask)desktopExplorerTaskId=id;
         armed = true; epoch++; state="RUNNING"; allow.Enabled=false; manualAllow.Enabled=false;
         status.Text = "正在操作；点击、滚轮或按键可接手，移动鼠标不会中断。";
         } catch(Exception ex) {
@@ -658,7 +681,7 @@ sealed class AssistantForm : Form {
         string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
             string retainedTaskId=continuation==null?null:continuation.RetainedTaskId(authorizationId);
-            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true,retainedTaskId });
+            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, retainedTaskId });
             if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
@@ -702,6 +725,7 @@ sealed class AssistantForm : Form {
     }
     async void RunStep(string id, long version) {
         string commandId = "",connectionToken=token;
+        Shot shot=null;
         Exception failure=null;
         try {
         try {
@@ -718,13 +742,20 @@ sealed class AssistantForm : Form {
             };
             bool crossWindow=!browserOnly&&!BoundTask&&activeAuthorizationId.Length>0;
             var available = crossWindow ? Native.ObservationWindows(Handle,selected) : new List<WindowChoice>();
+            string explorerFolder=crossWindow && desktopExplorerTaskId==id ? await Native.DesktopExplorerListLocation(selected) : null;
+            checkInput();
             // UI Automation and PrintWindow may wait on a hung application. Never capture another window as fallback.
             var capture = Task.Run(() => Native.Capture(selected, contentBounds));
             if (await Task.WhenAny(capture,Task.Delay(4000)) != capture) { captureBlocked=true; throw new Exception("应用窗口没有响应，请关闭本机助手后重试"); }
-            Shot shot = await capture;
+            shot = await capture;
             checkInput();
             string requestId=Guid.NewGuid().ToString();
             var observation=new Dictionary<string,object>{{"requestId",requestId},{"image",shot.Image},{"width",shot.Width},{"height",shot.Height},{"window",selected.Title},{"application",selected.App},{"controls",shot.Controls},{"windowId",selected.Id}};
+            if(explorerFolder!=null && shot.Popup==null && String.Equals(explorerFolder,await Native.DesktopExplorerListLocation(selected),StringComparison.OrdinalIgnoreCase)) {
+                shot.ExplorerFolder=explorerFolder;
+                observation["desktopExplorer"]=true;
+            }
+            checkInput();
             if(browserOnly)observation["localBrowser"]=true;
             else if(crossWindow) observation["windows"]=available.Select(w=>new {id=w.Id,title=w.Title,application=w.App}).ToArray();
             var plan = await Request("tasks/" + id + "/plan", observation);
@@ -739,7 +770,7 @@ sealed class AssistantForm : Form {
             string outcome;
             if (journal.TryGetValue(commandId, out outcome)) {
                 // An uncertain input is handed back, never replayed, even after a restart or lost HTTP response.
-                await Ack(id,commandId,outcome == "ok" ? "ok" : "uncertain", outcome == "ok" ? "该步骤已执行，已恢复反馈" : "上次执行结果不确定，请核对窗口后继续");
+                await Ack(id,commandId,outcome=="ok"?"ok":outcome=="blocked"?"blocked":"uncertain", outcome=="ok"?"该步骤已执行，已恢复反馈":outcome=="blocked"?"本步未发送输入，请核对窗口后继续":"上次执行结果不确定，请核对窗口后继续");
                 if (outcome != "ok") LocalPause();
                 return;
             }
@@ -748,6 +779,7 @@ sealed class AssistantForm : Form {
             Native.ValidateAction(action);
             WindowChoice target=null;
             if(S(action,"kind")=="switch_window") {
+                if(shot.Popup!=null)throw new Native.InputNotSent("弹出菜单打开时只能操作已核验的当前菜单。");
                 if(browserOnly || BoundTask)throw new Exception("此任务只能操作已确认的窗口。");
                 if(activeAuthorizationId.Length==0) throw new Exception("尚未授权跨窗口操作");
                 target=Native.ResolveTarget(available,S(action,"windowId"),selected);
@@ -775,7 +807,7 @@ sealed class AssistantForm : Form {
         if(failure!=null) {
             try { await ReportStepFailure(id,connectionToken,epoch,commandId,failure); } catch { /* Keep the original safe failure; never retry desktop input here. */ }
         }
-        } finally { working = false;executingKind="";if(!closing){ShowTaskControls();if(Changed!=null)Changed();} }
+        } finally { if(shot!=null && shot.Popup!=null)shot.Popup.Release();working=false;executingKind="";if(!closing){ShowTaskControls();if(Changed!=null)Changed();} }
     }
     async Task Ack(string id,string commandId,string outcome,string note) { await Request("tasks/"+id+"/ack",new {commandId,outcome,note}); }
     // Self-tests use a hidden form, fake HTTP and a fresh temporary directory.
@@ -793,6 +825,7 @@ sealed class AssistantForm : Form {
         try {
             var fake=new FakeHandler();
             using(var form=new AssistantForm(fake,isolated)) {
+                Native.DesktopExplorerSelfTest(isolated);
                 System.Threading.SynchronizationContext.SetSynchronizationContext(null);
                 Action seed=()=>{form.token=new string('a',64);form.owner="Isolated self-test";form.deviceId=Guid.NewGuid().ToString();form.authorizationId=Guid.NewGuid().ToString();};
                 seed(); string grant=form.authorizationId;
@@ -971,7 +1004,7 @@ sealed class AssistantForm : Form {
     public static string S(Dictionary<string,object> value, string key) { object v; return value.TryGetValue(key,out v) ? Convert.ToString(v) : ""; }
 }
 
-static class Native {
+static partial class Native {
     // Only dedicated, unprivileged browser windows can be selected from this process.
     public static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr,byte> BrowserWindows = new System.Collections.Concurrent.ConcurrentDictionary<IntPtr,byte>();
     public static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr,BrowserWindow> LocalBrowserWindows = new System.Collections.Concurrent.ConcurrentDictionary<IntPtr,BrowserWindow>();
@@ -1284,30 +1317,276 @@ static class Native {
         }
         return Cut(text.ToString(),12000);
     }
+    public sealed class InputNotSent : Exception {
+        public InputNotSent(string reason):base(reason) {}
+    }
+    [DllImport("user32.dll")] static extern bool EnumThreadWindows(uint thread,EnumProc callback,IntPtr data);
+    [DllImport("user32.dll")] static extern int GetMenuItemCount(IntPtr menu);
+    [StructLayout(LayoutKind.Sequential)] struct MenuItemInfo {
+        public uint size,mask,type,state,id; public IntPtr submenu,checkedImage,uncheckedImage,data,typeData; public uint chars;public IntPtr bitmap;
+    }
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool GetMenuItemInfo(IntPtr menu,uint index,bool byPosition,ref MenuItemInfo item);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetMenuString(IntPtr menu,uint position,StringBuilder text,int capacity,uint flags);
+    [DllImport("user32.dll")] static extern bool GetMenuItemRect(IntPtr owner,IntPtr menu,uint item,out RECT rect);
+    [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr window,uint relation);
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr value);
+    [StructLayout(LayoutKind.Sequential)] struct MenuBarInfo {
+        public int size; public RECT bounds; public IntPtr menu,submenuWindow; public uint focusFlags;
+    }
+    [DllImport("user32.dll")] static extern bool GetMenuBarInfo(IntPtr window,int objectId,int item,ref MenuBarInfo info);
+    sealed class PhysicalCoordinates : IDisposable {
+        readonly IntPtr previous;
+        public PhysicalCoordinates() {
+            try { previous=SetThreadDpiAwarenessContext(new IntPtr(-4)); } catch(EntryPointNotFoundException) {}
+            if(previous==IntPtr.Zero)throw new InputNotSent("无法核对弹出菜单的屏幕坐标，请亲自处理后继续。");
+        }
+        public void Dispose(){SetThreadDpiAwarenessContext(previous);}
+    }
+    static Rectangle Bounds(RECT r){return Rectangle.FromLTRB(r.Left,r.Top,r.Right,r.Bottom);}
+    static GuiThreadInfo ThreadInfo(WindowChoice w,out uint thread) {
+        uint pid;thread=GetWindowThreadProcessId(w.Handle,out pid);
+        var info=new GuiThreadInfo{size=Marshal.SizeOf(typeof(GuiThreadInfo))};
+        if(pid!=w.Pid || thread==0 || !GetGUIThreadInfo(thread,ref info))throw new InputNotSent("无法核对当前窗口的输入状态，请核对后继续。");
+        return info;
+    }
+    static bool MenuOpen(GuiThreadInfo info){return (info.flags&0x1C)!=0;}
+    static int AbsolutePixel(int point,int origin,int extent) {
+        long offset=(long)point-origin;
+        if(extent<=0 || offset<0 || offset>=extent)throw new InputNotSent("目标位置已离开屏幕，请核对后继续。");
+        int normalized=(int)Math.Min(65535,(offset*65536+32768)/extent);
+        if((long)normalized*extent/65536!=offset)throw new InputNotSent("无法精确定位目标像素，请核对屏幕后继续。");
+        return normalized;
+    }
+    public sealed class PopupMenu {
+        static readonly string markerName="Xuti.Popup."+Guid.NewGuid().ToString("N");
+        static long generation;
+        public IntPtr Window {get;private set;}
+        public Rectangle BoundsOnScreen {get;private set;}
+        IntPtr menu,menuOwner,marker;
+        uint threadId;
+        Item[] items;
+        sealed class Item {
+            public string text;public uint id,state,type;public IntPtr submenu;public Rectangle bounds;
+            public bool Clickable { get {return text.Length>0 && (state&3)==0 && (type&0x904)==0 && !Sensitive.IsMatch(text.Replace("&",""));} }
+            public bool Same(Item other){return id==other.id && type==other.type && state==other.state && submenu==other.submenu && text==other.text && bounds==other.bounds;}
+        }
+        static Item ReadItem(IntPtr menu,uint index) {
+            RECT r;
+            var info=new MenuItemInfo{size=(uint)Marshal.SizeOf(typeof(MenuItemInfo)),mask=0x107}; // type, state, id, submenu
+            var caption=new StringBuilder(512);
+            int n=GetMenuString(menu,index,caption,caption.Capacity,0x400);
+            if(!GetMenuItemInfo(menu,index,true,ref info) || !GetMenuItemRect(IntPtr.Zero,menu,index,out r) || n>=caption.Capacity-1)
+                throw Changed();
+            return new Item{text=caption.ToString(),id=info.id,type=info.type,state=info.state&~0x80u,submenu=info.submenu,bounds=Bounds(r)};
+        }
+        static InputNotSent Changed(){return new InputNotSent("弹出菜单已变化，请核对当前菜单后继续。");}
+        static bool OwnerMatches(IntPtr owner,WindowChoice w,uint thread) {
+            uint pid;
+            return owner!=IntPtr.Zero && GetWindowThreadProcessId(owner,out pid)==thread && pid==w.Pid &&
+                (owner==w.Handle || GetAncestor(owner,2)==w.Handle);
+        }
+        static PopupMenu Current(WindowChoice w) {
+            uint thread;var info=ThreadInfo(w,out thread);
+            if(!MenuOpen(info) || !OwnerMatches(info.menu,w,thread))throw Changed();
+            var found=new List<PopupMenu>();
+            bool unsupported=false;
+            EnumThreadWindows(thread,(h,unused)=>{
+                if(!IsWindowVisible(h))return true;
+                var name=new StringBuilder(32);
+                if(GetClassName(h,name,name.Capacity)==0 || name.ToString()!="#32768")return true;
+                uint pid;var bar=new MenuBarInfo{size=Marshal.SizeOf(typeof(MenuBarInfo))};RECT rect;
+                if(GetWindowThreadProcessId(h,out pid)!=thread || pid!=w.Pid || !GetMenuBarInfo(h,-4,0,ref bar) ||
+                    bar.menu==IntPtr.Zero || !GetWindowRect(h,out rect)){unsupported=true;return false;}
+                found.Add(new PopupMenu{Window=h,menu=bar.menu,menuOwner=info.menu,threadId=thread,BoundsOnScreen=Bounds(rect)});
+                return found.Count<=12;
+            },IntPtr.Zero);
+            if(unsupported || found.Count==0 || found.Count>12)throw Changed();
+            // A standard cascading menu is a single chain of real HMENU submenus.
+            // A second root (even in the same process/thread) makes the source ambiguous.
+            var parents=new Dictionary<PopupMenu,PopupMenu>();
+            foreach(var popup in found) {
+                int count=GetMenuItemCount(popup.menu);
+                if(count<1||count>128)throw Changed();
+                popup.items=new Item[count];
+                for(int i=0;i<count;i++) {
+                    var item=ReadItem(popup.menu,(uint)i);popup.items[i]=item;
+                    var child=found.FirstOrDefault(m=>m.menu==item.submenu);
+                    if(child!=null){if(parents.ContainsKey(child))throw Changed();parents[child]=popup;}
+                }
+            }
+            var leaves=found.Where(p=>!parents.ContainsValue(p)).ToList();
+            if(leaves.Count!=1 || parents.Count!=found.Count-1)throw Changed();
+            var visited=new HashSet<PopupMenu>();
+            for(var node=leaves[0];node!=null;) {
+                if(!visited.Add(node))throw Changed();
+                PopupMenu parent;parents.TryGetValue(node,out parent);
+                IntPtr owner=GetWindow(node.Window,4); // GW_OWNER may be absent on native tracking menus.
+                if(owner!=IntPtr.Zero && !OwnerMatches(owner,w,thread) && (parent==null || owner!=parent.Window))throw Changed();
+                node=parent;
+            }
+            if(visited.Count!=found.Count)throw Changed();
+            return leaves[0];
+        }
+        public static PopupMenu Observe(WindowChoice w) {
+            var popup=Current(w);
+            popup.marker=new IntPtr(System.Threading.Interlocked.Increment(ref generation));
+            if(!SetProp(popup.Window,markerName,popup.marker))throw Changed();
+            return popup;
+        }
+        public void Release(){if(GetProp(Window,markerName)==marker)RemoveProp(Window,markerName);}
+        public void Validate(WindowChoice w) {
+            var live=Current(w);
+            if(live.Window!=Window || live.menu!=menu || live.menuOwner!=menuOwner || live.threadId!=threadId ||
+                live.BoundsOnScreen!=BoundsOnScreen || GetProp(Window,markerName)!=marker ||
+                items.Length!=live.items.Length || !items.Zip(live.items,(a,b)=>a.Same(b)).All(s=>s))throw Changed();
+        }
+        public string ControlsText() {
+            var list=new List<string>{"当前画面为目标窗口已展开的标准弹出菜单。只能左键单击可用项或等待。"};
+            foreach(var item in items)if(item.text.Length>0)list.Add((item.Clickable?"菜单项 · ":"需接手 · ")+Cut(item.text,160));
+            return Cut(String.Join("\n",list),12000);
+        }
+        void CheckPoint(int x,int y) {
+            if(!BoundsOnScreen.Contains(x,y) || GetAncestor(WindowFromPoint(new POINT(x,y)),2)!=Window)
+                throw new InputNotSent("菜单位置被其他窗口遮挡，请核对后继续。");
+            var matches=items.Where(item=>item.bounds.Contains(x,y)).ToList();
+            if(matches.Count!=1 || !matches[0].Clickable)throw new InputNotSent("此菜单项无法安全核验，请亲自处理后继续。");
+        }
+        public void Click(WindowChoice owner,int x,int y,Action check) {
+            using(new PhysicalCoordinates()) {
+                check();Validate(owner);CheckPoint(x,y);
+                GuardElement(AutomationElement.FromPoint(new System.Windows.Point(x,y)));
+                int left=GetSystemMetrics(76),top=GetSystemMetrics(77),width=GetSystemMetrics(78),height=GetSystemMetrics(79);
+                if(width<2 || height<2 || !new Rectangle(left,top,width,height).Contains(x,y))throw Changed();
+                var move=new INPUT{type=0,data=new UNION{mouse=new MOUSE{dx=AbsolutePixel(x,left,width),dy=AbsolutePixel(y,top,height),flags=0xC001}}};
+                // Check owner, menu contents and actual topmost hit again after UIA, immediately before the single batch.
+                check();Validate(owner);CheckPoint(x,y);Send(move,Mouse(2),Mouse(4));
+            }
+        }
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr CreateDesktop(string name,IntPtr device,IntPtr mode,uint flags,uint access,IntPtr security);
+        [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
+        [DllImport("user32.dll")] static extern bool SetThreadDesktop(IntPtr desktop);
+        [DllImport("user32.dll")] static extern IntPtr CreatePopupMenu();
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool AppendMenu(IntPtr menu,uint flags,UIntPtr id,string label);
+        [DllImport("user32.dll")] static extern bool DestroyMenu(IntPtr menu);
+        [DllImport("user32.dll")] static extern bool TrackPopupMenuEx(IntPtr menu,uint flags,int x,int y,IntPtr owner,IntPtr parameters);
+        [DllImport("user32.dll")] static extern bool EndMenu();
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool PostMessage(IntPtr window,uint message,IntPtr w,IntPtr l);
+        [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr CreateWindowEx(uint exStyle,string windowClass,string name,uint style,int x,int y,int width,int height,IntPtr parent,IntPtr menu,IntPtr module,IntPtr data);
+        [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr window);
+        delegate void MenuTestTimer(IntPtr window,uint message,UIntPtr timer,uint time);
+        [DllImport("user32.dll")] static extern UIntPtr SetTimer(IntPtr window,UIntPtr id,uint interval,MenuTestTimer callback);
+        [DllImport("user32.dll")] static extern bool KillTimer(IntPtr window,UIntPtr id);
+        static void MustBlock(Action action) {
+            try {action();}catch(InputNotSent){return;}
+            throw new Exception("A stale, covered or unapproved popup target passed validation");
+        }
+        public static void SelfTest() {
+            foreach(int width in new[]{1920,3840,5120})foreach(int x in new[]{0,1,width/2,width-1})
+                if((long)AbsolutePixel(x-1920,-1920,width)*width/65536!=x)throw new Exception("Virtual screen coordinate changed the hit pixel");
+            // This thread creates its own Windows desktop with no SWITCHDESKTOP right.
+            // TrackPopupMenu runs its real menu loop there. The test never sends system input.
+            IntPtr desktop=CreateDesktop("XutiMenuTest"+Guid.NewGuid().ToString("N"),IntPtr.Zero,IntPtr.Zero,0,0xFF,IntPtr.Zero);
+            if(desktop==IntPtr.Zero)throw new Exception("Unable to create the isolated popup fixture");
+            Exception failure=null;
+            var test=new System.Threading.Thread(()=>{
+                try {
+                    if(!SetThreadDesktop(desktop))throw new Exception("Unable to bind isolated popup thread");
+                    using(var coords=new PhysicalCoordinates())
+                    using(var process=Process.GetCurrentProcess()) {
+                        IntPtr window=CreateWindowEx(0,"STATIC","Fixture owner",0x90000000,20,20,360,300,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
+                        IntPtr other=CreateWindowEx(0,"STATIC","Fixture other",0x80000000,0,0,100,100,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
+                        var target=new WindowChoice{Handle=window,Pid=process.Id,Started=process.StartTime.ToUniversalTime().Ticks};
+                        var unrelated=new WindowChoice{Handle=other,Pid=target.Pid,Started=target.Started};
+                        PopupMenu popup=null;IntPtr trackingMenu=CreatePopupMenu();
+                        try {
+                            if(window==IntPtr.Zero || other==IntPtr.Zero || trackingMenu==IntPtr.Zero)throw new Exception("Cannot create fixture menu");
+                            if(!AppendMenu(trackingMenu,0,new UIntPtr(11),"Fixture item") ||
+                                !AppendMenu(trackingMenu,1,new UIntPtr(12),"Disabled item") ||
+                                !AppendMenu(trackingMenu,0,new UIntPtr(13),"Delete"))throw new Exception("Cannot install fixture menu items");
+                            using(var timeout=new System.Threading.Timer(_=>PostMessage(window,0x1F,IntPtr.Zero,IntPtr.Zero),null,4000,System.Threading.Timeout.Infinite)) {
+                                MenuTestTimer tick=(h,message,id,time)=>{
+                                    KillTimer(h,id);
+                                    try {
+                                        popup=Observe(target);popup.Validate(target);
+                                        if(popup.Window==window || !popup.ControlsText().Contains("Fixture item"))throw new Exception("Menu observation captured the owner");
+                                        var shot=CaptureSurface(popup.Window,null,popup.ControlsText(),popup);
+                                        if(shot.InputBounds!=popup.BoundsOnScreen || shot.Width<100 || shot.Height<100 || String.IsNullOrEmpty(shot.Image))throw new Exception("Popup capture bounds mismatch");
+                                        var r=popup.items[0].bounds;popup.CheckPoint(r.Left+r.Width/2,r.Top+r.Height/2);
+                                        foreach(var item in popup.items.Skip(1))MustBlock(()=>popup.CheckPoint(item.bounds.Left+2,item.bounds.Top+2));
+                                        using(var stream=new MemoryStream(Convert.FromBase64String(shot.Image)))
+                                        using(var bitmap=new Bitmap(stream)){
+                                            var colors=new HashSet<int>();
+                                            for(int y=2;y<bitmap.Height && colors.Count<8;y+=2)for(int x=2;x<bitmap.Width && colors.Count<8;x+=2)
+                                                colors.Add(bitmap.GetPixel(x,y).ToArgb());
+                                            if(colors.Count<8)throw new Exception("Captured menu image was blank");
+                                        }
+                                        MustBlock(()=>popup.Validate(unrelated));
+                                        MustBlock(()=>popup.CheckPoint(r.Left-1000,r.Top));
+                                        IntPtr overlay=CreateWindowEx(0x08000008,"BUTTON","Fixture overlay",0x90000000,r.Left,r.Top,r.Width,r.Height,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
+                                        if(overlay==IntPtr.Zero)throw new Exception("Cannot create isolated covering window");
+                                        try {MustBlock(()=>popup.CheckPoint(r.Left+r.Width/2,r.Top+r.Height/2));}finally{DestroyWindow(overlay);}
+                                    } catch(Exception ex){failure=ex;}finally{EndMenu();}
+                                };
+                                UIntPtr timer=SetTimer(window,new UIntPtr(1),100,tick);
+                                if(timer==UIntPtr.Zero)throw new Exception("Cannot observe fixture menu");
+                                try {TrackPopupMenuEx(trackingMenu,0x182,80,80,window,IntPtr.Zero);}
+                                finally {KillTimer(window,timer);GC.KeepAlive(tick);}
+                            }
+                            if(failure!=null)return;
+                            if(popup==null)throw new Exception("Fixture menu did not enter tracking mode");
+                            MustBlock(()=>popup.Validate(target));
+                        } finally {if(popup!=null)popup.Release();DestroyMenu(trackingMenu);DestroyWindow(other);DestroyWindow(window);}
+                    }
+                } catch(Exception ex){failure=ex;}
+            });
+            test.SetApartmentState(System.Threading.ApartmentState.MTA);test.IsBackground=true;
+            try {test.Start();if(!test.Join(7000))throw new Exception("Isolated menu fixture timed out");}
+            finally {CloseDesktop(desktop);}
+            if(failure!=null)throw new Exception("Isolated popup fixture: "+failure.Message,failure);
+        }
+    }
     public static Shot Capture(WindowChoice w, Rectangle? contentBounds=null) {
-        ValidateWindow(w,true); string controls=Controls(w,contentBounds); RECT r;
-        if(!GetWindowRect(w.Handle,out r)||r.Right-r.Left<100||r.Bottom-r.Top<100)throw new Exception("窗口太小，请调整后继续");
+        ValidateWindow(w,true);
+        uint thread;
+        if(MenuOpen(ThreadInfo(w,out thread))) {
+            if(contentBounds.HasValue || BrowserWindows.ContainsKey(w.Handle))throw new Exception("网页出现系统菜单，请亲自处理后继续。");
+            using(new PhysicalCoordinates()) {
+                var popup=PopupMenu.Observe(w);
+                try {
+                    var shot=CaptureSurface(popup.Window,null,popup.ControlsText(),popup);
+                    ValidateWindow(w,true);popup.Validate(w);return shot;
+                } catch {popup.Release();throw;}
+            }
+        }
+        return CaptureSurface(w.Handle,contentBounds,Controls(w,contentBounds),null);
+    }
+    static Shot CaptureSurface(IntPtr surface,Rectangle? contentBounds,string controls,PopupMenu popup) {
+        RECT r;
+        int minimum=popup==null?100:1;
+        if(!GetWindowRect(surface,out r)||r.Right-r.Left<minimum||r.Bottom-r.Top<minimum)throw new Exception("窗口太小，请调整后继续");
         if((long)(r.Right-r.Left)*(r.Bottom-r.Top)>24000000)throw new Exception("窗口尺寸过大，请缩小后继续");
         var windowBounds=Rectangle.FromLTRB(r.Left,r.Top,r.Right,r.Bottom);
         var inputBounds=contentBounds??windowBounds;
         if(!windowBounds.Contains(inputBounds))throw new Exception("网页区域已变化，请核对后继续。");
         using(var original=new Bitmap(r.Right-r.Left,r.Bottom-r.Top)) {
-            using(var g=Graphics.FromImage(original)){IntPtr dc=g.GetHdc();try{if(!PrintWindow(w.Handle,dc,2))throw new Exception("此应用不支持窗口截取，请使用其他窗口");}finally{g.ReleaseHdc(dc);}}
-            double scale=Math.Min(1,1400.0/Math.Max(inputBounds.Width,inputBounds.Height));
-            int width=(int)(inputBounds.Width*scale),height=(int)(inputBounds.Height*scale);
+            using(var g=Graphics.FromImage(original)){IntPtr dc=g.GetHdc();try{if(!PrintWindow(surface,dc,2))throw new Exception("此应用不支持窗口截取，请使用其他窗口");}finally{g.ReleaseHdc(dc);}}
+            double scale=Math.Min(popup==null?1:Math.Max(1,100.0/Math.Min(inputBounds.Width,inputBounds.Height)),1400.0/Math.Max(inputBounds.Width,inputBounds.Height));
+            int width=(int)Math.Round(inputBounds.Width*scale),height=(int)Math.Round(inputBounds.Height*scale);
             if(width<100||height<100)throw new Exception("窗口比例过窄，请调整后继续");
             using(var resized=new Bitmap(width,height)) using(var stream=new MemoryStream()) {
                 using(var g=Graphics.FromImage(resized))g.DrawImage(original,new Rectangle(0,0,width,height),new Rectangle(inputBounds.Left-r.Left,inputBounds.Top-r.Top,inputBounds.Width,inputBounds.Height),GraphicsUnit.Pixel);
                 var codec=ImageCodecInfo.GetImageEncoders().First(i=>i.MimeType=="image/jpeg");
                 using(var quality=new EncoderParameters(1)){quality.Param[0]=new EncoderParameter(System.Drawing.Imaging.Encoder.Quality,78L);resized.Save(stream,codec,quality);}
                 if(stream.Length>2000000)throw new Exception("窗口画面过大，请缩小窗口后继续");
-                return new Shot{Image=Convert.ToBase64String(stream.ToArray()),Width=width,Height=height,Controls=controls,Rect=r,InputBounds=inputBounds};
+                return new Shot{Image=Convert.ToBase64String(stream.ToArray()),Width=width,Height=height,Controls=controls,Rect=r,InputBounds=inputBounds,Popup=popup};
             }
         }
     }
     static string S(Dictionary<string,object> a,string k){return AssistantForm.S(a,k);}
     static int Number(Dictionary<string,object> a,string k,int min,int max) {object value;if(!a.TryGetValue(k,out value)||!(value is int)|| (int)value<min||(int)value>max)throw new Exception("操作坐标或数量无效");return (int)value;}
     static readonly Dictionary<string,ushort[]> Keys = new Dictionary<string,ushort[]> {
+        {"CTRL_SHIFT_N",new ushort[]{17,16,78}},
         {"ENTER",new ushort[]{13}}, {"TAB",new ushort[]{9}}, {"SHIFT_TAB",new ushort[]{16,9}}, {"ESC",new ushort[]{27}}, {"BACKSPACE",new ushort[]{8}}, {"LEFT",new ushort[]{37}}, {"RIGHT",new ushort[]{39}}, {"UP",new ushort[]{38}}, {"DOWN",new ushort[]{40}}, {"HOME",new ushort[]{36}}, {"END",new ushort[]{35}}, {"PAGEUP",new ushort[]{33}}, {"PAGEDOWN",new ushort[]{34}}, {"CTRL_A",new ushort[]{17,65}}, {"CTRL_S",new ushort[]{17,83}}, {"CTRL_Z",new ushort[]{17,90}}
     };
     public static void ValidateAction(Dictionary<string,object> a) {
@@ -1336,7 +1615,20 @@ static class Native {
     static INPUT K(ushort key,uint flags) { return new INPUT{type=1,data=new UNION{key=new KEY{vk=key,flags=flags}}}; }
     static INPUT Mouse(uint flags,uint data=0) { return new INPUT{type=0,data=new UNION{mouse=new MOUSE{flags=flags,mouseData=data}}}; }
     public static async Task Execute(WindowChoice w,Shot shot,Dictionary<string,object> a,Action check,BrowserWindow localBrowser=null) {
-        ValidateAction(a); check(); RECT r;GetWindowRect(w.Handle,out r);
+        ValidateAction(a); check();
+        if(shot.Popup!=null) {
+            string action=S(a,"kind");
+            if(action=="wait") {await Task.Delay(800);return;}
+            if(localBrowser!=null || action!="click" || S(a,"button")!="left")
+                throw new InputNotSent("当前标准菜单只支持单击可核验的菜单项，请重新观察。");
+            int menuX=shot.InputBounds.Left+(int)Math.Round(Number(a,"x",0,1000)*(shot.InputBounds.Width-1)/1000.0);
+            int menuY=shot.InputBounds.Top+(int)Math.Round(Number(a,"y",0,1000)*(shot.InputBounds.Height-1)/1000.0);
+            shot.Popup.Click(w,menuX,menuY,check);
+            return;
+        }
+        uint thread;
+        if(MenuOpen(ThreadInfo(w,out thread)))throw new InputNotSent("弹出菜单已变化，请核对当前菜单后继续。");
+        RECT r;GetWindowRect(w.Handle,out r);
         if(r.Left!=shot.Rect.Left||r.Top!=shot.Rect.Top||r.Right!=shot.Rect.Right||r.Bottom!=shot.Rect.Bottom)throw new Exception("窗口位置或大小已变化，请核对后继续");
         if(localBrowser!=null&&localBrowser.ContentBounds()!=shot.InputBounds)throw new Exception("网页区域已变化，请核对后继续。");
         string kind=S(a,"kind");
@@ -1346,20 +1638,31 @@ static class Native {
             int x=shot.InputBounds.Left+(int)Math.Round(Number(a,"x",0,1000)*(shot.InputBounds.Width-1)/1000.0);
             int y=shot.InputBounds.Top+(int)Math.Round(Number(a,"y",0,1000)*(shot.InputBounds.Height-1)/1000.0);
             if(localBrowser!=null)localBrowser.ValidateLocalAction(kind,S(a,"button"),x,y);
-            if(GetAncestor(WindowFromPoint(new POINT(x,y)),2)!=w.Handle)throw new Exception("目标位置被其他窗口遮挡，请核对后继续");
+            Action checkPoint=()=>{
+                if(GetAncestor(WindowFromPoint(new POINT(x,y)),2)!=w.Handle)throw new InputNotSent("目标位置被其他窗口遮挡，请核对后继续。");
+                uint activeThread;
+                if(MenuOpen(ThreadInfo(w,out activeThread)))throw new InputNotSent("弹出菜单已变化，请核对当前菜单后继续。");
+            };
+            checkPoint();
             GuardElement(AutomationElement.FromPoint(new System.Windows.Point(x,y))); check();
             // Move and act in one injected batch. A harmless physical move between
             // separate calls must not redirect the click or scroll to another control.
             var screen=SystemInformation.VirtualScreen;
-            var move=new INPUT{type=0,data=new UNION{mouse=new MOUSE{dx=(int)((x-screen.Left)*65535.0/(screen.Width-1)),dy=(int)((y-screen.Top)*65535.0/(screen.Height-1)),flags=0xC001}}};
-            check();
+            var move=new INPUT{type=0,data=new UNION{mouse=new MOUSE{dx=AbsolutePixel(x,screen.Left,screen.Width),dy=AbsolutePixel(y,screen.Top,screen.Height),flags=0xC001}}};
+            check();checkPoint();
             if(kind=="scroll")Send(move,Mouse(0x0800,unchecked((uint)((S(a,"direction")=="up"?120:-120)*Number(a,"amount",1,6)))));
-            else { bool right=S(a,"button")=="right";Send(move,Mouse(right?0x0008u:0x0002u),Mouse(right?0x0010u:0x0004u));if(S(a,"button")=="double"){await Task.Delay(80);check();Send(move,Mouse(2),Mouse(4));} }
+            else { bool right=S(a,"button")=="right";Send(move,Mouse(right?0x0008u:0x0002u),Mouse(right?0x0010u:0x0004u));if(S(a,"button")=="double"){await Task.Delay(80);check();try{checkPoint();}catch(InputNotSent e){throw new Exception("已发送第一次单击，请核对结果。"+e.Message);}Send(move,Mouse(2),Mouse(4));} }
             return;
         }
         if(localBrowser!=null)localBrowser.ValidateLocalAction(kind,S(a,"key"),0,0);
         GuardElement(AutomationElement.FocusedElement); check();
         if(kind=="key") {
+            if(S(a,"key")=="CTRL_SHIFT_N") {
+                if(localBrowser!=null || shot.Popup!=null || shot.ExplorerFolder==null)throw new Exception("只能在已核验的桌面文件列表中新建文件夹。");
+                await CheckNewFolderShortcut(w,shot.ExplorerFolder);
+                check();
+                if(!ExplorerListFocused(w))throw new Exception("桌面文件列表已失去焦点，请核对后继续。");
+            }
             ushort[] keys=Keys[S(a,"key")];var inputs=new List<INPUT>();foreach(var key in keys)inputs.Add(K(key,0));foreach(var key in keys.Reverse())inputs.Add(K(key,2));Send(inputs.ToArray());
         } else {
             // Unicode SendInput doesn't interpret text as key shortcuts or executable code.
@@ -1419,6 +1722,7 @@ static class Native {
     public static int SelfTest() {
         try {
             WindowContinuation.EditorSelfTest();
+            PopupMenu.SelfTest();
             var modifiers=new List<uint>();
             if(StopKey.SelectShortcut(m=>{modifiers.Add(m);return m==7;})!="Ctrl+Alt+Shift+X"||!modifiers.SequenceEqual(new uint[]{3,7}))throw new Exception("Occupied shortcut did not select the registered fallback");
             if(StopKey.SelectShortcut(m=>m==3)!="Ctrl+Alt+X")throw new Exception("Primary stop shortcut mismatch");

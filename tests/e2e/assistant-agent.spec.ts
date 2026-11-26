@@ -1779,7 +1779,7 @@ test("业务页的电脑任务实时显示暂停原因，重复发送保留草�
   await expect(card.getByRole("status")).toHaveText(state.tasks[0].stage, {
     timeout: 10000,
   });
-  await expect(card).toContainText("已执行 0 步");
+  await expect(card).toContainText("步骤回执 0 次");
   await expect(card).not.toContainText("授权尚未开启");
   expect(state.taskControls).toEqual([]);
   await composer.getByPlaceholder(/描述电脑任务/).fill("现在进度如何");
@@ -1800,7 +1800,8 @@ test("业务页的电脑任务实时显示暂停原因，重复发送保留草�
   state.tasks[0].stage = "已识别测试文档，正在整理";
   state.tasks[0].step = 2;
   state.tasks[0].window = "测试文档 - 记事本";
-  await expect(card).toContainText("已执行 2 步", { timeout: 10000 });
+  await expect(card).toContainText("步骤回执 2 次", { timeout: 10000 });
+  await expect(card).not.toContainText("已确认执行");
   await card.getByRole("button", { name: "暂停任务", exact: true }).click();
   await expect(card.getByRole("status")).toHaveText("你已暂停当前任务");
   await card.getByRole("button", { name: "停止任务", exact: true }).click();
@@ -1816,6 +1817,75 @@ test("业务页的电脑任务实时显示暂停原因，重复发送保留草�
     { id: taskId, action: "stop" },
   ]);
   expect(sent).toHaveLength(1);
+});
+
+test("桌面文件任务受遮挡时核对回执并继续原任务，旧记录和其他窗口按实际状态展示", async ({
+  page,
+}) => {
+  const { state, requests } = await desktopScenario(page, false);
+  state.authorized = true;
+  state.engineReady = true;
+  const now = new Date().toISOString();
+  const task: DesktopTask = {
+    id: jobId,
+    deviceId: desktopFixtureId,
+    instruction:
+      "在我的电脑桌面新建文件夹命名“自动化测试1126”，并在文件夹内新建两个子文件夹和1个记事本，在记事本内写入“自动化测试666”",
+    status: "NEEDS_USER",
+    stage: "操作已中止，请核对窗口。目标位置被其他窗口遮挡，请核对后继续",
+    step: 3,
+    confirmedSteps: 1,
+    recentSteps: [
+      { step: 1, action: "key", result: "ok" },
+      { step: 2, action: "type", result: "uncertain" },
+      { step: 3, action: "click", result: "blocked" },
+    ],
+    window: "桌面 - 文件资源管理器",
+    scope: "device",
+    createdAt: now,
+    updatedAt: now,
+  };
+  state.tasks = [task];
+  await page.goto("/my-workspace");
+  await selectAssistantPanel(page, "我的电脑");
+  const panel = page.locator(".assistant-desktop-panel");
+  const card = panel.locator(`[data-desktop-task-id="${task.id}"]`);
+  await expect(card).toContainText("步骤回执 3 次 · 已确认执行 1 步");
+  await expect(card).toContainText("核对已有的文件夹和文件");
+  await expect(card).toContainText(
+    "选择这个资源管理器窗口，点击「从此窗口继续」",
+  );
+  const receipts = card.getByRole("list", { name: "最近步骤回执" });
+  await expect(receipts).toBeHidden();
+  await card.locator("summary").click();
+  await expect(receipts.getByRole("listitem")).toHaveText([
+    "第 1 步按键已执行",
+    "第 2 步输入文字未确认",
+    "第 3 步点击未执行",
+  ]);
+  expect(state.taskControls).toEqual([]);
+  await card.getByRole("button", { name: "继续当前任务", exact: true }).click();
+  await expect(card.getByRole("status")).toHaveText("等待本机继续当前任务");
+  expect(state.taskControls).toEqual([{ id: task.id, action: "resume" }]);
+  expect(requests).toEqual([]);
+
+  task.instruction = "在我的电脑上点击计算器中的数字";
+  task.window = "计算器";
+  task.status = "NEEDS_USER";
+  task.stage = "目标位置被其他窗口遮挡，请核对后继续";
+  task.step = 15;
+  delete task.confirmedSteps;
+  task.recentSteps = [{ step: 15, action: "click", result: "uncertain" }];
+  await panel.getByRole("button", { name: /刷新/ }).click();
+  await expect(card).toContainText("切回「计算器」，移开遮挡窗口");
+  await expect(card).toContainText("步骤回执 15 次");
+  await expect(card).not.toContainText(/文件夹|已确认执行/);
+  await expect(receipts.getByRole("listitem")).toHaveText([
+    "第 15 步点击未确认",
+  ]);
+  delete task.recentSteps;
+  await panel.getByRole("button", { name: /刷新/ }).click();
+  await expect(card.locator("summary")).toHaveCount(0);
 });
 
 test("业务页发送前核对已有电脑任务，直接显示暂停任务且不重复提交", async ({

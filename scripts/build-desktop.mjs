@@ -112,6 +112,7 @@ const args = [
     path.join(build, "Microsoft.Web.WebView2.WinForms.dll"),
   ].map((n) => `/reference:${n}`),
   path.join(root, "apps/desktop/XutiDesktop.cs"),
+  path.join(root, "apps/desktop/DesktopExplorer.cs"),
   path.join(root, "apps/desktop/DesktopShell.cs"),
   versionSource,
 ];

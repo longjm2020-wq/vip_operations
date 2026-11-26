@@ -79,6 +79,7 @@ export const desktopActionSchema = z.discriminatedUnion("kind", [
         "PAGEDOWN",
         "CTRL_A",
         "CTRL_S",
+        "CTRL_SHIFT_N",
         "CTRL_Z",
       ]),
       description,
@@ -126,6 +127,7 @@ export const desktopObservationSchema = z
     controls: z.string().max(12000),
     localBrowser: z.literal(true).optional(),
     windowId: z.string().uuid().optional(),
+    desktopExplorer: z.literal(true).optional(),
     windows: z
       .array(desktopWindowSchema)
       .min(1)
@@ -154,6 +156,15 @@ export type DesktopTask = {
   status: (typeof desktopTaskStatuses)[number];
   stage: string;
   step: number;
+  /** The server may not have complete historical receipts for older tasks. */
+  confirmedSteps?: number;
+  recentSteps?: {
+    step: number;
+    action: "click" | "scroll" | "type" | "key" | "switch_window" | "wait";
+    result: "ok" | "blocked" | "uncertain";
+  }[];
+  /** Hint for the authorized client's automatic start on its real execution poll. */
+  startLocation?: "desktopExplorer";
   window: string;
   scope: "window" | "device";
   nativeAction?: "open_notepad" | "focus_notepad" | "type_notepad";

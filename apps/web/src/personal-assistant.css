@@ -893,6 +893,25 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   display: inline-block;
   margin-left: 10px;
 }
+.assistant-desktop-receipts {
+  margin: 8px 0;
+  font-size: 12px;
+}
+.assistant-desktop-receipts summary {
+  color: var(--app-secondary);
+  cursor: pointer;
+}
+.assistant-desktop-receipts ol {
+  margin: 6px 0;
+  padding: 0;
+  list-style: none;
+}
+.assistant-desktop-receipts li {
+  display: grid;
+  grid-template-columns: 5em 6em auto;
+  gap: 4px;
+  line-height: 1.7;
+}
 .assistant-desktop-task-compact {
   margin: 0 0 10px;
   padding: 10px 12px;

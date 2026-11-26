@@ -61,6 +61,39 @@ function normalize(text: string) {
     );
 }
 
+/** Choose a starting window for a user-requested Desktop creation task.
+ * Quoted names and intended file contents cannot specify an execution target. */
+export function desktopExplorerIntent(
+  text: string,
+): "folder" | "text" | undefined {
+  const raw = normalize(text);
+  if (
+    /[A-Za-z]:[\\/]|\\\\|\.\.[\\/]|\.(?:bat|cmd|js|vbs|ps1|lnk|exe|com|msi|reg|url)\b/iu.test(
+      raw,
+    )
+  )
+    return;
+  const command = raw.replace(
+    /「[^」]*」|『[^』]*』|“[^”]*”|‘[^’]*’|"[^"]*"|'[^']*'/gu,
+    (name) => (/\.txt[」』”’"']$/iu.test(name) ? "文本文档" : "名称"),
+  );
+  if (
+    /[?？]|(?:如何|怎么|怎样|是否|能否|能不能|可不可以|可以吗|想知道|如果|假如|假设|不要|不用|不必|先别|禁止|取消|停止|暂停|教程|举例|解释|为什么|什么|哪(?:个|种|些)|有没有|要不要|会不会|需要多久|的好处|的步骤|的功能|的方式|操作方法|失败|报错|没成功|没反应|没看到|找不到|的问题|的原因|不成功|覆盖|替换|删除|移动|剪切|上传|下载|发送|执行命令|脚本|命令行|快捷方式|网页|网站|浏览器|终端|回收站|网盘|系统盘)|[吗呢嘛么]\s*[。!.]*$|\b(?:powershell|cmd|bash|terminal)\b/iu.test(
+      command,
+    )
+  )
+    return;
+  const create =
+    /^(?:在|到|去)?\s*(?:(?:(?:我(?:的)?|这台|本地|当前这台)?(?:Windows\s*)?(?:电脑|计算机)|本机)(?:上|中|里)?(?:的)?[,、\s]*(?:在)?|(?:我的|本地|Windows\s*))?桌面(?:文件夹|目录)?(?:下|上|里|中)?[\s,、:]*?(?:请|帮我|给我|先|再)?\s*(?:新建|创建|建立|建(?:一|个))/iu.exec(
+      command,
+    );
+  if (!create) return;
+  const object = command.slice(create[0].length).split(/[,;；。\n]/u, 1)[0];
+  if (/(?:文件夹|目录)/u.test(object)) return "folder";
+  if (/(?:\.txt\b|\btxt\b|文本文(?:档|件)|记事本(?:文档|文件)?)/iu.test(object))
+    return "text";
+}
+
 function requestsAction(text: string) {
   return (
     action.test(text) ||
@@ -86,6 +119,7 @@ export function shouldSearchAssistantPublicWeb(
     privateSearchContext.test(instruction) ||
     searchCredentials.test(instruction) ||
     followupOperation.test(instruction) ||
+    desktopExplorerIntent(text) !== undefined ||
     classifyAssistantFollowup(text) !== undefined ||
     currentPagePrefix.test(instruction) ||
     desktopScope.test(instruction) ||
@@ -311,6 +345,7 @@ export function classifyAssistantExecution(
   text: string,
   options?: { inferExternalTargets?: boolean },
 ): AssistantExecution {
+  if (desktopExplorerIntent(text)) return { kind: "desktop" };
   // A literal may name a device or URL. It belongs to the previous target,
   // and cannot grant a new destination by appearing inside text to enter.
   if (classifyAssistantFollowup(text)) return { kind: "site" };

@@ -72,6 +72,7 @@ import {
   acknowledgeDesktop,
   createDesktopPair,
   desktopControl,
+  desktopTaskView,
   desktopProviderDiagnostic,
   desktopIdentity,
   desktopState,
@@ -216,6 +217,198 @@ async function shot() {
 }
 
 describe("paired desktop task execution", () => {
+  const desktopFolders =
+    "在我的电脑桌面新建文件夹命名“自动化测试1126”，并在文件夹内新建两个子文件夹和1个记事本，在记事本内写入“自动化测试666”";
+
+  it("offers Explorer only on a compatible authorized execution poll and the user's continuation", async () => {
+    const d = await paired();
+    const task = await queueDesktopTask(actor(), {
+      deviceId: d.deviceId,
+      requestId: randomUUID(),
+      instruction: desktopFolders,
+    });
+    const poll = (enabled: boolean) =>
+      pollDesktop(actor(), d.deviceId, true, { desktopExplorer: enabled });
+    expect((await poll(true)).task?.startLocation).toBeUndefined();
+    await setDesktopAuthorization(actor(), d.deviceId, true);
+    expect((await poll(false)).task?.startLocation).toBeUndefined();
+    expect((await poll(true)).task).toMatchObject({
+      id: task.id,
+      startLocation: "desktopExplorer",
+      status: "WAITING",
+    });
+    expect(
+      (await desktopState(actor())).tasks[0].startLocation,
+    ).toBeUndefined();
+    await desktopControl(actor(), task.id, { action: "pause" });
+    expect((await poll(true)).task).toMatchObject({
+      startLocation: "desktopExplorer",
+      status: "PAUSED",
+    });
+    await desktopControl(actor(), task.id, { action: "resume" });
+    expect((await poll(true)).task).toMatchObject({
+      id: task.id,
+      startLocation: "desktopExplorer",
+      status: "WAITING",
+    });
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_tasks SET status='NEEDS_USER',browser_only=true WHERE id=$1",
+      [task.id],
+    );
+    expect((await poll(true)).task?.startLocation).toBeUndefined();
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_tasks SET browser_only=false,previous_task_id=id WHERE id=$1",
+      [task.id],
+    );
+    const bound = await pollDesktop(actor(), d.deviceId, true, {
+      desktopExplorer: true,
+      windowContinuations: true,
+      retainedTaskId: task.id,
+    });
+    expect(bound.task?.id).toBe(task.id);
+    expect(bound.task?.startLocation).toBeUndefined();
+  });
+
+  it.each([
+    {
+      instruction: desktopFolders,
+      app: "explorer",
+      observed: true,
+      grant: true,
+      allowed: true,
+    },
+    {
+      instruction: desktopFolders,
+      app: "explorer",
+      observed: false,
+      grant: true,
+      allowed: false,
+    },
+    {
+      instruction: "在桌面新建一个文本文档",
+      app: "explorer",
+      observed: true,
+      grant: true,
+      allowed: false,
+    },
+    {
+      instruction: desktopFolders,
+      app: "notepad",
+      observed: true,
+      grant: true,
+      allowed: false,
+    },
+    {
+      instruction: desktopFolders,
+      app: "explorer",
+      observed: true,
+      grant: false,
+      allowed: false,
+    },
+  ])(
+    "gates the new-folder key on the actual Explorer observation: $app / $observed / $grant / $allowed",
+    async ({ instruction, app, observed, grant, allowed }) => {
+      const d = await paired(),
+        windowId = randomUUID(),
+        window = "桌面";
+      const task = await queueDesktopTask(actor(), {
+        deviceId: d.deviceId,
+        requestId: randomUUID(),
+        instruction,
+      });
+      const auth = grant
+        ? await setDesktopAuthorization(actor(), d.deviceId, true)
+        : {};
+      await desktopControl(
+        actor(),
+        task.id,
+        { action: "allow", window, application: app, windowId, ...auth },
+        d.deviceId,
+      );
+      vi.mocked(fetch).mockResolvedValueOnce(
+        model({ kind: "key", key: "CTRL_SHIFT_N", description: "新建文件夹" }),
+      );
+      const plan = planDesktop(actor(), d.deviceId, task.id, {
+        ...(await shot()),
+        window,
+        application: app,
+        windowId,
+        ...(grant
+          ? { windows: [{ id: windowId, title: window, application: app }] }
+          : {}),
+        ...(observed ? { desktopExplorer: true } : {}),
+      });
+      if (!allowed) {
+        await expect(plan).rejects.toMatchObject({
+          response: { error: { code: "FORBIDDEN" } },
+        });
+        return;
+      }
+      const result = await plan;
+      expect(result.command?.action).toMatchObject({
+        kind: "key",
+        key: "CTRL_SHIFT_N",
+      });
+      expect(
+        await permitDesktop(actor(), d.deviceId, task.id, {
+          commandId: result.command!.id,
+        }),
+      ).toEqual({ allowed: true });
+      const payload = JSON.parse(
+        String(vi.mocked(fetch).mock.calls[0][1]?.body),
+      );
+      expect(payload.messages[0].content).toContain("画面可核验");
+    },
+  );
+
+  it("exposes fixed receipt fields, counts confirmed inputs and avoids reconstructing truncated history", () => {
+    const task = {
+      id: randomUUID(),
+      device_id: randomUUID(),
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      status: "NEEDS_USER",
+      stage: "",
+      step: 3,
+      history: [
+        {
+          step: 1,
+          action: "click",
+          result: "ok",
+          description: "私人文件名",
+          path: "未公开路径",
+        },
+        { step: 2, action: "type", result: "uncertain", text: "隐藏内容" },
+        { step: 3, action: "scroll", result: "blocked" },
+      ],
+    };
+    const view = desktopTaskView(task);
+    expect(view.confirmedSteps).toBe(1);
+    expect(view.recentSteps).toEqual([
+      { step: 1, action: "click", result: "ok" },
+      { step: 2, action: "type", result: "uncertain" },
+      { step: 3, action: "scroll", result: "blocked" },
+    ]);
+    expect(
+      desktopTaskView({ ...task, history: task.history.slice(1) })
+        .confirmedSteps,
+    ).toBeUndefined();
+    expect(
+      desktopTaskView({
+        ...task,
+        step: 15,
+        history: [
+          { step: 15, action: "key", result: "uncertain", confirmedTotal: 10 },
+        ],
+      }).confirmedSteps,
+    ).toBe(10);
+    expect(
+      desktopTaskView({
+        ...task,
+        history: [{ step: 3, action: "私人动作", result: "ok" }],
+      }).recentSteps,
+    ).toBeUndefined();
+  });
   it("distinguishes device authorization and status-only checks from an actual receiving engine", async () => {
     const d = await paired();
     const grant = await setDesktopAuthorization(actor(), d.deviceId, true);

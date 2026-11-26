@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 export const root = path.resolve(import.meta.dirname, "..");
 export const sourceFiles = [
   "apps/desktop/XutiDesktop.cs",
+  "apps/desktop/DesktopExplorer.cs",
   "apps/desktop/DesktopShell.cs",
   "apps/desktop/app.manifest",
   "apps/desktop/启动小序.cmd",

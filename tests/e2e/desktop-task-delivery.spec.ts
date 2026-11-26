@@ -93,7 +93,7 @@ test("工作台自动区分记事本连续输入、普通提问与网页任务�
       window: "测试空白窗口 - 记事本",
     });
     await expect(card).toContainText("已完成", { timeout: 15000 });
-    await expect(card).toContainText("已执行 1 步");
+    await expect(card).toContainText("已确认执行 1 步");
     await expect(card).toContainText("测试空白窗口 - 记事本");
     const textbox = composer.getByRole("textbox");
     await textbox.fill("为什么输不进去？");
@@ -148,6 +148,17 @@ test("工作台自动区分记事本连续输入、普通提问与网页任务�
       .locator(".assistant-desktop-panel")
       .getByRole("region", { name: "电脑任务：输入9999999" });
     await expect(followupCard).toContainText("已完成", { timeout: 15000 });
+    const files = "在我的电脑桌面新建文件夹，命名为样品资料";
+    await textbox.fill(files);
+    await client("poll", receiving);
+    await composer.getByRole("button", { name: "发送给个人助理" }).click();
+    const filesCard = page.locator(".assistant-desktop-panel").getByRole("region", { name: "电脑任务：" + files });
+    await expect(filesCard).toContainText(files);
+    const legacy = (await client("poll", receiving)).task;
+    expect(legacy.startLocation).toBeUndefined();
+    expect((await client("poll", { ...receiving, desktopExplorer: true })).task).toMatchObject({
+      id: legacy.id, deviceId, status: "WAITING", startLocation: "desktopExplorer",
+    });
   } finally {
     await page.request.post(desktop + "/devices/" + deviceId + "/revoke", {
       headers: {

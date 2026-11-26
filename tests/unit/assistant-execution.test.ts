@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyAssistantExecution,
+  desktopExplorerIntent,
   assistantFollowupAnchor,
   assistantFollowupText,
   classifyAssistantFollowup,
@@ -10,6 +11,35 @@ import {
 } from "../../packages/contracts/src/assistant-execution.js";
 
 describe("workbench execution from direct instructions", () => {
+  it.each([
+    [
+      "在我的电脑桌面新建文件夹命名“自动化测试1126”，并在文件夹内新建两个子文件夹和1个记事本，在记事本内写入“自动化测试666”",
+      "folder",
+    ],
+    ["请帮我在桌面上新建“说明.txt”", "text"],
+    ["在本机的桌面里建一个文本文档", "text"],
+  ])(
+    "chooses the Desktop Explorer for a clear creation request: %s",
+    (text, kind) => {
+      expect(desktopExplorerIntent(text)).toBe(kind);
+      expect(classifyAssistantExecution(text)).toEqual({ kind: "desktop" });
+    },
+  );
+  it.each([
+    "在桌面新建一个文件夹是什么意思",
+    "怎么在我的桌面新建目录",
+    "请不要在桌面创建文件夹",
+    "解释一下“在桌面新建文件夹”",
+    "在我的电脑上编辑桌面的 readme.txt",
+    "在网页上创建文件夹",
+    "在桌面新建目录，然后执行脚本",
+    "在桌面创建文件夹然后移动到回收站",
+    "在财务电脑的桌面创建目录",
+    "新建一个文件夹",
+    "在我的桌面新建“启动.cmd”",
+  ])("does not choose a different location for %s", (text) =>
+    expect(desktopExplorerIntent(text)).toBeUndefined(),
+  );
   it.each([
     "打开微信，给好友阿龙发句问候",
     "请打开微信，给好友阿龙发送「最近好吗？」",
