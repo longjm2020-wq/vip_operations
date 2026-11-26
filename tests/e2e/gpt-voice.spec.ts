@@ -2052,10 +2052,7 @@ test("文字草稿与语音共用记录，关闭面板保留通话和草稿", as
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await expectVoiceCaptions(page);
   await expect(dialog).toBeHidden();
-  await page
-    .getByRole("navigation", { name: "右栏工具" })
-    .getByRole("button", { name: "我的电脑", exact: true })
-    .click();
+  await selectAssistantPanel(page, "我的电脑");
   expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await openPersonalAssistant(page);

@@ -3,6 +3,7 @@ import {
   useContext,
   useRef,
   useState,
+  type ClipboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -90,33 +91,21 @@ function uploadLimits(file: File): {
   };
 }
 
-export function AgentComposer({
-  value,
-  change,
-  disabled,
-  onUploading,
-  targetPicker,
-  actions,
-}: {
-  value: AgentOptions;
-  change: (v: AgentOptions) => void;
-  disabled: boolean;
-  onUploading: (v: boolean) => void;
-  targetPicker?: ReactNode;
-  actions?: ReactNode;
-}) {
-  const input = useRef<HTMLInputElement>(null),
-    { message } = App.useApp();
+export function useAgentAttachmentUpload(
+  value: AgentOptions,
+  change: (v: AgentOptions) => void,
+) {
+  const { message } = App.useApp();
+  const inFlight = useRef(false);
   const [uploading, setUploading] = useState(false);
-  const upload = async (files: FileList | null) => {
-    if (!files?.length) return;
-    const chosen = Array.from(files);
+  const upload = async (chosen: File[]) => {
+    if (!chosen.length || inFlight.current) return;
     if (chosen.length + value.attachments.length > 6) {
       message.warning("每次最多附加6个文件");
       return;
     }
+    inFlight.current = true;
     setUploading(true);
-    onUploading(true);
     const uploaded = [...value.attachments];
     const progressKey = "agent-file-upload-compress";
     try {
@@ -164,11 +153,42 @@ export function AgentComposer({
       message.destroy(progressKey);
       message.error((e as Error).message);
     } finally {
+      inFlight.current = false;
       setUploading(false);
-      onUploading(false);
-      if (input.current) input.current.value = "";
     }
   };
+  const paste = (event: ClipboardEvent<HTMLElement>) => {
+    const { files, items } = event.clipboardData;
+    const chosen = files.length
+      ? Array.from(files)
+      : Array.from(items)
+          .filter((item) => item.kind === "file")
+          .map((item) => item.getAsFile())
+          .filter((file): file is File => file !== null);
+    if (!chosen.length) return;
+    event.preventDefault();
+    void upload(chosen);
+  };
+  return { uploading, upload, paste };
+}
+
+export function AgentComposer({
+  value,
+  change,
+  disabled,
+  uploads,
+  targetPicker,
+  actions,
+}: {
+  value: AgentOptions;
+  change: (v: AgentOptions) => void;
+  disabled: boolean;
+  uploads: ReturnType<typeof useAgentAttachmentUpload>;
+  targetPicker?: ReactNode;
+  actions?: ReactNode;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const { uploading, upload } = uploads;
   return (
     <div className="agent-composer">
       <div className="agent-composer-tools">
@@ -179,7 +199,11 @@ export function AgentComposer({
             hidden
             multiple
             accept=".png,.jpg,.jpeg,.webp,.pdf,.txt,.md,.csv,.json,.docx,.xlsx,.pptx,.mp4,.mov,.webm"
-            onChange={(e) => void upload(e.target.files)}
+            onChange={(e) => {
+              const chosen = Array.from(e.currentTarget.files || []);
+              e.currentTarget.value = "";
+              if (!disabled) void upload(chosen);
+            }}
             aria-label="上传助理附件"
           />
           <Button

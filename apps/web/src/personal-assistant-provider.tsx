@@ -24,6 +24,7 @@ import {
   CalendarOutlined,
   DeleteOutlined,
   ReloadOutlined,
+  RightOutlined,
   SoundOutlined,
   StopOutlined,
   EllipsisOutlined,
@@ -75,6 +76,7 @@ import {
   AgentComposer,
   AgentMessageResults,
   AgentTasksPanel,
+  useAgentAttachmentUpload,
   type AgentOptions,
 } from "./assistant-agent-panel";
 import { AssistantArtifactPreview } from "./assistant-artifact-preview";
@@ -375,7 +377,8 @@ export function PersonalAssistantProvider({
   const [agent, setAgent] = useState<AgentOptions>({
     attachments: [],
   });
-  const [uploading, setUploading] = useState(false);
+  const attachmentUploads = useAgentAttachmentUpload(agent, setAgent);
+  const { uploading } = attachmentUploads;
   const [chatModel, setChatModel] = useState<string>();
   const modelCatalog = useQuery({
     queryKey: ["assistant-capabilities", user.id],
@@ -1758,6 +1761,11 @@ export function PersonalAssistantProvider({
       <Sender
         ref={inDrawer ? chatSender : undefined}
         value={text}
+        onPaste={
+          canEditComposer && !busy && !voice.listening
+            ? attachmentUploads.paste
+            : undefined
+        }
         onChange={(value) => setText(value.slice(0, 4000))}
         onSubmit={(value) => void send(value)}
         loading={busy}
@@ -1770,7 +1778,7 @@ export function PersonalAssistantProvider({
             value={agent}
             change={setAgent}
             disabled={busy || voice.listening}
-            onUploading={setUploading}
+            uploads={attachmentUploads}
             targetPicker={targetPicker}
             actions={
               <div className="assistant-send-actions">
@@ -2034,6 +2042,15 @@ export function PersonalAssistantProvider({
       onNavigate={() => setOpen(false)}
     />
   );
+  const collapseTools = docked ? (
+    <Button
+      type="text"
+      icon={<RightOutlined />}
+      aria-label="收起右侧工具栏"
+      title="收起右侧工具栏"
+      onClick={() => setToolsOpen(false)}
+    />
+  ) : undefined;
   const panels = (
     <>
       {allowed &&
@@ -2045,6 +2062,7 @@ export function PersonalAssistantProvider({
             key={artifactPreview.file.id}
             file={artifactPreview.file}
             onClose={closeArtifactPreview}
+            collapseTools={collapseTools}
           />
         )}
       {allowed && panelSection === "employees" && (
@@ -2061,10 +2079,12 @@ export function PersonalAssistantProvider({
           key={`${user.id}:${knowledgeTarget?.key || ""}`}
           target={knowledgeTarget}
           consumeCreate={consumeKnowledgeCreate}
+          collapseTools={collapseTools}
         />
       )}
       {allowed && panelGroup === "settings" && (
         <Tabs
+          tabBarExtraContent={collapseTools}
           size="small"
           activeKey={panelSection}
           onChange={switchGroupTab}
@@ -2111,6 +2131,7 @@ export function PersonalAssistantProvider({
       )}
       {allowed && panelGroup === "tasks" && (
         <Tabs
+          tabBarExtraContent={collapseTools}
           size="small"
           activeKey={panelSection}
           onChange={switchGroupTab}
@@ -2125,6 +2146,10 @@ export function PersonalAssistantProvider({
                     jobs={jobs.data || []}
                     refresh={() => void jobs.refetch()}
                     onAttach={(file) => {
+                      if (uploading) {
+                        message.info("请等附件上传完成后再添加");
+                        return;
+                      }
                       if (agent.attachments.length >= 6) {
                         message.warning("每次最多附加6个文件");
                         return;
@@ -2150,6 +2175,7 @@ export function PersonalAssistantProvider({
       )}
       {panelSection === "desktop" && allowed && (
         <AssistantDesktopPanel
+          collapseTools={collapseTools}
           open={toolsVisible && (docked || drawerSettled)}
           data={desktop.data}
           client={localClient.data}

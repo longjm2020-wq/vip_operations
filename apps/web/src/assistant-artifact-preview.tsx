@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, Spin } from "antd";
 import {
   CloseOutlined,
@@ -158,12 +158,20 @@ function ArtifactFrame({
   );
 }
 
-type PreviewProps = { file: AgentFile; onClose: () => void };
+type PreviewProps = {
+  file: AgentFile;
+  onClose: () => void;
+  collapseTools?: ReactNode;
+};
 type ArtifactState =
   | { status: "ready"; artifact: ReturnType<typeof analyzeAgentArtifact> }
   | { status: "error"; message: string };
 
-export function AssistantArtifactPreview({ file, onClose }: PreviewProps) {
+export function AssistantArtifactPreview({
+  file,
+  onClose,
+  collapseTools,
+}: PreviewProps) {
   const url = agentContentUrl(file.id);
   const mime = file.mime;
   const [mode, setMode] = useState<"preview" | "source">("preview");
@@ -229,6 +237,7 @@ export function AssistantArtifactPreview({ file, onClose }: PreviewProps) {
             title="关闭文件预览"
             onClick={onClose}
           />
+          {collapseTools}
         </div>
       </header>
 

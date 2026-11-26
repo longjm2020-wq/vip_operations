@@ -11,7 +11,6 @@ import {
   EllipsisOutlined,
   GlobalOutlined,
   LeftOutlined,
-  RightOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
 import {
@@ -170,53 +169,6 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
         }}
       />
       <aside className="workspace-right" aria-label="右侧工具栏">
-        <header
-          className="workspace-tools-header"
-          hidden={
-            !dock.toolsOpen ||
-            dock.tool === "browser" ||
-            dock.tool === "employees"
-          }
-        >
-          <nav className="workspace-tools-tabs" aria-label="右栏工具">
-            <Button
-              type="text"
-              icon={<GlobalOutlined />}
-              aria-label="独立浏览器"
-              aria-pressed={dock.tool === "browser"}
-              onClick={() => dock.selectTool("browser")}
-            >
-              独立浏览器
-            </Button>
-            <Button
-              type="text"
-              icon={<DesktopOutlined />}
-              aria-label="我的电脑"
-              aria-pressed={dock.tool === "desktop"}
-              onClick={() => dock.selectTool("desktop")}
-            >
-              我的电脑
-            </Button>
-            <Dropdown trigger={["click"]} menu={moreMenu}>
-              <Button
-                type="text"
-                icon={<EllipsisOutlined />}
-                aria-label="更多右栏工具"
-                title={
-                  workspaceMoreTools.find(
-                    (item) => item.key === assistantToolGroup(dock.tool),
-                  )?.label || "更多工具"
-                }
-              />
-            </Dropdown>
-          </nav>
-          <Button
-            type="text"
-            icon={<RightOutlined />}
-            aria-label="收起右侧工具栏"
-            onClick={() => dock.setToolsOpen(false)}
-          />
-        </header>
         <div
           ref={dock.registerTools}
           className="workspace-tools-host"

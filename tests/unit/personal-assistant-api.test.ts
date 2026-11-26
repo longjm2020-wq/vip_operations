@@ -485,11 +485,11 @@ describe("multimodal agent ownership and jobs", () => {
       ),
     ).rejects.toThrow();
   });
-  it("uploads one multipart file, isolates owners and returns only the owner's content", async () => {
+  it.each(["notes.txt", "样衣核对 1126🧵.txt"])("preserves multipart filename %s and isolates the owner's content", async (name) => {
     const boundary = "xuti-test-boundary";
     const req = Readable.from([
       Buffer.from(
-        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="notes.txt"\r\nContent-Type: text/plain\r\n\r\nprivate notes\r\n--${boundary}--\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: text/plain\r\n\r\nprivate notes\r\n--${boundary}--\r\n`,
       ),
     ]);
     Object.assign(req, {
@@ -497,7 +497,7 @@ describe("multimodal agent ownership and jobs", () => {
       is: () => true,
     });
     const file = await uploadAgentFile(actor(), req as unknown as Request);
-    expect(file.name).toBe("notes.txt");
+    expect(file.name).toBe(name);
     expect((await attachmentContext(actor(), [file.id], true))[1].text).toBe(
       "private notes",
     );

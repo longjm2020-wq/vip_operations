@@ -112,31 +112,18 @@ export async function selectAssistantPanel(page: Page, name: string) {
     if (!(await rail.isVisible())) {
       await collapseWorkspaceTools(page);
     }
-    if (await rail.isVisible()) {
-      const shortcuts: Record<string, string> = {
-        独立浏览器: "展开独立浏览器",
-        我的电脑: "展开我的电脑",
-        "AI 员工": "展开 AI 员工",
-      };
-      const shortcut = shortcuts[name];
-      if (shortcut) {
-        await rail.getByRole("button", { name: shortcut, exact: true }).click();
-      } else {
-        await rail
-          .getByRole("button", { name: "更多工作台工具", exact: true })
-          .click();
-        await selectPanelMenuItem(page, name);
-      }
-      return;
-    }
-    if (["独立浏览器", "我的电脑"].includes(name)) {
-      await page
-        .getByRole("navigation", { name: "右栏工具" })
-        .getByRole("button", { name, exact: true })
-        .click();
+    await expect(rail).toBeVisible();
+    const shortcuts: Record<string, string> = {
+      独立浏览器: "展开独立浏览器",
+      我的电脑: "展开我的电脑",
+      "AI 员工": "展开 AI 员工",
+    };
+    const shortcut = shortcuts[name];
+    if (shortcut) {
+      await rail.getByRole("button", { name: shortcut, exact: true }).click();
     } else {
-      await page
-        .getByRole("button", { name: "更多右栏工具", exact: true })
+      await rail
+        .getByRole("button", { name: "更多工作台工具", exact: true })
         .click();
       await selectPanelMenuItem(page, name);
     }

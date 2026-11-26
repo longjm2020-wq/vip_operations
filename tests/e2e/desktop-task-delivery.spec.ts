@@ -60,9 +60,9 @@ test("工作台自动区分记事本连续输入、普通提问与网页任务�
     await composer.getByRole("textbox").fill(instruction);
     await client("poll", receiving);
     await composer.getByRole("button", { name: "发送给个人助理" }).click();
-    const card = page
-      .locator(".assistant-desktop-panel")
-      .getByRole("region", { name: "电脑任务：" + instruction });
+    const panel = page.locator(".assistant-desktop-panel");
+    await panel.getByText("操作任务", { exact: true }).click();
+    const card = panel.getByRole("region", { name: "电脑任务：" + instruction });
     await expect(card).toContainText(instruction);
     const { task } = await client("poll", receiving);
     expect(task).toMatchObject({

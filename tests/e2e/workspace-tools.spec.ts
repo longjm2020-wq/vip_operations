@@ -160,7 +160,8 @@ test("更多工具精简为三个入口，切换设置保留记忆草稿，手�
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/my-workspace?assistant=voice");
   await expect(tab("语音设置")).toHaveAttribute("aria-selected", "true");
-  await right.getByRole("button", { name: "更多右栏工具" }).click();
+  await right.getByRole("button", { name: "收起右侧工具栏" }).click();
+  await rail.getByRole("button", { name: "更多工作台工具" }).click();
   await expect(page.getByRole("menuitem", { name: "助理设置" })).toHaveClass(
     /ant-dropdown-menu-item-selected/,
   );
@@ -495,7 +496,9 @@ for (const width of [1440, 390]) {
     await expect(browser).toBeVisible();
     await selectAssistantPanel(page, "我的电脑");
     await expect(right.locator(".assistant-desktop-panel")).toBeVisible();
-    await expect(right.locator(".workspace-tools-header")).toBeVisible();
+    await expect(right.getByRole("navigation", { name: "右栏工具" })).toHaveCount(0);
+    await expect(right.getByRole("button", { name: "更多右栏工具" })).toHaveCount(0);
+    await expect(right.getByRole("button", { name: "收起右侧工具栏" })).toBeVisible();
     await selectAssistantPanel(page, "独立浏览器");
     await expect(browser).toBeVisible();
     await selectAssistantPanel(page, "对话设置");

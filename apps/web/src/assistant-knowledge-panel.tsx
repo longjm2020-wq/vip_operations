@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   App,
@@ -454,9 +454,11 @@ function KnowledgeEditor({
 export function AssistantKnowledgePanel({
   target,
   consumeCreate,
+  collapseTools,
 }: {
   target?: KnowledgeTarget;
   consumeCreate: (key: string) => void;
+  collapseTools?: ReactNode;
 }) {
   const user = useUser();
   const client = useQueryClient();
@@ -603,35 +605,38 @@ export function AssistantKnowledgePanel({
             >
               知识库
             </Button>
-            {note.data && !historical && displayed && (
-              <div className="knowledge-actions">
-                <Button
-                  size="small"
-                  aria-label="编辑笔记"
-                  icon={<EditOutlined />}
-                  disabled={!employees.data || !!employees.error}
-                  onClick={() => setDraft(note.data)}
-                >
-                  编辑
-                </Button>
-                <Popconfirm
-                  title="删除这篇笔记？"
-                  description="删除后员工无法再检索这篇笔记。"
-                  okText="删除"
-                  cancelText="取消"
-                  onConfirm={remove}
-                >
+            <div className="knowledge-actions">
+              {note.data && !historical && displayed && (
+                <>
                   <Button
                     size="small"
-                    type="text"
-                    danger
-                    loading={deleting}
-                    icon={<DeleteOutlined />}
-                    aria-label="删除笔记"
-                  />
-                </Popconfirm>
-              </div>
-            )}
+                    aria-label="编辑笔记"
+                    icon={<EditOutlined />}
+                    disabled={!employees.data || !!employees.error}
+                    onClick={() => setDraft(note.data)}
+                  >
+                    编辑
+                  </Button>
+                  <Popconfirm
+                    title="删除这篇笔记？"
+                    description="删除后员工无法再检索这篇笔记。"
+                    okText="删除"
+                    cancelText="取消"
+                    onConfirm={remove}
+                  >
+                    <Button
+                      size="small"
+                      type="text"
+                      danger
+                      loading={deleting}
+                      icon={<DeleteOutlined />}
+                      aria-label="删除笔记"
+                    />
+                  </Popconfirm>
+                </>
+              )}
+              {collapseTools}
+            </div>
           </div>
           {note.isPending && !displayed && <Spin />}
           {((!displayed && note.error) ||
@@ -772,6 +777,7 @@ export function AssistantKnowledgePanel({
               >
                 新建笔记
               </Button>
+              {collapseTools}
               <input
                 type="file"
                 accept=".md,.markdown"

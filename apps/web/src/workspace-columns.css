@@ -61,30 +61,11 @@
   border-left: 1px solid var(--app-shell-border);
   background: var(--app-bg);
 }
-.workspace-tools-header,
-.workspace-tools-tabs,
 .workspace-inline-chat-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   min-width: 0;
-}
-.workspace-tools-header {
-  flex-shrink: 0;
-  gap: 8px;
-  padding: 8px;
-  border-bottom: 1px solid var(--app-shell-border);
-}
-.workspace-tools-tabs {
-  gap: 2px;
-}
-.workspace-tools-tabs .ant-btn {
-  padding-inline: 8px;
-  font-size: 12px;
-}
-.workspace-tools-tabs [aria-pressed="true"] {
-  background: var(--app-surface);
-  color: var(--app-text);
 }
 .workspace-tools-rail {
   position: absolute;

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, App, Button, Space, Tag, Typography } from "antd";
 import {
   DownloadOutlined,
@@ -16,6 +16,7 @@ import type { DesktopState } from "../../../packages/contracts/src/assistant-des
 import { AssistantDesktopTaskCard } from "./assistant-desktop-task-card";
 
 export function AssistantDesktopPanel({
+  collapseTools,
   open,
   data,
   client,
@@ -32,6 +33,7 @@ export function AssistantDesktopPanel({
   preferredId,
   automatic = false,
 }: {
+  collapseTools?: ReactNode;
   open: boolean;
   data?: DesktopState;
   client?: DesktopClientState;
@@ -93,9 +95,12 @@ export function AssistantDesktopPanel({
         <h3>
           <DesktopOutlined /> 我的电脑
         </h3>
-        <Button size="small" icon={<ReloadOutlined />} onClick={refresh}>
-          刷新
-        </Button>
+        <Space>
+          <Button size="small" icon={<ReloadOutlined />} onClick={refresh}>
+            刷新
+          </Button>
+          {collapseTools}
+        </Space>
       </div>
       <p>
         {automatic
@@ -288,23 +293,27 @@ export function AssistantDesktopPanel({
           </details>
         </div>
       ))}
-      {!!data?.devices.length && <h4>操作任务</h4>}
-      {!!data?.devices.length && !data?.tasks.length && <p>暂无电脑任务</p>}
-      {data?.tasks.map((t) => (
-        <AssistantDesktopTaskCard
-          key={t.id}
-          task={t}
-          device={data.devices.find((device) => device.id === t.deviceId)}
-          localDeviceId={localId}
-          refresh={refresh}
-        />
-      ))}
-      {!!data?.devices.length && (
-        <p className="assistant-desktop-note">
-          电脑和小序桌面端需保持运行。在任务卡可暂停或停止，紧急停止快捷键见本机「电脑任务」。
-          {client?.stopShortcut && `本机快捷键为 ${client.stopShortcut}。`}
-          登录、付款、对外发送和删除等操作由你接手。
-        </p>
+      {data && (data.devices.length > 0 || data.tasks.length > 0) && (
+        <details className="assistant-desktop-task-list">
+          <summary>操作任务</summary>
+          {data.tasks.length === 0 && <p>暂无电脑任务</p>}
+          {data.tasks.map((task) => (
+            <AssistantDesktopTaskCard
+              key={task.id}
+              task={task}
+              device={data.devices.find((device) => device.id === task.deviceId)}
+              localDeviceId={localId}
+              refresh={refresh}
+            />
+          ))}
+          {data.devices.length > 0 && (
+            <p className="assistant-desktop-note">
+              电脑和小序桌面端需保持运行。在任务卡可暂停或停止，紧急停止快捷键见本机「电脑任务」。
+              {client?.stopShortcut && `本机快捷键为 ${client.stopShortcut}。`}
+              登录、付款、对外发送和删除等操作由你接手。
+            </p>
+          )}
+        </details>
       )}
     </div>
   );

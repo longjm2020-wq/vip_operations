@@ -857,6 +857,10 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   align-items: center;
   justify-content: space-between;
 }
+.assistant-desktop-task-list > summary {
+  color: var(--app-text);
+  font-weight: 600;
+}
 .assistant-desktop-item {
   padding: 14px;
   margin: 10px 0;

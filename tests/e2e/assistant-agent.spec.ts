@@ -4,7 +4,7 @@ import {
   selectAssistantExecution,
   setAssistantOption,
 } from "./assistant-controls.js";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
 import type { DesktopTask } from "../../packages/contracts/src/assistant-desktop.js";
 const fileId = "11111111-1111-4111-8111-111111111111";
@@ -814,6 +814,116 @@ for (const missingModels of [false, true]) {
     expect(requests).toHaveLength(0);
   });
 }
+
+async function pasteIntoComposer(
+  textbox: Locator,
+  files: { name: string; type: string; content: string }[],
+  text = "",
+) {
+  await textbox.focus();
+  return textbox.evaluate(
+    (element, clipboard) => {
+      const data = new DataTransfer();
+      for (const file of clipboard.files)
+        data.items.add(new File([file.content], file.name, { type: file.type }));
+      if (clipboard.text) data.setData("text/plain", clipboard.text);
+      const event = new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      });
+      element.dispatchEvent(event);
+      return event.defaultPrevented;
+    },
+    { files, text },
+  );
+}
+
+test("工作台粘贴多份文件只上传一次，聊天面板保留草稿和附件并沿用数量限制", async ({
+  page,
+}) => {
+  const requests = await setup(page);
+  const uploads: { name: string; type: string; content: string }[] = [];
+  let fileServiceAvailable = true;
+  await page.route("**/api/v1/my-workspace/assistant/files", async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST") return route.fallback();
+    const form = await new Response(new Uint8Array(request.postDataBuffer()!), {
+      headers: { "Content-Type": request.headers()["content-type"] },
+    }).formData();
+    const file = form.get("file");
+    if (!file || typeof file === "string") throw Error("缺少上传文件");
+    uploads.push({
+      name: file.name,
+      type: file.type,
+      content: await file.text(),
+    });
+    if (!fileServiceAvailable) {
+      await route.fulfill({
+        status: 503,
+        json: { error: { message: "文件服务暂不可用" } },
+      });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        data: {
+          id: crypto.randomUUID(),
+          name: file.name,
+          mime: file.type,
+          size: file.size,
+          source: "upload",
+          createdAt: new Date().toISOString(),
+        },
+      },
+    });
+  });
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const textbox = composer.getByRole("textbox");
+  const files = [
+    { name: "款式说明.txt", type: "text/plain", content: "保留内袋" },
+    { name: "商品清单.csv", type: "text/csv", content: "款号,数量\nA01,1" },
+  ];
+  await textbox.fill("暂存草稿");
+  await textbox.press("Control+a");
+  await textbox.press("Control+c");
+  await textbox.fill("请根据资料核对，");
+  await textbox.press("End");
+  await textbox.press("Control+v");
+  const draft = "请根据资料核对，暂存草稿";
+  await expect(textbox).toHaveValue(draft);
+  expect(uploads).toEqual([]);
+  expect(await pasteIntoComposer(textbox, files, "复制文件时附带的路径")).toBe(true);
+  const tags = composer.locator(".agent-attachments .ant-tag");
+  const names = files.map((file) => file.name);
+  await expect(tags).toHaveText(names);
+  await expect(textbox).toHaveValue(draft);
+  expect(uploads).toEqual(files);
+
+  await openPersonalAssistant(page);
+  await expect(textbox).toHaveValue(draft);
+  await expect(tags).toHaveText(names);
+  const overflow = Array.from({ length: 5 }, (_, i) => ({
+    ...files[0], name: `资料${i}.txt`,
+  }));
+  expect(await pasteIntoComposer(textbox, overflow)).toBe(true);
+  await expect(page.getByText("每次最多附加6个文件", { exact: true })).toBeVisible();
+  expect(uploads).toEqual(files);
+
+  const retry = { ...files[0], name: "补充资料.txt" };
+  fileServiceAvailable = false;
+  expect(await pasteIntoComposer(textbox, [retry])).toBe(true);
+  await expect(page.getByText("文件服务暂不可用", { exact: true })).toBeVisible();
+  await expect(tags).toHaveText(names);
+  await expect(textbox).toHaveValue(draft);
+  fileServiceAvailable = true;
+  expect(await pasteIntoComposer(textbox, [retry])).toBe(true);
+  await expect(tags).toHaveText([...names, retry.name]);
+  await expect(textbox).toHaveValue(draft);
+  expect(uploads).toEqual([...files, retry, retry]);
+  expect(requests).toEqual([]);
+});
 
 test("简洁输入区直接发送附件并下载任务结果，历史回复隐藏型号", async ({
   page,
@@ -1850,6 +1960,20 @@ test("桌面文件任务受遮挡时核对回执并继续原任务，旧记录�
   await selectAssistantPanel(page, "我的电脑");
   const panel = page.locator(".assistant-desktop-panel");
   const card = panel.locator(`[data-desktop-task-id="${task.id}"]`);
+  const taskListToggle = panel.getByText("操作任务", { exact: true });
+  const chatCard = page.locator(".assistant-compose:visible").getByRole("region", {
+    name: "电脑任务：" + task.instruction,
+  });
+  await expect(taskListToggle).toBeVisible();
+  await expect(card.getByRole("button", { name: "继续当前任务" })).toBeHidden();
+  await expect(chatCard.getByRole("button", { name: "继续当前任务" })).toBeVisible();
+  await taskListToggle.focus();
+  await taskListToggle.press("Enter");
+  await expect(card.getByRole("button", { name: "继续当前任务" })).toBeVisible();
+  await taskListToggle.press("Space");
+  await expect(card.getByRole("button", { name: "继续当前任务" })).toBeHidden();
+  await expect(chatCard.getByRole("button", { name: "继续当前任务" })).toBeVisible();
+  await taskListToggle.click();
   await expect(card).toContainText("步骤回执 3 次 · 已确认执行 1 步");
   await expect(card).toContainText("核对已有的文件夹和文件");
   await expect(card).toContainText(
@@ -2053,7 +2177,8 @@ test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保�
   await selectAssistantPanel(page, "我的电脑");
   const panel = page.locator(".workspace-right .assistant-desktop-panel");
   const body = page.locator(".workspace-tool-panels");
-  await expect(panel.getByRole("status")).toHaveCount(10);
+  await expect(panel.getByText("操作任务", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("status")).toHaveCount(0);
   await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBe(0);
   await expect(panel.getByRole("heading", { name: /我的电脑/ })).toBeInViewport(
     { ratio: 1 },
@@ -2063,6 +2188,8 @@ test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保�
   ).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: ".local/desktop-panel-scroll-top.png" });
 
+  await panel.getByText("操作任务", { exact: true }).click();
+  await expect(panel.getByRole("status")).toHaveCount(10);
   await body.evaluate((el) => {
     el.scrollTop = 360;
   });

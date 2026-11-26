@@ -45,6 +45,7 @@ import { useAssistantHub } from "./assistant-hub-context";
 import {
   AgentComposer,
   AgentFileLink,
+  useAgentAttachmentUpload,
   type AgentOptions,
 } from "./assistant-agent-panel";
 import { ArtifactCard, teamActive } from "./assistant-team-panel";
@@ -999,7 +1000,6 @@ export function AssistantEmployeesPanel({
     creating = selected === "new";
   const [editingEmployee, setEditingEmployee] = useState(false),
     [sending, setSending] = useState(false),
-    [uploading, setUploading] = useState(false),
     [error, setError] = useState("");
   const [applyingSkills, setApplyingSkills] = useState(false),
     [skillResult, setSkillResult] = useState<EmployeeSkillsApplied>();
@@ -1075,6 +1075,11 @@ export function AssistantEmployeesPanel({
         requestId: undefined,
       },
     }));
+  const attachmentUploads = useAgentAttachmentUpload(
+    draft.attachments,
+    (attachments) => updateDraft({ attachments }),
+  );
+  const { uploading } = attachmentUploads;
   const composerInput = useRef<React.ComponentRef<typeof Input.TextArea>>(null);
   const canSend = replyTo
     ? !!draft.goal.trim() || draft.attachments.attachments.length > 0
@@ -1567,6 +1572,7 @@ export function AssistantEmployeesPanel({
                     disabled={sending}
                     autoSize={{ minRows: 3, maxRows: 8 }}
                     onChange={(e) => updateDraft({ goal: e.target.value })}
+                    onPaste={sending ? undefined : attachmentUploads.paste}
                     onKeyDown={(e) => {
                       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                         e.preventDefault();
@@ -1578,7 +1584,7 @@ export function AssistantEmployeesPanel({
                     value={draft.attachments}
                     change={(attachments) => updateDraft({ attachments })}
                     disabled={sending}
-                    onUploading={setUploading}
+                    uploads={attachmentUploads}
                     actions={
                       <Button
                         type="primary"

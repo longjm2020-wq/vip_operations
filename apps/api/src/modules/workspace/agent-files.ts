@@ -568,6 +568,7 @@ export async function uploadAgentFile(c: Context, req: Request) {
         invalid = false;
       const parser = Busboy({
         headers: req.headers,
+        defParamCharset: "utf8",
         limits: { files: 1, fileSize: RAW_VIDEO_BYTES, fields: 0, parts: 2 },
       });
       const timer = setTimeout(() => {
