@@ -1,16 +1,16 @@
 {
-  "version": "1.2.13",
+  "version": "1.2.14",
   "platform": "win-x64",
-  "sha256": "699d6e11770a1633e99a44f4f44ed7ea8678bcc3165905c5555acd8c011f5bdb",
+  "sha256": "124068464aebb553b659a3a44ba402e55675dc94b7a3ea73ba4433ec28897cfa",
   "sources": {
-    "apps/desktop/XutiDesktop.cs": "116276f0602f52930a93c47ffc2b27970013bdcec9639576c4e4fd138cbfa0f1",
+    "apps/desktop/XutiDesktop.cs": "ea7d60816b62e3951a365d1a5a64507c6bdea161914e0698b70311037299a696",
     "apps/desktop/DesktopExplorer.cs": "7b5ad17f14342a1006c9832ee9ce88d8597e99b0906a633ad927d6104cd9f0aa",
-    "apps/desktop/ExplorerCopy.cs": "9d61760ca8058f8595b8867734b4dde03102d5020aceff858384c119261a70a6",
+    "apps/desktop/ExplorerCopy.cs": "c3440bb04e3c5256254a787cc8c5ff84b6bc227f4f4f68f92101f62e7806dd1a",
     "apps/desktop/DesktopShell.cs": "9971dd142efb05944f12f14ea02991168d4671125c389ad4265689e2447c2a31",
     "apps/desktop/app.manifest": "c58b06b9ed978a75dddc988e2e2fcde120675c3ac0554cc1e45b20076f3ee68d",
     "apps/desktop/启动小序.cmd": "4ea0d09b231966f86284ea78560ef38fa6ad7eb56d3312ba7f391fe3795e75ef",
-    "apps/desktop/README.txt": "565de23c6f9923b5d83d0edf369e93c7323e6283ab994ec45c90301a600b73bb",
-    "apps/desktop/version.json": "7f14f07dc0c22c528494fb2ac4992ccc12981bcb8b2f6d52371474bb087c073b",
+    "apps/desktop/README.txt": "794c4854c686c43d6ede4e56102a244e04c099216f977755903a46a95ea04316",
+    "apps/desktop/version.json": "0700760f25838f7c302a2d0d6be27729eaa8e160036c9970931e20a577a7022f",
     "scripts/build-desktop.mjs": "21a6d572e23e67a9f5f08920871981dc79ea97e11dc894ca9bf3a80f7397f57b",
     "scripts/desktop-artifact.mjs": "a7ab06b7610865974d686745ba26fce5b559cf1be3d252780474df42e23954aa"
   }

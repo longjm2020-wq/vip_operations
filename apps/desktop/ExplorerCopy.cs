@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Automation;
 using Microsoft.Win32.SafeHandles;
@@ -34,6 +35,10 @@ static partial class Native {
         public WindowChoice DestinationWindow {get;private set;}
         uint copiedSequence;
         bool pasteSent;
+        public bool PasteIssued { get {return pasteSent;} }
+        readonly bool verificationOnly;
+        public bool VerifiedUnsent {get;private set;}
+        public string PasteCommandId { get;set; }
         struct FileStamp {
             public bool Directory;
             public long Size,Modified;
@@ -43,7 +48,20 @@ static partial class Native {
         static InputNotSent Block(string reason) {return new InputNotSent(reason);}
 
         public ExplorerCopy(Dictionary<string,object> spec,string instruction) : this(spec,instruction,null,null,null) {}
-        public ExplorerCopy(Dictionary<string,object> spec,string instruction,string scope,Func<string> readReceipt,Action<string> writeReceipt) {
+        public ExplorerCopy(Dictionary<string,object> spec,string instruction,string scope,Func<string> readReceipt,Action<string> writeReceipt)
+            : this(spec,instruction,scope,readReceipt,writeReceipt,null) {}
+        public static ExplorerCopy ForVerification(Dictionary<string,object> spec,string instruction,string scope,Func<string> readReceipt,string commandId) {
+            Guid parsed;
+            if(!Guid.TryParse(commandId,out parsed))throw Block("未找到原任务的粘贴指令编号。");
+            return new ExplorerCopy(spec,instruction,scope,readReceipt,null,commandId);
+        }
+        public static ExplorerCopy ForBackgroundVerification(Dictionary<string,object> spec,string instruction,string scope,Func<string> readReceipt,string attempt) {
+            Guid parsed;
+            if(!Guid.TryParse(attempt,out parsed))throw Block("后台复制缺少原尝试编号。");
+            return new ExplorerCopy(spec,instruction,scope,readReceipt,null,attempt,true);
+        }
+        ExplorerCopy(Dictionary<string,object> spec,string instruction,string scope,Func<string> readReceipt,Action<string> writeReceipt,string commandId,bool background=false) {
+            verificationOnly=commandId!=null;
             string selection=S(spec,"selection");
             string kind=S(spec,"destinationKind");
             newDesktopFolder=kind=="newDesktopFolder";
@@ -57,24 +75,44 @@ static partial class Native {
             CheckDirectory(sourceFolder);
             expected=ReadSource();
             topLevel=expected.Keys.Where(k=>k.IndexOf('\\')<0).ToArray();
+            if(scope!=null) {
+                // Preserve the 1.2.13 fingerprint representation for recovery of an original command.
+                using(var hash=SHA256.Create()) {
+                    var rows=expected.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase).Select(x=>x.Key+"\t"+(x.Value.Directory?"d":"f")+"\t"+x.Value.Size+"\t"+x.Value.Modified);
+                    fingerprint=Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(source+"\n"+String.Join("\n",rows))));
+                }
+            }
             if(newDesktopFolder) {
-                if(String.IsNullOrEmpty(scope) || readReceipt==null || writeReceipt==null)throw Block("桌面新目录只能由已授权的原任务创建。");
+                if(String.IsNullOrEmpty(scope) || readReceipt==null || (!verificationOnly && writeReceipt==null))throw Block("桌面新目录只能由已授权的原任务创建。");
                 string desktop=UserDesktop(),name=S(spec,"destination");
                 CheckDirectory(desktop);
                 CheckDesktopName(name,instruction);
                 destination=Path.Combine(desktop,name);
                 if(SameFolder(sourceFolder,destination) || destination.StartsWith(sourceFolder+"\\",StringComparison.OrdinalIgnoreCase))
                     throw Block("不能把目标目录建在复制来源内，请选择其他目录。");
-                using(var hash=SHA256.Create()) {
-                    var rows=expected.OrderBy(x=>x.Key,StringComparer.OrdinalIgnoreCase).Select(x=>x.Key+"\t"+(x.Value.Directory?"d":"f")+"\t"+x.Value.Size+"\t"+x.Value.Modified);
-                    fingerprint=Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(source+"\n"+String.Join("\n",rows))));
-                }
-                CheckNewFolder();
+                if(!verificationOnly)CheckNewFolder();
             } else {
                 destination=ExplicitPath(S(spec,"destination"),instruction);
                 CheckDirectory(destination);
                 if(SameFolder(sourceFolder,destination))throw Block("请指定两个不同的本地目录。");
-                CheckVacant(destination,topLevel);
+                if(!verificationOnly)CheckVacant(destination,topLevel);
+            }
+            if(verificationOnly) {
+                string[] saved=(readReceipt()??"").Split('\n');
+                // 1.2.13 issued a five-field receipt only for new Desktop folders.
+                bool commandMatches=saved.Length==6?saved[5]==commandId:saved.Length==5 && newDesktopFolder;
+                if(!commandMatches || saved[0]!=scope || (background ? saved.Length!=6 || saved[4]!="background" : saved[4]!="paste" && saved[4]!="ready") || !SameFolder(saved[1],destination))
+                    throw Block("缺少绑定到这次粘贴的本机回执，不能自动确认。");
+                if(saved[3]!=fingerprint)throw Block("复制来源的文件清单或属性已改变，不能确认原任务。");
+                CheckDirectory(destination);
+                destinationId=FolderId(destination);
+                if(saved[2]!=destinationId)throw Block("原目标目录已被替换，不能确认原任务。");
+                PasteCommandId=commandId;
+                if(saved[4]=="ready") {
+                    if(!newDesktopFolder || saved.Length!=5 || Directory.EnumerateFileSystemEntries(destination).Any())
+                        throw Block("原粘贴未执行，但目标目录已有内容，无法安全续办。");
+                    VerifiedUnsent=true;
+                } else pasteSent=true;
             }
         }
         static void CheckDesktopName(string name,string instruction) {
@@ -174,6 +212,25 @@ static partial class Native {
             public uint attributes,creationLow,creationHigh,accessLow,accessHigh,writeLow,writeHigh,volume,sizeHigh,sizeLow,links,indexHigh,indexLow;
         }
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle handle,out HandleInfo info);
+        [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileInformationByHandle(SafeFileHandle handle,int infoClass,IntPtr data,uint size);
+        [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileTime(SafeFileHandle handle,IntPtr created,IntPtr accessed,ref long lastWrite);
+        static void PublishFile(SafeFileHandle handle,string path) {
+            byte[] name=Encoding.Unicode.GetBytes(path);
+            int lengthOffset=IntPtr.Size*2,header=lengthOffset+4;
+            var rename=new byte[header+name.Length];
+            Buffer.BlockCopy(BitConverter.GetBytes(name.Length),0,rename,lengthOffset,4);
+            Buffer.BlockCopy(name,0,rename,header,name.Length);
+            var pinned=GCHandle.Alloc(rename,GCHandleType.Pinned);
+            try {
+                if(!SetFileInformationByHandle(handle,3,pinned.AddrOfPinnedObject(),(uint)rename.Length))
+                    throw new IOException("目标已出现同名项目或无法保存（Windows "+Marshal.GetLastWin32Error()+"）："+Path.GetFileName(path));
+            } finally {pinned.Free();}
+        }
+        static void RemoveUnpublishedFile(SafeFileHandle handle) {
+            var flag=GCHandle.Alloc(new byte[]{1},GCHandleType.Pinned);
+            try {SetFileInformationByHandle(handle,4,flag.AddrOfPinnedObject(),1);}
+            finally {flag.Free();}
+        }
         static SafeFileHandle OpenDirectoryHandle(string path,uint share) {
             return CreateFileW(path,0x80,share,IntPtr.Zero,3,0x02200000,IntPtr.Zero);
         }
@@ -186,7 +243,10 @@ static partial class Native {
         static string FolderId(string path) {
             using(var handle=OpenDirectoryHandle(path,7))return FolderId(handle);
         }
-        string Receipt(string phase) {return String.Join("\n",new[]{scope,destination,destinationId,fingerprint,phase});}
+        string Receipt(string phase) {
+            var receipt=String.Join("\n",new[]{scope,destination,destinationId,fingerprint,phase});
+            return (phase=="paste" || phase=="background") && !String.IsNullOrEmpty(PasteCommandId)?receipt+"\n"+PasteCommandId:receipt;
+        }
         bool CheckNewFolder() {
             if(!SameFolder(UserDesktop(),Path.GetDirectoryName(destination)))throw Block("Windows 桌面的位置已经更改，请核对原任务。");
             string receipt=readReceipt()??"";
@@ -196,22 +256,18 @@ static partial class Native {
                 catch(FileNotFoundException) {return false;}
                 throw Block("桌面已经有同名项目。请另取名称，已有目录不会合并或覆盖。");
             }
-            if(parts.Length!=5 || !SameFolder(parts[1],destination) || !Directory.Exists(destination) ||
+            if((parts.Length!=5 && parts.Length!=6) || !SameFolder(parts[1],destination) || !Directory.Exists(destination) ||
                 !String.Equals(parts[2],FolderId(destination),StringComparison.Ordinal) || parts[3]!=fingerprint)
                 throw Block("原任务的来源内容或已建目录身份发生变化，请核对后处理。");
             destinationId=parts[2];
             if(parts[4]=="paste") {
-                if(CopiedFilesVisible(destination,expected) && TargetHasExactContents())
-                    throw Block("上次已发出粘贴，指定内容已在目标目录核验。请核对原任务结果，无需再次粘贴。");
                 throw Block("上次任务已发出粘贴，结果尚未全部核验。请查看原目录中的复制进度，避免重复。");
             }
             if(parts[4]!="ready" || Directory.EnumerateFileSystemEntries(destination).Any())
                 throw Block("原任务建立的目标目录已变化，请核对后处理，不会合并已有内容。");
             return true;
         }
-        public async Task PrepareAuthorizedDestination(IntPtr own,Action check) {
-            if(!newDesktopFolder)return;
-            await CheckStart(SourceWindow);check();
+        void EnsureNewFolder(Action check) {
             CheckDirectory(sourceFolder);CheckDirectory(Path.GetDirectoryName(destination));
             if(!SameSource())throw Block("来源已变化，请先核对内容，再创建目标目录。");
             if(!CheckNewFolder()) {
@@ -225,6 +281,12 @@ static partial class Native {
                 writeReceipt(Receipt("ready"));
             }
             CheckNewFolder();check();
+        }
+        public async Task PrepareAuthorizedDestination(IntPtr own,Action check) {
+            if(verificationOnly)throw Block("复核任务只读取已复制的结果。");
+            if(!newDesktopFolder)return;
+            await CheckStart(SourceWindow);check();
+            EnsureNewFolder(check);
             DestinationWindow=await OpenExplorerDirectory(own,destination,check);
             if(SourceWindow.Handle==DestinationWindow.Handle)throw Block("请分别打开源目录与桌面新目录。");
         }
@@ -243,6 +305,7 @@ static partial class Native {
             });
         }
         public async Task Open(IntPtr own,Action check) {
+            if(verificationOnly)throw Block("复核任务只读取已复制的结果。");
             if(!newDesktopFolder)DestinationWindow=await OpenExplorerDirectory(own,destination,check);
             SourceWindow=await OpenExplorerDirectory(own,sourceFolder,check);
             if(DestinationWindow!=null && SourceWindow.Handle==DestinationWindow.Handle)throw Block("源目录和目标目录需要分别在可核验的资源管理器窗口中打开。");
@@ -430,6 +493,19 @@ static partial class Native {
             CheckVacant(destination,topLevel);
             return "paste";
         }
+        public async Task<string> WaitForEvidence(WindowChoice window,Action check) {
+            bool sourceReady=SameWindow(window,SourceWindow) && copiedSequence==0;
+            bool targetReady=SameWindow(window,DestinationWindow) && copiedSequence!=0 && !pasteSent;
+            if(!sourceReady && !targetReady)return null; // server now switches from COPY to the approved destination
+            var wait=Stopwatch.StartNew();
+            do {
+                check();
+                string evidence=await Observe(window);
+                if(evidence!=null)return evidence;
+                await Task.Delay(180);
+            } while(wait.ElapsedMilliseconds<2400);
+            return null;
+        }
         public void CheckDispatch(WindowChoice window,string key,string evidence) {
             if(key!="COPY" && key!="PASTE")throw Block("此文件快捷键无效。");
             bool copy=key=="COPY";
@@ -438,7 +514,8 @@ static partial class Native {
                 (copy?copiedSequence!=0:!ClipboardMatches(copiedSequence,SourceWindow.Pid)))
                 throw Block("文件快捷键的窗口、按键或剪贴板状态已变化，本步未发送。");
         }
-        public async Task Execute(WindowChoice window,string key,string evidence,Action check) {
+        public async Task Execute(WindowChoice window,string key,string evidence,Action check,Action checkVerification) {
+            if(verificationOnly)throw Block("复核任务不会发送桌面按键。");
             if(evidence!=await Observe(window))throw Block("来源选中项或目标目录已变化，本步未发送。");
             check();CheckDispatch(window,key,evidence);
             if(key=="COPY") {
@@ -453,22 +530,179 @@ static partial class Native {
             }
             // Deny delete sharing on the owned directory until the actual Shell
             // transfer has been verified. Contents can still be created normally.
-            using(var held=newDesktopFolder?OpenDirectoryHandle(destination,3):null) {
+            using(var held=OpenDirectoryHandle(destination,3)) {
                 CheckVacant(destination,topLevel);
                 check();CheckDispatch(window,key,evidence);
                 if(newDesktopFolder) {
                     if(FolderId(held)!=destinationId || !CheckNewFolder())throw Block("目标目录已变化，请核对。");
+                } else destinationId=FolderId(held);
+                if(writeReceipt!=null) {
                     writeReceipt(Receipt("paste"));
                     check();CheckDispatch(window,key,evidence);
                 }
                 pasteSent=true;
                 SendChord(Keys[key]);
-                for(int i=0;i<60;i++) {
-                    await Task.Delay(200);check();
-                    if(CopiedFilesVisible(destination,expected) && TargetHasExactContents())return;
+                await VerifyPastedFiles(checkVerification);
+            }
+        }
+        sealed class OutputProbe {
+            public int count;
+            public long bytes;
+            public string pending;
+        }
+        OutputProbe InspectOutput(CancellationToken cancel) {
+            var result=new OutputProbe();
+            if(FolderId(destination)!=destinationId)throw new IOException("目标目录已被替换，不能核验原任务。");
+            CheckDirectory(sourceFolder);CheckDirectory(destination);
+            var current=newDesktopFolder?ReadTree(destination):null;
+            if(current!=null && current.Keys.Any(k=>!expected.ContainsKey(k)))
+                throw new IOException("目标中出现原清单以外的项目，已停止核验，请核对目录。");
+            foreach(var pair in expected) {
+                cancel.ThrowIfCancellationRequested();
+                var path=Path.Combine(destination,pair.Key);
+                FileSystemInfo info=pair.Value.Directory?(FileSystemInfo)new DirectoryInfo(path):new FileInfo(path);
+                if(!info.Exists) {
+                    if(File.Exists(path) || Directory.Exists(path))throw new IOException("目标中的文件和目录类型冲突："+pair.Key);
+                    if(result.pending==null)result.pending="尚未出现："+pair.Key;
+                    continue;
+                }
+                if((info.Attributes&FileAttributes.ReparsePoint)!=0)throw new IOException("目标出现链接，无法核验："+pair.Key);
+                if(!pair.Value.Directory) {
+                    long size=((FileInfo)info).Length;
+                    result.bytes+=size;
+                    if(size!=pair.Value.Size) {
+                        if(result.pending==null)result.pending="大小尚未与来源一致："+pair.Key;
+                        continue;
+                    }
+                }
+                result.count++;
+            }
+            if(result.pending!=null)return result;
+            if(!SameSource())throw new IOException("复制期间来源清单或文件属性已变化，不能核验原任务。");
+            byte[] left=new byte[65536],right=new byte[left.Length];
+            foreach(var pair in expected.Where(p=>!p.Value.Directory)) {
+                cancel.ThrowIfCancellationRequested();
+                string sourcePath=Path.Combine(sourceFolder,pair.Key),targetPath=Path.Combine(destination,pair.Key);
+                try {
+                    using(var src=File.Open(sourcePath,FileMode.Open,FileAccess.Read,FileShare.Read))
+                    using(var dst=File.Open(targetPath,FileMode.Open,FileAccess.Read,FileShare.Read)) {
+                        if(!EqualStreams(src,dst,left,right,cancel))throw new InvalidDataException("源与目标文件的内容不同："+pair.Key);
+                    }
+                } catch(IOException e) {
+                    int code=e.HResult&0xffff;
+                    if(code!=32 && code!=33 && code!=2 && code!=3)throw;
+                    result.pending="仍在复制或文件被占用："+pair.Key;return result;
                 }
             }
-            throw new Exception("已发送粘贴快捷键，目标文件还未全部核验。请查看复制进度，避免重复粘贴。");
+            // A different name must not have appeared during the final byte comparison.
+            if(!SameSource() || (newDesktopFolder && !new HashSet<string>(ReadTree(destination).Keys,names).SetEquals(expected.Keys)))
+                throw new IOException("核验期间来源或目标清单已变化，请查看原目录。");
+            return result;
+        }
+        static bool EqualStreams(Stream a,Stream b,byte[] left,byte[] right,CancellationToken cancel) {
+            if(a.Length!=b.Length)return false;
+            int read;
+            while((read=a.Read(left,0,left.Length))>0) {
+                cancel.ThrowIfCancellationRequested();
+                int filled=0;
+                while(filled<read) {int n=b.Read(right,filled,read-filled);if(n==0)return false;filled+=n;}
+                for(int i=0;i<read;i++)if(left[i]!=right[i])return false;
+            }
+            return b.ReadByte()==-1;
+        }
+        public async Task VerifyPastedFiles(Action check) {
+            if(!pasteSent || String.IsNullOrEmpty(destinationId))throw Block("未确认原粘贴阶段，不能核验文件结果。");
+            var idle=Stopwatch.StartNew();var total=Stopwatch.StartNew();
+            int lastCount=-1;long lastSize=-1;
+            using(var handle=OpenDirectoryHandle(destination,3))
+            using(var cancel=new CancellationTokenSource()) {
+                if(FolderId(handle)!=destinationId)throw new IOException("目标目录已被替换，不能核验原任务。");
+                try {
+                    for(;;) {
+                        check();
+                        var probe=Task.Run(()=>InspectOutput(cancel.Token));
+                        while(await Task.WhenAny(probe,Task.Delay(200))!=probe)check();
+                        var result=await probe;check();
+                        if(result.pending==null)return;
+                        if(result.count!=lastCount || result.bytes!=lastSize) {
+                            lastCount=result.count;lastSize=result.bytes;idle.Restart();
+                        }
+                        if(idle.Elapsed.TotalSeconds>=60 || total.Elapsed.TotalMinutes>=15)
+                            throw new IOException("目标已就绪 "+result.count+"/"+expected.Count+" 项，"+result.pending+"。已停止核验，请检查原目录的复制进度。");
+                        await Task.Delay(total.ElapsedMilliseconds<2000?200:1200);
+                    }
+                } finally {cancel.Cancel();}
+            }
+        }
+        // Called only after the server has granted the one-time write permit
+        // for this task/attempt. No Shell, clipboard, window, or input APIs.
+        public async Task RunBackground(string attempt,Func<Task> lease,Action check) {
+            Guid parsed;
+            if(verificationOnly || !Guid.TryParse(attempt,out parsed) || readReceipt==null || writeReceipt==null)
+                throw Block("后台复制需要原任务的有效尝试和本机回执。");
+            await lease();check();
+            if(!SameSource())throw Block("后台复制前来源已改变，请核对原任务。");
+            var held=new Dictionary<string,SafeFileHandle>(names);
+            try {
+                HoldPath(sourceFolder,held);
+                if(newDesktopFolder) {
+                    HoldPath(Path.GetDirectoryName(destination),held);
+                    EnsureNewFolder(check);
+                }
+                HoldPath(destination,held);
+                string actual=FolderId(held[destination]);
+                if(newDesktopFolder && actual!=destinationId)throw Block("已创建的桌面目标被替换。");
+                destinationId=actual;
+                CheckVacant(destination,topLevel);
+                PasteCommandId=attempt;writeReceipt(Receipt("background"));
+                foreach(var e in expected.Where(p=>p.Value.Directory).OrderBy(p=>p.Key.Length)) {
+                    await lease();check();
+                    HoldPath(Path.Combine(sourceFolder,e.Key),held);
+                    var dir=Path.Combine(destination,e.Key);
+                    if(!CreateDirectoryW(dir,IntPtr.Zero))throw new IOException("目标子目录已存在或无法排他创建："+e.Key);
+                    HoldPath(dir,held);await Task.Yield();
+                }
+                byte[] buffer=new byte[131072];
+                foreach(var e in expected.Where(p=>!p.Value.Directory)) {
+                    await lease();check();
+                    string path=Path.Combine(sourceFolder,e.Key),target=Path.Combine(destination,e.Key);
+                    string stage=Path.Combine(Path.GetDirectoryName(target),".xuti-copy-"+Guid.NewGuid().ToString("N")+".tmp");
+                    using(var handle=CreateFileW(path,0x80000000,1,IntPtr.Zero,3,0x40200000,IntPtr.Zero)) {
+                            HandleInfo info;
+                            if(handle.IsInvalid || !GetFileInformationByHandle(handle,out info) ||
+                                (info.attributes&0x1416)!=0)throw Block("源文件已变化、被占用或无法读取："+e.Key);
+                            using(var from=new FileStream(handle,FileAccess.Read,buffer.Length,true))
+                            using(var staging=CreateFileW(stage,0x40010000,0,IntPtr.Zero,1,0x40000080,IntPtr.Zero)) {
+                                if(staging.IsInvalid)throw new IOException("无法在目标目录创建临时文件："+e.Key);
+                                using(var to=new FileStream(staging,FileAccess.Write,buffer.Length,true)) {
+                                    bool published=false;
+                                    try {
+                                        if(from.Length!=e.Value.Size)throw new IOException("源文件大小已改变："+e.Key);
+                                        int n;
+                                        while((n=await from.ReadAsync(buffer,0,buffer.Length))>0) {
+                                            await lease();check();
+                                            await to.WriteAsync(buffer,0,n);
+                                        }
+                                        await to.FlushAsync();await lease();check();
+                                        long time=new DateTime(e.Value.Modified,DateTimeKind.Utc).ToFileTimeUtc();
+                                        if(!SetFileTime(staging,IntPtr.Zero,IntPtr.Zero,ref time))throw new IOException("无法保存目标文件时间："+e.Key);
+                                        PublishFile(staging,target);published=true;
+                                    } finally {if(!published)RemoveUnpublishedFile(staging);}
+                                }
+                            }
+                    }
+                    await Task.Yield();
+                }
+                pasteSent=true;
+                await VerifyPastedFiles(check);
+            } finally {foreach(var handle in held.Values)handle.Dispose();}
+        }
+        static void HoldPath(string directory,Dictionary<string,SafeFileHandle> held) {
+            if(held.ContainsKey(directory) || directory.Length<=3)return;
+            HoldPath(Path.GetDirectoryName(directory),held);
+            var handle=OpenDirectoryHandle(directory,3);
+            try {FolderId(handle);held.Add(directory,handle);}
+            catch {handle.Dispose();throw;}
         }
         static bool CopiedFilesVisible(string folder,Dictionary<string,FileStamp> expected) {
             return expected.All(e=>{
@@ -484,11 +718,6 @@ static partial class Native {
                 try {using(item.Open(FileMode.Open,FileAccess.Read,FileShare.Read))return true;}
                 catch(IOException) {return false;}
             });
-        }
-        bool TargetHasExactContents() {
-            if(!newDesktopFolder)return true;
-            if(FolderId(destination)!=destinationId)return false;
-            return new HashSet<string>(ReadTree(destination).Keys,names).SetEquals(expected.Keys);
         }
         public void VerifyOtherAction(Dictionary<string,object> action,WindowChoice window) {
             string kind=S(action,"kind"), key=S(action,"key");

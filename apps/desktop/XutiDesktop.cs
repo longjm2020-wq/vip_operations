@@ -169,9 +169,14 @@ sealed class AssistantForm : Form {
     WindowChoice selected;
     bool polling, working, armed, closing, captureBlocked, allowing;
     bool manualPauseSent, manualPausePending;
+    bool observingForeground;
+    DateTime foregroundInputAt;
+    sealed class ForegroundInUse : Exception {}
+    const string WaitingForForeground = "你可以继续使用电脑。原任务窗口回到前台并空闲后，小序会重新观察并继续。";
     long manualPauseVersion=-1;
     string manualPauseNote="", startFailureNote="", executingKind="";
     string nativeAttemptId="";
+    string backgroundAttemptId="", previousVerificationId="";
     string desktopExplorerTaskId="";
     Native.ExplorerCopy fileCopy;
     string failureTaskId="", failureDiagnostic="";
@@ -181,6 +186,9 @@ sealed class AssistantForm : Form {
     long epoch;
     Dictionary<string, object> task;
     bool BrowserOnly { get { return task!=null&&task.ContainsKey("localBrowser")&&Object.Equals(task["localBrowser"],true); } }
+    bool IsBackgroundCopy {get {return task!=null && S(task,"fileCopyMode")=="background";}}
+    const string folderReceipt="file-copy-folder.bin";
+    string ReadFolderReceipt() {return File.Exists(Path.Combine(folder,folderReceipt))?ReadProtected(folderReceipt):"";}
     string NativeAction { get { return task==null?"":S(task,"nativeAction"); } }
     readonly Dictionary<string, string> journal = new Dictionary<string, string>();
     Native.Hook inputHook;
@@ -511,12 +519,18 @@ sealed class AssistantForm : Form {
         if (taskId.Length == 0 || token.Length == 0) return;
         await Request("tasks/" + taskId + "/control", new { action, note });
     }
-    void LocalPause() { armed = false; fileCopy=null; epoch++; }
+    void LocalPause() { armed = false; fileCopy=null; foregroundInputAt=DateTime.MinValue; observingForeground=false; epoch++; }
     bool CurrentOperation(string id,string connectionToken,long version) {
         return !closing && id.Length>0 && id==taskId && token==connectionToken && version==epoch;
     }
     void ManualInput(string reason) {
+        if(backgroundAttemptId.Length>0 || (fileCopy!=null && fileCopy.PasteIssued && working))return;
         if((!armed && !allowing) || closing || manualPauseSent) return;
+        if(CanYieldForeground && (!working || observingForeground)) {
+            foregroundInputAt=DateTime.UtcNow;
+            status.Text=WaitingForForeground;
+            return;
+        }
         manualPauseSent=true;manualPausePending=true;
         string id=taskId, connectionToken=token;
         manualPauseNote=reason+(executingKind=="type" ? "；文字输入已暂停，请核对已输入部分后继续" : "，已暂停");
@@ -566,6 +580,8 @@ sealed class AssistantForm : Form {
     async Task StartTask(bool automatic) {
         if(!EngineReady && !isolatedPreview) throw new Exception(EngineError??"本机执行器尚未就绪。");
         if (working || (polling && !automatic) || changingAuthorization || allowing || task == null || !new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state)) throw new Exception("请等待当前状态更新后再试。");
+        if(IsBackgroundCopy && state=="WAITING") {await RunBackgroundCopy();return;}
+        if(IsBackgroundCopy && state!="WAITING") {await Control("resume","继续原后台复制任务");return;}
         allowing=true;
         LocalPause(); long version=epoch;
         string id=taskId, grant=authorizationId, connectionToken=token;
@@ -601,9 +617,8 @@ sealed class AssistantForm : Form {
             if(S(resumed,"status")!="WAITING")throw new Exception("原任务状态已变化，请核对后继续。");
             task=resumed;state="WAITING";autoAttemptedId="";ShowTaskControls();return;
         }
-        const string folderReceipt="file-copy-folder.bin";
         var copyTask=fileTask ? new Native.ExplorerCopy(D(task["fileCopy"]),S(task,"instruction"),id+":"+grant,
-            ()=>File.Exists(Path.Combine(folder,folderReceipt))?ReadProtected(folderReceipt):"",
+            ReadFolderReceipt,
             value=>SaveProtected(folderReceipt,value)) : null;
         if(copyTask!=null) {
             status.Text="正在核对复制来源和目标目录。";
@@ -701,7 +716,7 @@ sealed class AssistantForm : Form {
         string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
             string retainedTaskId=continuation==null?null:continuation.RetainedTaskId(authorizationId);
-            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, desktopFolderCopy=true, retainedTaskId });
+            var result = await Request("poll", new { localBrowser=true, nativeActions=true, windowContinuations=true, desktopExplorer=true, fileCopyShortcuts=true, desktopFolderCopy=true, fileCopyVerification=true, backgroundFileCopy=true, retainedTaskId });
             if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
@@ -712,6 +727,17 @@ sealed class AssistantForm : Form {
             allow.Enabled = !captureBlocked && !working && new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state);
             if (state != "RUNNING" && armed) LocalPause();
             if (state=="PAUSED" || state=="NEEDS_USER") { autoAttemptedId="";startFailureNote=""; }
+            if(authorizationId.Length>0 && !manualPausePending && !working && !allowing) {
+                var verify=D(task.ContainsKey("fileCopyVerification")?task["fileCopyVerification"]:null);
+                if(verify.Count>0 && (state=="NEEDS_USER" || state=="RUNNING")) {
+                    if(previousVerificationId!=S(verify,"commandId"))BeginPasteVerification(verify);
+                    return;
+                }
+                if(IsBackgroundCopy && (state=="RUNNING" || state=="WAITING")) {
+                    BeginBackgroundCopy();
+                    return;
+                }
+            }
             if(new[]{"WAITING","RUNNING"}.Contains(state) && autoAttemptedId==id && startFailureNote.Length>0 && !manualPausePending && !working) {
                 // Retry only the failure report after a network loss, never desktop input.
                 await ReportStartFailure(id,connectionToken,epoch,startFailureNote);return;
@@ -736,12 +762,23 @@ sealed class AssistantForm : Form {
         }
         finally { polling = false; if(!closing) { ShowTaskControls(); if(Changed!=null) Changed(); } }
     }
+    bool CanYieldForeground { get { return armed && !allowing && selected!=null && fileCopy==null && activeAuthorizationId.Length>0 && activeAuthorizationId==authorizationId; } }
+    static bool WaitingForWindow(bool foreground,DateTime inputAt,DateTime now) {
+        return !foreground || now-inputAt<TimeSpan.FromSeconds(3);
+    }
     void Check(string id, long version) {
-        if (!armed || id != approvedId || id != taskId || version != epoch || closing) throw new Exception("操作已暂停");
-        if(activeAuthorizationId.Length>0 && activeAuthorizationId!=authorizationId) throw new Exception("跨窗口授权已撤销");
+        CheckTaskActive(id,version);
+        if(observingForeground && CanYieldForeground) {
+            Native.ValidateWindow(selected,false,true);
+            if(foregroundInputAt!=DateTime.MinValue || !Native.IsForeground(selected))throw new ForegroundInUse();
+        }
         Native.ValidateWindow(selected, true);
         if(BoundTask)BoundWindow();
         if(BrowserOnly)Native.LocalBrowser(selected).ValidateLocalPage();
+    }
+    void CheckTaskActive(string id,long version) {
+        if (!armed || id != approvedId || id != taskId || version != epoch || closing) throw new Exception("操作已暂停");
+        if(activeAuthorizationId.Length>0 && activeAuthorizationId!=authorizationId) throw new Exception("跨窗口授权已撤销");
     }
     async void RunStep(string id, long version) {
         string commandId = "",connectionToken=token;
@@ -749,6 +786,12 @@ sealed class AssistantForm : Form {
         Exception failure=null;
         try {
         try {
+            observingForeground=CanYieldForeground;
+            if(observingForeground) {
+                Native.ValidateWindow(selected,false,true);
+                if(WaitingForWindow(Native.IsForeground(selected),foregroundInputAt,DateTime.UtcNow))throw new ForegroundInUse();
+                foregroundInputAt=DateTime.MinValue;
+            }
             Check(id, version);
             Native.RefreshTitle(selected);
             bool browserOnly=BrowserOnly;
@@ -780,7 +823,7 @@ sealed class AssistantForm : Form {
                 observation["height"]=shot.Height;observation["controls"]=shot.Controls;
             }
             if(copy!=null && crossWindow && shot.Popup==null) {
-                shot.FileShortcut=await copy.Observe(selected);
+                shot.FileShortcut=await copy.WaitForEvidence(selected,checkInput);
                 if(shot.FileShortcut!=null)observation["fileShortcut"]=shot.FileShortcut;
             }
             if(explorerFolder!=null && shot.Popup==null && String.Equals(explorerFolder,await Native.DesktopExplorerListLocation(selected),StringComparison.OrdinalIgnoreCase)) {
@@ -791,10 +834,10 @@ sealed class AssistantForm : Form {
             if(browserOnly)observation["localBrowser"]=true;
             else if(crossWindow) observation["windows"]=available.Select(w=>new {id=w.Id,title=w.Title,application=w.App}).ToArray();
             var plan = await Request("tasks/" + id + "/plan", observation);
-            checkInput();
+            CheckTaskActive(id,version);
             var command = D(plan.ContainsKey("command") ? plan["command"] : null);
             if (command.Count == 0) {
-                if(S(D(plan.ContainsKey("task")?plan["task"]:null),"status")=="DONE")RememberWindow(id,selected);
+                if(foregroundInputAt==DateTime.MinValue && Native.IsForeground(selected) && S(D(plan.ContainsKey("task")?plan["task"]:null),"status")=="DONE")RememberWindow(id,selected);
                 LocalPause(); return;
             }
             commandId = S(command,"id"); Guid parsed;
@@ -806,6 +849,13 @@ sealed class AssistantForm : Form {
                 if (outcome != "ok") LocalPause();
                 return;
             }
+            if(observingForeground && S(command,"requestId")==requestId && (foregroundInputAt!=DateTime.MinValue || !Native.IsForeground(selected))) {
+                // No permit or input has been issued for this observation. Never replay its coordinates.
+                await Request("tasks/"+id+"/yield-observation",new {requestId,commandId});
+                throw new ForegroundInUse();
+            }
+            observingForeground=false;
+            checkInput();
             var action = D(command.ContainsKey("action") ? command["action"] : null);
             if(S(command,"requestId")!=requestId) throw new Exception("待执行步骤来自旧画面，请核对窗口后继续");
             Native.ValidateAction(action);
@@ -815,7 +865,7 @@ sealed class AssistantForm : Form {
             var permitBody=new Dictionary<string,object>{{"commandId",commandId}};
             if(copyKey) {
                 string expected=key=="COPY"?"copy":"paste";
-                if(copy==null || shot.Popup!=null || shot.FileShortcut!=expected || await copy.Observe(selected)!=expected)
+                if(copy==null || shot.Popup!=null || shot.FileShortcut!=expected || await copy.WaitForEvidence(selected,checkInput)!=expected)
                     throw new Native.InputNotSent("本次文件快捷键未能核对来源选中项、目标或剪贴板，本步未发送。");
                 checkInput();permitBody["fileShortcut"]=expected;
             }
@@ -841,21 +891,122 @@ sealed class AssistantForm : Form {
                 if(copy!=null)await copy.PrepareSwitchedWindow(target,()=>Check(id,version));
             } else {
                 if(copy!=null)await copy.CheckLocation(selected);
-                executingKind=S(action,"kind");await Native.Execute(selected,shot,action,checkInput,localBrowser,copy);
+                if(copy!=null && key=="PASTE")copy.PasteCommandId=commandId;
+                executingKind=S(action,"kind");await Native.Execute(selected,shot,action,checkInput,localBrowser,copy,()=>CheckTaskActive(id,version));
             }
             Record(commandId,"ok");
+            observingForeground=CanYieldForeground;
             await Ack(id,commandId,"ok",S(action,"description"));
             await Task.Delay(600);
+        } catch(ForegroundInUse) {
+            if(CurrentOperation(id,connectionToken,version))status.Text=WaitingForForeground;
+            return;
         } catch(Exception e) {
             if(version!=epoch || taskId!=id || closing)return;
-            LocalPause();status.Text=FailureText(e);failure=e;
+            string knownOutcome;
+            bool wasVerified=commandId.Length>0 && journal.TryGetValue(commandId,out knownOutcome) && knownOutcome=="ok";
+            LocalPause();status.Text=FailureText(e);if(!wasVerified)failure=e;
         }
         if(failure!=null) {
             try { await ReportStepFailure(id,connectionToken,epoch,commandId,failure); } catch { /* Keep the original safe failure; never retry desktop input here. */ }
         }
-        } finally { if(shot!=null && shot.Popup!=null)shot.Popup.Release();working=false;executingKind="";if(!closing){ShowTaskControls();if(Changed!=null)Changed();} }
+        } finally { if(shot!=null && shot.Popup!=null)shot.Popup.Release();working=false;observingForeground=false;executingKind="";if(!closing){ShowTaskControls();if(Changed!=null)Changed();} }
     }
     async Task Ack(string id,string commandId,string outcome,string note) { await Request("tasks/"+id+"/ack",new {commandId,outcome,note}); }
+    async void BeginBackgroundCopy() {await Safe(RunBackgroundCopy);}
+    async Task RunBackgroundCopy() {
+        if(working || allowing || authorizationId.Length==0 || !IsBackgroundCopy || BrowserOnly || BoundTask)return;
+        string id=taskId,grant=authorizationId,connectionToken=token;
+        long version=epoch;
+        var seed=task;bool recovering=state=="RUNNING";
+        var saved=D(seed.ContainsKey("backgroundCopyAttempt")?seed["backgroundCopyAttempt"]:null);
+        string attempt=recovering?S(saved,"attemptId"):Guid.NewGuid().ToString();
+        Guid parsed;if(!Guid.TryParse(attempt,out parsed))return;
+        working=true;backgroundAttemptId=attempt;
+        Action check=()=>{
+            CheckStart(id,connectionToken,version,grant);
+            if(backgroundAttemptId!=attempt || (state!="WAITING" && state!="RUNNING"))throw new OperationCanceledException("原后台任务已暂停或停止");
+        };
+        Func<string,string,Task<Dictionary<string,object>>> send=(action,note)=>Request("tasks/"+id+"/background-copy",new{action,authorizationId=grant,attemptId=attempt,note});
+        string handoff=null;
+        try {
+        try {
+            if(!recovering) {await send("start","后台复制已接单");check();state="RUNNING";}
+            var spec=D(seed.ContainsKey("fileCopy")?seed["fileCopy"]:null);
+            if(spec.Count==0)throw new Exception("缺少本次后台复制的文件范围。");
+            status.Text="正在后台核对文件，电脑可以正常使用。";
+            if(recovering) {
+                if(!saved.ContainsKey("permitted") || !Object.Equals(saved["permitted"],true))throw new Exception("后台尝试已中断且未取得写入许可，请核对原任务。");
+                var verified=Native.ExplorerCopy.ForBackgroundVerification(spec,S(seed,"instruction"),id+":"+grant,ReadFolderReceipt,attempt);
+                await verified.VerifyPastedFiles(check);
+            } else {
+                var copy=new Native.ExplorerCopy(spec,S(seed,"instruction"),id+":"+grant,ReadFolderReceipt,value=>SaveProtected(folderReceipt,value));
+                await send("permit","来源与目标已核对，申请一次后台写入");check();
+                var last=Stopwatch.StartNew();
+                Func<Task> lease=async()=>{
+                    check();
+                    if(last.ElapsedMilliseconds>=2200) {
+                        await send("check","检查原后台任务授权");check();last.Restart();
+                    }
+                };
+                status.Text="正在后台复制文件，电脑可以正常使用。";
+                await copy.RunBackground(attempt,lease,check);
+            }
+            check();
+            var done=await send("complete","后台复制已逐项核对文件内容和原目录。");
+            if(CurrentStart(id,connectionToken,version,grant)) {
+                task=done;state=S(done,"status");LocalPause();status.Text=TaskStage(done);
+            }
+        } catch(Exception e) {
+            if(CurrentStart(id,connectionToken,version,grant) && (state=="WAITING" || state=="RUNNING")) {
+                status.Text=FailureText(e);
+                // A lost response may have committed the original attempt. Poll for it;
+                // never write the files again on an uncertain network response.
+                if(!(e is HttpRequestException) && !(e is TaskCanceledException) && !(e is ApiFailure)) {
+                    handoff=FailureText(e);
+                }
+            }
+        }
+        if(handoff!=null) {try {await send("handoff",handoff);} catch {}}
+        } finally {working=false;backgroundAttemptId="";if(!closing)ShowTaskControls();}
+    }
+    async void BeginPasteVerification(Dictionary<string,object> verify) {
+        string id=taskId,grant=authorizationId,connectionToken=token,command=S(verify,"commandId");
+        Guid parsed;
+        if(grant!=S(verify,"authorizationId") || !Guid.TryParse(command,out parsed) || working || armed || allowing)return;
+        long version=epoch;var seed=task;working=true;previousVerificationId=command;
+        Action check=()=>{
+            CheckStart(id,connectionToken,version,grant);
+            var latest=D(task.ContainsKey("fileCopyVerification")?task["fileCopyVerification"]:null);
+            if((state!="RUNNING" && state!="NEEDS_USER") || S(latest,"commandId")!=command ||
+                S(latest,"authorizationId")!=grant)throw new OperationCanceledException("原任务已更改");
+        };
+        string outcome="uncertain",note="";
+        try {
+            try {
+                check();string recorded;
+                if(!journal.TryGetValue(command,out recorded) || (recorded!="ok" && recorded!="uncertain" && recorded!="blocked"))
+                    throw new Exception("缺少原粘贴指令在本机的执行日志。");
+                var spec=D(seed.ContainsKey("fileCopy")?seed["fileCopy"]:null);
+                var local=Native.ExplorerCopy.ForVerification(spec,S(seed,"instruction"),id+":"+grant,ReadFolderReceipt,command);
+                if(local.VerifiedUnsent) {
+                    if(recorded=="ok")throw new Exception("原命令成功记录与未发键阶段不一致，请核对。");
+                    outcome="blocked";note="原任务的粘贴尚未发出，已核验来源清单和该任务创建的空目录。";
+                } else {
+                    if(recorded=="blocked")throw new Exception("原命令日志与粘贴阶段不一致，请核对。");
+                    await local.VerifyPastedFiles(check);outcome="ok";note="已还原原粘贴回执，源与目标内容逐项核验一致。";
+                }
+            } catch(Exception e) {note=FailureText(e);}
+            check();
+            var corrected=await Request("tasks/"+id+"/ack",new{commandId=command,outcome,fileCopyVerified=true,authorizationId=grant,note});
+            if(CurrentStart(id,connectionToken,version,grant)) {
+                task=corrected;state=S(task,"status");status.Text=TaskStage(task);
+                autoAttemptedId="";LocalPause();
+                if(outcome=="blocked" && state=="NEEDS_USER")previousVerificationId="";
+            }
+        } catch {previousVerificationId="";} // an interrupted read-only report can be retried
+        finally {working=false;if(!closing)ShowTaskControls();}
+    }
     // Self-tests use a hidden form, fake HTTP and a fresh temporary directory.
     // They never start the engine, load real credentials, install hooks or send desktop input.
     sealed class FakeHandler : HttpMessageHandler {
@@ -918,6 +1069,16 @@ sealed class AssistantForm : Form {
                 fake.Reply=req=>{form.LocalPause();throw new HttpRequestException("pause network failure");};
                 try{form.ReportManualPause(firstTask,firstToken,pauseVersion,form.manualPauseNote).GetAwaiter().GetResult();}catch(HttpRequestException){}
                 if(form.manualPausePending)throw new Exception("Failed pause retained a pending flag after epoch changed");
+                newTask();form.armed=true;form.working=true;form.observingForeground=true;
+                form.selected=new WindowChoice();form.activeAuthorizationId=form.authorizationId;
+                int previousPauseCount=queued.Count;long activeEpoch=form.epoch;
+                form.ManualInput(Native.KeyInputReason(0x0100,0));
+                var inputAt=form.foregroundInputAt;
+                if(inputAt==DateTime.MinValue || !form.armed || form.epoch!=activeEpoch || queued.Count!=previousPauseCount ||
+                   !WaitingForWindow(true,inputAt,inputAt.AddSeconds(1)) || !WaitingForWindow(false,inputAt,inputAt.AddMinutes(1)) ||
+                   WaitingForWindow(true,inputAt,inputAt.AddSeconds(4)))throw new Exception("User input during observation must yield until the original window is idle");
+                form.LocalPause();form.selected=null;form.activeAuthorizationId="";
+                if(form.foregroundInputAt!=DateTime.MinValue || form.CanYieldForeground)throw new Exception("Explicit pause retained an automatic continuation");
                 newTask();int starts=0;form.startWindowOverride=()=>{starts++;return null;};calls=0;
                 fake.Reply=req=>{calls++;var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));if(S(body,"action")!="handoff"||!body.ContainsKey("startupFailure")||!Convert.ToBoolean(body["startupFailure"]))throw new Exception("Startup failure was not marked");return TestResponse(200,"{\"data\":{\"status\":\"NEEDS_USER\",\"stage\":\"Open an application then continue\"}}");};
                 form.StartTask(true).GetAwaiter().GetResult();
@@ -1680,7 +1841,7 @@ static partial class Native {
         foreach(var key in keys.Reverse())inputs.Add(K(key,2));
         Send(inputs.ToArray());
     }
-    public static async Task Execute(WindowChoice w,Shot shot,Dictionary<string,object> a,Action check,BrowserWindow localBrowser=null,ExplorerCopy copy=null) {
+    public static async Task Execute(WindowChoice w,Shot shot,Dictionary<string,object> a,Action check,BrowserWindow localBrowser=null,ExplorerCopy copy=null,Action verifyTask=null) {
         ValidateAction(a); check();
         if(shot.Popup!=null) {
             string action=S(a,"kind");
@@ -1694,6 +1855,14 @@ static partial class Native {
         }
         uint thread;
         if(MenuOpen(ThreadInfo(w,out thread)))throw new InputNotSent("弹出菜单已变化，请核对当前菜单后继续。");
+        string fileKey=S(a,"kind")=="key"?S(a,"key"):"";
+        if(fileKey=="COPY" || fileKey=="PASTE") {
+            if(copy==null || localBrowser!=null || shot.FileShortcut==null)throw new InputNotSent("此快捷键只在已核对的文件复制任务中开放。");
+            try {GuardElement(AutomationElement.FocusedElement);}
+            catch(Exception e) {throw new InputNotSent("资源管理器文件列表的焦点或敏感控件未通过核对。"+e.Message);}
+            await copy.Execute(w,fileKey,shot.FileShortcut,check,verifyTask??check);
+            return;
+        }
         RECT r;GetWindowRect(w.Handle,out r);
         if(r.Left!=shot.Rect.Left||r.Top!=shot.Rect.Top||r.Right!=shot.Rect.Right||r.Bottom!=shot.Rect.Bottom)throw new Exception("窗口位置或大小已变化，请核对后继续");
         if(localBrowser!=null&&localBrowser.ContentBounds()!=shot.InputBounds)throw new Exception("网页区域已变化，请核对后继续。");
@@ -1724,11 +1893,6 @@ static partial class Native {
         GuardElement(AutomationElement.FocusedElement); check();
         if(kind=="key") {
             string key=S(a,"key");
-            if(key=="COPY" || key=="PASTE") {
-                if(copy==null || localBrowser!=null || shot.FileShortcut==null)throw new InputNotSent("此快捷键只在已核对的文件复制任务中开放。");
-                await copy.Execute(w,key,shot.FileShortcut,check);
-                return;
-            }
             if(copy!=null)copy.VerifyOtherAction(a,w);
             if(S(a,"key")=="CTRL_SHIFT_N") {
                 if(localBrowser!=null || shot.Popup!=null || shot.ExplorerFolder==null)throw new Exception("只能在已核验的桌面文件列表中新建文件夹。");
