@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import JSZip from "jszip";
 import sharp from "sharp";
 import {
@@ -88,6 +89,12 @@ const framework = path.join(
   "Microsoft.NET/Framework64/v4.0.30319",
 );
 const exe = path.join(build, "XutiDesktop.exe");
+const directorSidecars = sourceFiles.filter(file => file.startsWith("scripts/director-media/"));
+for (const file of directorSidecars) {
+  const target = path.join(build, "director-media", path.basename(file));
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.copyFile(path.join(root, file), target);
+}
 const args = [
   "/nologo",
   "/target:winexe",
@@ -119,6 +126,12 @@ const args = [
   path.join(root, "apps/desktop/FilePlanRunner.cs"),
   path.join(root, "apps/desktop/WeCom.cs"),
   path.join(root, "apps/desktop/DesktopShell.cs"),
+  path.join(root, "apps/desktop/DirectorMedia.cs"),
+  path.join(root, "apps/desktop/DirectorProcess.cs"),
+  path.join(root, "apps/desktop/DirectorRender.cs"),
+  path.join(root, "apps/desktop/DirectorTranscription.cs"),
+  path.join(root, "apps/desktop/DirectorStudio.cs"),
+  path.join(root, "apps/desktop/DirectorTest.cs"),
   versionSource,
 ];
 const result = spawnSync(path.join(framework, "csc.exe"), args, {
@@ -133,6 +146,15 @@ const test = spawnSync(exe, ["--self-test"], {
 });
 if (test.error || test.status !== 0)
   throw new Error("Desktop self-test failed");
+const ffmpeg = process.env.XUTI_DIRECTOR_FFMPEG || createRequire(import.meta.url)("ffmpeg-static");
+await fs.access(ffmpeg);
+const directorTest = spawnSync(exe, ["--self-test-director"], {
+  env: { ...process.env, XUTI_DIRECTOR_FFMPEG: ffmpeg },
+  stdio: "inherit",
+  windowsHide: true,
+});
+if (directorTest.error || directorTest.status !== 0)
+  throw new Error("Director media rendering self-test failed");
 const sources = await desktopSourceHashes();
 const zip = new JSZip();
 const add = (name, bytes) =>
@@ -157,6 +179,8 @@ add(
   await fs.readFile(path.join(root, "apps/desktop/README.txt")),
 );
 add("source/ReleaseVersion.cs", await fs.readFile(versionSource));
+for (const file of directorSidecars)
+  add("director-media/" + path.basename(file), await fs.readFile(path.join(root, file)));
 for (const file of sourceFiles.filter(
   (n) => n.startsWith("apps/desktop/") && !n.endsWith(".cmd"),
 ))

@@ -47,6 +47,23 @@ export function runMedia(
     });
   });
 }
+export async function inspectAudio(content: Buffer, ext: string) {
+  const format = ({ ".wav": "wav", ".mp3": "mp3", ".m4a": "mov" } as Record<string, string>)[ext];
+  if (!format) throw Error("音频格式不支持");
+  const dir = await mkdtemp(join(tmpdir(), "xuti-audio-"));
+  try {
+    const path = join(dir, "audio" + ext);
+    await writeFile(path, content);
+    const log = await runMedia(["-protocol_whitelist", "file,pipe", "-f", format, "-i", path, "-map", "0:a:0", "-t", "0.1", "-f", "null", "-"], undefined, 30000);
+    const parts = log.match(/Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/);
+    const duration = parts && Number(parts[1]) * 3600 + Number(parts[2]) * 60 + Number(parts[3]);
+    if (!duration || duration > 1800 || /Stream .*Video:(?![^\n]*\(attached pic\))/.test(log)) throw Error("请选择可解码且不超过30分钟的纯音频");
+    return { duration, audio: true };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 export async function inspectVideo(content: Buffer) {
   const dir = await mkdtemp(join(tmpdir(), "xuti-inspect-"));
   try {
@@ -125,6 +142,41 @@ export async function videoFrames(
     await rm(dir, { recursive: true, force: true });
   }
 }
+/** Sample around visible cuts in a reference, retaining a clock for every still. */
+export async function directorReferenceFrames(content: Buffer, duration: number) {
+  const dir = await mkdtemp(join(tmpdir(), "director-cuts-"));
+  const input = join(dir, "source.mp4");
+  try {
+    await writeFile(input, content);
+    const readInput = ["-protocol_whitelist", "file,pipe", "-i", input];
+    const minGap = Math.max(0.4, duration / 40).toFixed(3);
+    const filter = "scale=192:-2,fps=4,select='gt(scene,0.23)*if(isnan(prev_selected_t),1,gt(t-prev_selected_t," + minGap + "))',showinfo";
+    const scan = await runMedia([...readInput, "-an", "-sn", "-vf", filter, "-f", "null", "-"], undefined, 30000).catch(() => "");
+    const cuts = Array.from(scan.matchAll(/\bpts_time:([\d.]+)/g), match => Number(match[1]))
+      .filter(t => t > 0.1 && t < duration - 0.1);
+    // Keep the opening and choose evidence from each successive part of the reference.
+    const seconds: number[] = [0];
+    const count = Math.min(6, Math.max(1, Math.round(duration * 4)));
+    for (let n = 1; n < count; n++) {
+      const anchor = n * duration / count;
+      const near = cuts.filter(t => Math.abs(t - anchor) <= duration / (count * 2));
+      const at = near.sort((a, b) => Math.abs(a - anchor) - Math.abs(b - anchor))[0] ?? anchor;
+      if (at > seconds[seconds.length - 1] + 0.05) seconds.push(at);
+    }
+    const frames: { timeMs: number; url: string }[] = [];
+    for (const [index, time] of seconds.entries()) {
+      const path = join(dir, "ref-" + index + ".jpg");
+      await runMedia(["-ss", time.toFixed(3), ...readInput, "-an", "-sn", "-vf", "scale=640:640:force_original_aspect_ratio=decrease", "-frames:v", "1", "-threads", "1", path], undefined, 15000);
+      const jpg = await readFile(path).catch(() => undefined);
+      if (jpg?.length) frames.push({ timeMs: Math.round(time * 1000), url: "data:image/jpeg;base64," + jpg.toString("base64") });
+    }
+    if (!frames.length) throw Error("参考视频未能读取关键帧");
+    return frames;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 export async function editVideo(
   input: z.infer<typeof videoJobSchema>,
   files: Map<string, { content: Buffer; duration: number; audio: boolean }>,

@@ -296,6 +296,16 @@ export async function aiModelManagement(
     if (feature.kind === "fixed") {
       row.mode = "fixed";
       row.status = "local";
+      const directorLocalModels: Record<string, string> = {
+        director_transcription: "AutoSubs（模型按本机配置）", director_voice_clone: "Qwen3-TTS Base", director_talking_head: "MuseTalk 1.5",
+      };
+      if (directorLocalModels[feature.id]) {
+        row.model = directorLocalModels[feature.id];
+        row.source = "所选 Windows 执行电脑";
+        row.statusText = "在导演台检查本机配置";
+        row.usageNote = "设备本地推理；本站不产生模型 API 费用。";
+        return row;
+      }
       row.model = "Tesseract.js 本地 OCR";
       row.source = "当前浏览器本地运行";
       row.statusText = "本地功能";

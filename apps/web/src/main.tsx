@@ -14,6 +14,7 @@ const CompassAnalyticsPage = lazyPage(() => import("./compass-analytics").then(m
 const CompetitorAnalysisPage = lazyPage(() => import("./competitor-analysis").then(module => ({ default: module.CompetitorAnalysisPage })));
 const OperationsWorkspacePage = lazyPage(() => import("./operations-workspace").then(module => ({ default: module.OperationsWorkspacePage })));
 const PersonalWorkspacePage = lazyPage(() => import("./personal-workspace").then(module => ({ default: module.PersonalWorkspacePage })));
+const DirectorPage = lazyPage(() => import("./director").then(module => ({ default: module.DirectorPage })));
 const AigcPage = lazyPage(() => import("./aigc").then(module => ({ default: module.AigcPage })));
 const CompassAISettingsPage = lazyPage(() => import("./compass-ai-settings").then(module => ({ default: module.CompassAISettingsPage })));
 const PublicSelectionCollection = lazyPage(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
@@ -58,6 +59,8 @@ import {
   HomeOutlined,
   ReadOutlined,
   ThunderboltOutlined,
+  VideoCameraOutlined,
+  MessageOutlined,
 } from "@ant-design/icons";
 import { api, queryClient, setCsrf } from "./api";
 import { UserContext, Row } from "./shared";
@@ -78,15 +81,17 @@ const ProjectTablePage = lazyPage(()=>import("./project-tables").then(module=>({
 const StyleSelectionsPage = lazyPage(() => import("./style-selections").then(module => ({ default: module.StyleSelectionsPage })));
 import { ManualPage, manualHref } from "./manual";
 import { PersonalAssistantProvider } from "./personal-assistant-provider";
+import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import { AssistantWebsiteOpening } from "./assistant-website-opening";
 import { WorkspaceCompanion } from "./workspace-companion";
+import { useAssistantHub } from "./assistant-hub-context";
 const SopPage = lazyPage(() => import("./projects").then(module => ({ default: module.SopPage })));
 const ProjectsPage = lazyPage(() => import("./projects").then(module => ({ default: module.ProjectsPage })));
 const ProjectDetailPage = lazyPage(() => import("./projects").then(module => ({ default: module.ProjectDetailPage })));
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
-const coreFeatureSummary = "AI 员工独立交办与小序派单 · 公司知识库与知识图谱 · 多中转站智选模型与价格用量 · 实时语音与演示 · 公开网页搜索 · 小序意图识别、电脑与网页操作 · Windows 企业微信定位、后台复制文件、分发附件时自动补建目录、创建同名文本 · Mac Finder 文件复制 · 云端和本地浏览器 · 三栏工作台 · 文档、图像视频与语音制作 · 经营分析与商品决策 · 唯品会商品资料 · 聚水潭库存 · 协作表格 · AIGC";
+const coreFeatureSummary = "AI 员工独立交办与小序派单 · AI 导演台 · 公司知识库与知识图谱 · 多中转站智选模型与价格用量 · 实时语音与演示 · 公开网页搜索 · 小序意图识别、电脑与网页操作 · Windows 企业微信定位、后台复制文件、分发附件时自动补建目录、创建同名文本 · Mac Finder 文件复制 · 云端和本地浏览器 · 三栏工作台 · 文档、图像视频与语音制作 · 经营分析与商品决策 · 唯品会商品资料 · 聚水潭库存 · 协作表格 · AIGC";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -183,12 +188,27 @@ function ColorSizeMappingsPage() {
   const tab = params.get("tab") === "size" ? "size" : "color";
   return <ColorSizeMappings tab={tab} onTabChange={tab => setParams({ tab })} />;
 }
+function DirectorAssistantButton() {
+  const { allowed, openPanel } = useAssistantHub();
+  return allowed ? (
+    <Button
+      type="text"
+      icon={<MessageOutlined aria-hidden />}
+      aria-label="打开小序文字对话"
+      title="打开小序文字对话"
+      onClick={() => openPanel("chat")}
+    />
+  ) : null;
+}
 function Workspace({ user }: { user: Row }) {
   const location = useLocation(),
     ui = useUi();
   const personalWorkspace = location.pathname === "/my-workspace";
+  const directorWorkspace = location.pathname === "/my-workspace/director";
+  const workspaceStylePage = personalWorkspace || directorWorkspace;
+  const canUseDirector = canUsePersonalAssistant({ permissions: user.permissions });
   const screens = Grid.useBreakpoint();
-  const mobileWorkspace = personalWorkspace && screens.md === false;
+  const mobileWorkspace = workspaceStylePage && screens.md === false;
   const [workspaceNavOpen, setWorkspaceNavOpen] = useState(false);
   const [workspaceNavCollapsed, setWorkspaceNavCollapsed] = useState(() => {
     try { return localStorage.getItem(`xuti-workspace-nav-collapsed:${user.id}`) === "true"; } catch { return false; }
@@ -196,10 +216,10 @@ function Workspace({ user }: { user: Row }) {
   React.useEffect(() => {
     try { setWorkspaceNavCollapsed(localStorage.getItem(`xuti-workspace-nav-collapsed:${user.id}`) === "true"); } catch { setWorkspaceNavCollapsed(false); }
   }, [user.id]);
-  const navCollapsed = mobileWorkspace ? !workspaceNavOpen : personalWorkspace ? workspaceNavCollapsed : ui.collapsed;
+  const navCollapsed = mobileWorkspace ? !workspaceNavOpen : workspaceStylePage ? workspaceNavCollapsed : ui.collapsed;
   const toggleNavigation = () => {
     if (mobileWorkspace) { setWorkspaceNavOpen(!workspaceNavOpen); return; }
-    if (!personalWorkspace) { ui.toggle(); return; }
+    if (!workspaceStylePage) { ui.toggle(); return; }
     const next = !workspaceNavCollapsed;
     setWorkspaceNavCollapsed(next);
     try { localStorage.setItem(`xuti-workspace-nav-collapsed:${user.id}`, String(next)); } catch { /* The layout still changes for this page. */ }
@@ -256,6 +276,7 @@ function Workspace({ user }: { user: Row }) {
   const settings = originalItems.find((i) => i.key === "/settings")!;
   const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections", "/products", "/operations/vip/inventory", "/operations/vip/integration"];
   const items = [
+    ...(canUseDirector ? [{ key: "/my-workspace/director", label: "AI 导演台", icon: <VideoCameraOutlined />, permission: undefined, children: undefined }] : []),
     { key: "/aigc", label: "AIGC", icon: <ThunderboltOutlined />, permission: "aigc.use", children: undefined },
     ...(operationKeys.some((key) =>
       user.permissions.includes(originalItems.find((i) => i.key === key)!.permission!),
@@ -324,6 +345,7 @@ function Workspace({ user }: { user: Row }) {
         <Link
           to={item.key === activeKey ? location.pathname + location.search : item.key}
           aria-current={item.key === activeKey ? "page" : undefined}
+          onClick={() => setWorkspaceNavOpen(false)}
         >
           {item.label}
         </Link>
@@ -343,7 +365,7 @@ function Workspace({ user }: { user: Row }) {
       : undefined;
   return (
     <PageSearchContext.Provider value={searchHost}><UserContext.Provider value={user}><PersonalAssistantProvider key={user.id}>
-      <Layout className={`workspace${personalWorkspace ? " workspace-future" : ""}`}>
+      <Layout className={`workspace${workspaceStylePage ? " workspace-future" : ""}`}>
         {mobileWorkspace && workspaceNavOpen && <button type="button" className="workspace-nav-scrim" aria-label="关闭工作区导航" onClick={() => setWorkspaceNavOpen(false)} />}
         <Layout.Sider width={216} collapsed={navCollapsed} collapsedWidth={mobileWorkspace ? 0 : 80} className="sidebar">
           <Link
@@ -424,6 +446,7 @@ function Workspace({ user }: { user: Row }) {
             <div ref={setSearchHost} className="topbar-search-host" role="search" aria-label="当前页面搜索"/>
             <DesktopUpdateNotice inHeader />
             <Space className="topbar-actions" size={10}>
+              {directorWorkspace && <DirectorAssistantButton />}
               <ThemeToggle />
               <ProjectNotifications />
               <AccountMenu
@@ -448,6 +471,7 @@ function Workspace({ user }: { user: Row }) {
           >
             <Routes>
               <Route path="/my-workspace" element={<PersonalWorkspacePage key={user.id} />} />
+              <Route path="/my-workspace/director" element={canUseDirector ? <DirectorPage key={user.id} /> : <Navigate to="/my-workspace" replace />} />
               <Route path="/aigc" element={<AigcPage key={user.id} />} />
               <Route path="/settings/ai" element={<CompassAISettingsPage />} />
               <Route path="/help" element={<ManualPage />} />
@@ -503,7 +527,7 @@ function Workspace({ user }: { user: Row }) {
           </PageResourceBoundary>
         </Layout>
       </Layout>
-      <WorkspaceCompanion />
+      {!directorWorkspace && <WorkspaceCompanion />}
     </PersonalAssistantProvider></UserContext.Provider></PageSearchContext.Provider>
   );
 }
@@ -577,7 +601,7 @@ function Root() {
       ));
   // Immersive and system sections keep their existing dark presentation.
   const fixedDarkPage = (me.isLoading || me.isError || !!accountId) && (
-    ["/my-workspace", "/aigc", "/operations", "/sops", "/projects", "/project-tables"].includes(themePath) ||
+    ["/my-workspace", "/my-workspace/director", "/aigc", "/operations", "/sops", "/projects", "/project-tables"].includes(themePath) ||
     ["/users", "/roles", "/audit-logs", "/settings"].some(
       (root) => themePath === root || themePath.startsWith(`${root}/`),
     )

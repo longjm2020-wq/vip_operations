@@ -22,6 +22,9 @@ namespace XutiDesktop {
 static class Program {
     [STAThread] static int Main(string[] args) {
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+        if(args.Length==1 && args[0]=="--self-test-director")return DirectorTest.Run();
+        if(args.Length==1 && args[0]=="--self-test-director-autosubs")return DirectorTest.AutoSubs();
+        if(args.Length>0 && args[0].StartsWith("--self-test-director-child-",StringComparison.Ordinal))return DirectorTest.Child(args);
         if(args.Length==1 && args[0]=="--run-file-plan")return FilePlanRunner.ChildMain(false);
         if(args.Length==1 && args[0]=="--self-test-file-plan")return FilePlanRunner.ChildMain(true);
         if (args.Length == 1 && args[0] == "--self-test") return Native.SelfTest() + ShellPolicy.SelfTest() + AssistantForm.ConnectionSelfTest();

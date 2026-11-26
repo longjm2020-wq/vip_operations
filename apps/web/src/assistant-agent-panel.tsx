@@ -198,7 +198,7 @@ export function AgentComposer({
             type="file"
             hidden
             multiple
-            accept=".png,.jpg,.jpeg,.webp,.pdf,.txt,.md,.csv,.json,.docx,.xlsx,.pptx,.mp4,.mov,.webm"
+            accept=".png,.jpg,.jpeg,.webp,.pdf,.txt,.srt,.md,.csv,.json,.docx,.xlsx,.pptx,.mp4,.mov,.webm,.wav,.mp3,.m4a"
             onChange={(e) => {
               const chosen = Array.from(e.currentTarget.files || []);
               e.currentTarget.value = "";

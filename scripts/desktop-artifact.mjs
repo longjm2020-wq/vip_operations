@@ -11,12 +11,22 @@ export const sourceFiles = [
   "apps/desktop/FilePlanRunner.cs",
   "apps/desktop/WeCom.cs",
   "apps/desktop/DesktopShell.cs",
+  "apps/desktop/DirectorMedia.cs",
+  "apps/desktop/DirectorProcess.cs",
+  "apps/desktop/DirectorRender.cs",
+  "apps/desktop/DirectorTranscription.cs",
+  "apps/desktop/DirectorStudio.cs",
+  "apps/desktop/DirectorTest.cs",
   "apps/desktop/app.manifest",
   "apps/desktop/启动小序.cmd",
   "apps/desktop/README.txt",
   "apps/desktop/version.json",
   "scripts/build-desktop.mjs",
   "scripts/desktop-artifact.mjs",
+  "scripts/director-media/director_media.py",
+  "scripts/director-media/motion.cjs",
+  "scripts/director-media/README.md",
+  "scripts/director-media/lower-third.json",
 ];
 export const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 export async function desktopSourceHashes() {

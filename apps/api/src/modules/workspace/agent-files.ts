@@ -15,7 +15,7 @@ import {
 import type { AgentFile } from "../../../../../packages/contracts/src/assistant-agent.js";
 import { fail, type Context } from "../../core.js";
 import { requireAssistant } from "./assistant-memory.js";
-import { compressVideoUpload, inspectVideo, videoFrames } from "./agent-media.js";
+import { compressVideoUpload, inspectAudio, inspectVideo, videoFrames } from "./agent-media.js";
 
 const MiB = 1024 * 1024;
 const TARGET_GENERAL_BYTES = 20 * MiB;
@@ -59,12 +59,16 @@ const isVideoHeader = (b: Buffer) =>
   b.subarray(4, 8).toString() === "ftyp" ||
   b.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
 const mimeByExt: Record<string, string> = {
+  ".wav": "audio/wav",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
   ".pdf": "application/pdf",
   ".txt": "text/plain",
+  ".srt": "text/plain",
   ".md": "text/markdown",
   ".csv": "text/csv",
   ".json": "application/json",
@@ -236,7 +240,7 @@ export async function inspectAgentUpload(
     mime = mimeByExt[ext];
   if (!mime)
     throw Error(
-      "支持图片、PDF、Word(docx)、Excel(xlsx/csv)、PPT(pptx)、文本和视频(mp4/mov/webm)",
+      "支持图片、PDF、Office、文本、音频（wav/mp3/m4a）和视频（mp4/mov/webm）",
     );
   const limit = generated
     ? 100 * MiB
@@ -245,7 +249,7 @@ export async function inspectAgentUpload(
       : 20 * MiB;
   if (!b.length || b.length > limit)
     throw Error(
-      mime.startsWith("video/") ? "视频最大64MB" : "文档与图片最大20MB",
+      mime.startsWith("video/") ? "视频最大64MB" : "文档、图片与音频最大20MB",
     );
   let text = "";
   const metadata: Row = {};
@@ -253,6 +257,8 @@ export async function inspectAgentUpload(
     const info = await openAgentImage(b).metadata().catch(normalizeImageError);
     if (!["png", "jpeg", "webp"].includes(info.format || ""))
       throw Error("图片格式不受支持");
+  } else if (mime.startsWith("audio/")) {
+    Object.assign(metadata, await inspectAudio(b, ext));
   } else if (mime.startsWith("video/")) {
     if (!isVideoHeader(b))
       throw Error("视频格式无效");
@@ -665,7 +671,9 @@ export async function deleteAgentFile(c: Context, id: string) {
         AND status IN ('QUEUED','RUNNING') AND input::text LIKE $2
       UNION ALL SELECT id FROM assistant_desktop_tasks WHERE user_id=$1::bigint AND (folder_attachment_id=$3::uuid
         OR (folder_attachments IS NOT NULL AND folder_attachments @> jsonb_build_array(jsonb_build_object('id', $3::uuid))))
-        AND status IN ('WAITING','RUNNING','PAUSED','NEEDS_USER') LIMIT 1`, c.actor.id, `%${id}%`, id);
+        AND status IN ('WAITING','RUNNING','PAUSED','NEEDS_USER')
+      UNION ALL SELECT r.id FROM director_renders r JOIN director_projects p ON p.id=r.project_id
+        WHERE p.user_id=$1::bigint AND r.status IN ('queued','running','paused') AND r.source_files @> ARRAY[$3::uuid] LIMIT 1`, c.actor.id, `%${id}%`, id);
     if (busy) fail("FILE_BUSY", "文件仍被任务使用，请完成或停止任务后再删除。", 409);
     await tx.$executeRawUnsafe("DELETE FROM public.personal_assistant_files WHERE id=$1::uuid AND user_id=$2::bigint", id, c.actor.id);
     return { deleted: true };

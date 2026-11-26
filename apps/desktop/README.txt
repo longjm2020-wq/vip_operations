@@ -1,4 +1,7 @@
-小序桌面端 1.2.20 · Windows 10/11 x64
+小序桌面端 1.3.0 · Windows 10/11 x64
+
+AI 导演台支持从已配对的 Windows 客户端导入本地素材、在后台按分镜生成 H.264/AAC MP4、分镜稿、SRT 和 edit-plan.json。安装独立 FFmpeg Windows 构建（https://ffmpeg.org/download.html），将 ffmpeg.exe 放入 %LOCALAPPDATA%\XutiDesktop\tools，或设置 XUTI_DIRECTOR_FFMPEG 为 ffmpeg.exe 的完整路径。也支持 PATH 中的 FFmpeg。请选择包含 libx264、AAC 的构建。本客户端不附带 FFmpeg 二进制。可选的本地模型和动效模板安装说明位于 director-media\README.md。
+在工作台进入「AI 导演台」，选择文件或素材文件夹（第一层）。客户端将素材副本、已核验镜头和各次导出保存在当前 Windows 用户的本地应用数据目录。打开作品后，可用「打开文件夹」取出四份交付物。暂停后可继续，关闭客户端会暂停后台工作。改片时未改变的镜头可复用。
 
 将压缩包完整解压到一个文件夹，双击 XutiDesktop.exe（或“启动小序.cmd”）。
 无需安装第二个电脑助手，无需管理员权限，无需开发工具。

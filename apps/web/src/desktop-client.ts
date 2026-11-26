@@ -26,6 +26,7 @@ declare global {
       version: string;
       localBrowser?: true;
       nativeUpdates?: true;
+      director?: true;
     }>;
     chrome?: { webview?: WebViewBridge };
   }

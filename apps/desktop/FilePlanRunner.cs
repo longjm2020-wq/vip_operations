@@ -42,9 +42,9 @@ static class FilePlanRunner {
     [DllImport("kernel32.dll",SetLastError=true)]
     static extern bool SetInformationJobObject(SafeFileHandle job,int kind,ref ExtendedLimits limits,uint size);
     [DllImport("kernel32.dll",SetLastError=true)]
-    static extern bool AssignProcessToJobObject(SafeFileHandle job,IntPtr process);
+    internal static extern bool AssignProcessToJobObject(SafeFileHandle job,IntPtr process);
 
-    static SafeFileHandle WorkerJob() {
+    internal static SafeFileHandle WorkerJob() {
         var job=CreateJobObject(IntPtr.Zero,null);
         var limits=new ExtendedLimits{basic=new BasicLimits{flags=0x2000}}; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         if(!job.IsInvalid && SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(ExtendedLimits))))return job;

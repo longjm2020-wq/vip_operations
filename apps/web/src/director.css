@@ -1,0 +1,427 @@
+.director-page {
+  display: grid;
+  gap: 16px;
+  width: min(100%, 1600px);
+  margin: 0 auto;
+  padding: 20px clamp(14px, 2.3vw, 34px) 34px;
+}
+
+.director-heading,
+.director-project-bar,
+.director-section-heading,
+.director-projects,
+.director-project-controls,
+.director-status,
+.director-render-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.director-heading,
+.director-project-bar,
+.director-section-heading {
+  justify-content: space-between;
+}
+
+.director-heading h1 {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 720;
+  letter-spacing: -0.025em;
+  color: var(--app-text);
+}
+
+.director-heading h1 .anticon {
+  color: var(--app-accent);
+}
+.director-heading p {
+  margin: 4px 0 0;
+  color: var(--app-secondary);
+}
+.director-projects {
+  flex: 0 1 360px;
+}
+.director-projects > .ant-select {
+  min-width: 0;
+  flex: 1;
+}
+.director-panel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  background: var(--app-surface);
+}
+.director-empty {
+  min-height: 200px;
+  display: grid;
+  place-items: center;
+}
+.director-project-title {
+  display: grid;
+  gap: 4px;
+  width: min(100%, 390px);
+}
+.director-project-title .ant-input {
+  font-size: 17px;
+  font-weight: 650;
+}
+.director-project-title span,
+.director-section-heading span {
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.director-project-controls {
+  align-items: end;
+  flex-wrap: wrap;
+  justify-content: end;
+}
+.director-project-controls .director-field {
+  width: max-content;
+  min-width: 86px;
+}
+.director-project-controls .director-field:nth-child(4) {
+  min-width: 100px;
+}
+.director-status {
+  flex-wrap: wrap;
+  color: var(--app-secondary);
+}
+.director-status .ant-tag {
+  margin: 0;
+}
+.director-busy {
+  margin-inline-start: auto;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.director-workbench {
+  display: grid;
+  grid-template-columns: minmax(205px, 0.85fr) minmax(285px, 1.7fr) minmax(
+      230px,
+      1fr
+    );
+  gap: 12px;
+  align-items: start;
+}
+.director-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.director-media,
+.director-edit,
+.director-inspector,
+.director-planning,
+.director-outputs {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.director-section-heading {
+  min-height: 25px;
+}
+.director-section-heading h2 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 15px;
+  font-weight: 680;
+}
+.director-section-heading > span {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.director-form,
+.director-asset-settings {
+  display: grid;
+  gap: 10px;
+}
+.director-inspector-timing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.director-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.director-field > span:first-child {
+  color: var(--app-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.director-field > .ant-select,
+.director-field > .ant-input-number {
+  width: 100%;
+}
+.director-imports {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.director-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.director-muted {
+  color: var(--app-secondary);
+  margin: 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.director-asset-list {
+  display: grid;
+  gap: 4px;
+  max-height: 370px;
+  overflow-y: auto;
+}
+.director-asset-list button,
+.director-timeline li {
+  width: 100%;
+  display: flex;
+  text-align: left;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  color: var(--app-text);
+  background: var(--app-bg);
+}
+.director-asset-list button {
+  min-width: 0;
+  padding: 7px;
+  cursor: pointer;
+  font: inherit;
+}
+.director-asset-list button[aria-pressed="true"],
+.director-timeline li[data-active="true"] {
+  border-color: var(--app-accent-border);
+  background: var(--app-accent-soft);
+}
+.director-asset-icon {
+  display: grid;
+  flex: 0 0 28px;
+  height: 28px;
+  place-items: center;
+  background: var(--app-elevated);
+  color: var(--app-accent);
+  border-radius: 6px;
+}
+.director-asset-list button > span:last-child {
+  min-width: 0;
+}
+.director-asset-list strong,
+.director-asset-list small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.director-asset-list strong {
+  font-size: 13px;
+}
+.director-asset-list small {
+  margin-top: 2px;
+  color: var(--app-secondary);
+  font-size: 11px;
+}
+.director-asset-settings {
+  padding-top: 10px;
+  border-top: 1px solid var(--app-border);
+}
+
+.director-preview {
+  min-height: 175px;
+  aspect-ratio: 16 / 10;
+  display: grid;
+  place-items: center;
+  padding: 10px;
+  border-radius: 9px;
+  border: 1px solid var(--app-border);
+  background-color: var(--app-bg);
+  background-image: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--app-accent-soft) 60%, transparent),
+    transparent 72%
+  );
+  overflow: hidden;
+}
+.director-preview img,
+.director-preview video {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: 380px;
+  object-fit: contain;
+}
+.director-preview audio {
+  width: min(90%, 380px);
+}
+.director-preview-file {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  text-align: center;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.director-preview-file > .anticon {
+  color: var(--app-accent);
+  font-size: 27px;
+}
+.director-preview-file span {
+  color: var(--app-secondary);
+}
+.director-timeline {
+  display: grid;
+  gap: 5px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 365px;
+  overflow-y: auto;
+}
+.director-timeline li {
+  overflow: hidden;
+  gap: 2px;
+  padding-right: 4px;
+}
+.director-timeline li > button {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(30px, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+  color: var(--app-text);
+  text-align: left;
+  padding: 8px;
+  font: inherit;
+  border: 0;
+  background: transparent;
+}
+.director-timeline li > button span:first-child {
+  color: var(--app-accent);
+  font-variant-numeric: tabular-nums;
+}
+.director-timeline strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.director-timeline small {
+  color: var(--app-secondary);
+  white-space: nowrap;
+}
+.director-order,
+.director-locks,
+.director-artifacts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.director-order {
+  flex-wrap: nowrap;
+}
+.director-locks .ant-checkbox-wrapper {
+  margin: 0;
+  font-size: 12px;
+}
+.director-artifacts .director-muted {
+  width: 100%;
+}
+.director-analysis {
+  color: var(--app-secondary);
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--app-bg);
+  overflow-wrap: anywhere;
+}
+.director-analysis summary {
+  color: var(--app-text);
+  cursor: pointer;
+}
+.director-analysis p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+.director-analysis ol {
+  margin-bottom: 0;
+  padding-inline-start: 1.4rem;
+}
+.director-library-options {
+  display: grid;
+  gap: 8px;
+  max-height: 390px;
+  overflow: auto;
+}
+
+@media (max-width: 1100px) {
+  .director-project-bar {
+    align-items: start;
+    flex-direction: column;
+  }
+  .director-project-controls {
+    justify-content: start;
+  }
+  .director-workbench {
+    grid-template-columns: minmax(165px, 0.75fr) minmax(225px, 1.2fr) minmax(
+        200px,
+        1fr
+      );
+  }
+  .director-panel {
+    padding: 12px;
+  }
+}
+
+@media (max-width: 900px) {
+  .director-workbench {
+    grid-template-columns: minmax(170px, 0.7fr) minmax(0, 1.3fr);
+  }
+  .director-inspector {
+    grid-column: 1 / -1;
+  }
+  .director-inspector .director-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .director-inspector
+    .director-form
+    > :is(.director-locks, .director-analysis) {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 600px) {
+  .director-page {
+    padding: 12px;
+  }
+  .director-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .director-projects {
+    flex-basis: auto;
+  }
+  .director-workbench,
+  .director-lower,
+  .director-inspector .director-form {
+    grid-template-columns: 1fr;
+  }
+  .director-busy {
+    margin-inline-start: 0;
+  }
+}

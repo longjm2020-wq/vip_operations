@@ -7,6 +7,8 @@ import { encryptionReady } from "./modules/analytics/secrets.js";
 const sharedFeatures = [
   "assistant_chat",
   "assistant_intent",
+  "director_storyboard",
+  "director_reference",
   "assistant_search",
   "assistant_website",
   "assistant_desktop",

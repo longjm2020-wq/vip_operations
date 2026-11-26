@@ -13,6 +13,14 @@ export function WorkspaceMenuIcon({
 }) {
   let shape;
   switch (workspace) {
+    case "/my-workspace/director":
+      shape = (
+        <>
+          <rect x="3" y="6" width="13" height="12" rx="2" />
+          <path d="m16 10 5-3v10l-5-3z" />
+        </>
+      );
+      break;
     case "/aigc":
       shape = <path d="m13.5 2-9 12h6L9.5 22l10-13h-6l0-7Z" />;
       break;
