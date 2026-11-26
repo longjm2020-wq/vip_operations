@@ -52,7 +52,7 @@ public class ExplorerCopySmoke {
         Native("ValidateWindow",window,true,false);
     }
     async Task Shortcut(object window,string key,string expected) {
-        var shot=Native("Capture",window,null);
+        var shot=await Task.Run(()=>Native("Capture",window,null,true));
         if(shot.GetType().GetField("Popup").GetValue(shot)!=null)throw new Exception("Explorer has a popup");
         var evidence=await (Task<string>)Call("Observe",window);
         if(evidence!=expected)throw new Exception("Explorer did not prove file selection/clipboard for "+key);

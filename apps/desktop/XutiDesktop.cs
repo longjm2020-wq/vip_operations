@@ -762,7 +762,7 @@ sealed class AssistantForm : Form {
             string explorerFolder=crossWindow && desktopExplorerTaskId==id ? await Native.DesktopExplorerListLocation(selected) : null;
             checkInput();
             // UI Automation and PrintWindow may wait on a hung application. Never capture another window as fallback.
-            var capture = Task.Run(() => Native.Capture(selected, contentBounds));
+            var capture = Task.Run(() => Native.Capture(selected, contentBounds, copy!=null));
             if (await Task.WhenAny(capture,Task.Delay(4000)) != capture) { captureBlocked=true; throw new Exception("应用窗口没有响应，请关闭本机助手后重试"); }
             shot = await capture;
             checkInput();
@@ -1342,18 +1342,21 @@ static partial class Native {
         if(foreground&&GetForegroundWindow()!=w.Handle)throw new Exception("当前窗口已切换，请核对后继续");
         if(Regex.IsMatch(Title(w.Handle),"Windows PowerShell|命令提示符|终端|管理员:|API.?Keys|密码管理",RegexOptions.IgnoreCase))throw new Exception("此窗口需要你亲自操作");
     }
-    static string Controls(WindowChoice w,Rectangle? contentBounds) {
+    static string Controls(WindowChoice w,Rectangle? contentBounds,bool details=true) {
         var root=AutomationElement.FromHandle(w.Handle); var walker=TreeWalker.ControlViewWalker;
+        if(root==null)throw new InputNotSent("窗口的辅助功能控件未就绪，请核对后继续。");
         var queue=new Queue<AutomationElement>(); queue.Enqueue(root); var text=new StringBuilder(); int count=0;
         while(queue.Count>0&&count++<120) {
             var element=queue.Dequeue();
             if(element.Current.IsPassword)throw new Exception("窗口包含密码输入，请自行处理后再继续");
-            string name=element.Current.Name;
-            var bounds=element.Current.BoundingRectangle;
-            bool inContent=!contentBounds.HasValue||(!bounds.IsEmpty&&
-                bounds.Left>=contentBounds.Value.Left&&bounds.Top>=contentBounds.Value.Top&&
-                bounds.Right<=contentBounds.Value.Right&&bounds.Bottom<=contentBounds.Value.Bottom);
-            if(inContent&&!element.Current.IsOffscreen)text.AppendLine(Cut(element.Current.ControlType.ProgrammaticName+": "+name,180));
+            if(details && !element.Current.IsOffscreen) {
+                var bounds=element.Current.BoundingRectangle;
+                bool inContent=!contentBounds.HasValue||(!bounds.IsEmpty&&
+                    bounds.Left>=contentBounds.Value.Left&&bounds.Top>=contentBounds.Value.Top&&
+                    bounds.Right<=contentBounds.Value.Right&&bounds.Bottom<=contentBounds.Value.Bottom);
+                var type=element.Current.ControlType;
+                if(inContent)text.AppendLine(Cut((type==null?"Control":type.ProgrammaticName)+": "+element.Current.Name,180));
+            }
             var child=walker.GetFirstChild(element); int sibling=0;
             while(child!=null&&sibling++<30&&queue.Count<140){queue.Enqueue(child);child=walker.GetNextSibling(child);}
         }
@@ -1588,10 +1591,11 @@ static partial class Native {
             if(failure!=null)throw new Exception("Isolated popup fixture: "+failure.Message,failure);
         }
     }
-    public static Shot Capture(WindowChoice w, Rectangle? contentBounds=null) {
+    public static Shot Capture(WindowChoice w, Rectangle? contentBounds=null,bool fileCopy=false) {
         ValidateWindow(w,true);
         uint thread;
         if(MenuOpen(ThreadInfo(w,out thread))) {
+            if(fileCopy)throw new InputNotSent("请关闭资源管理器中的菜单，核对文件列表后继续。");
             if(contentBounds.HasValue || BrowserWindows.ContainsKey(w.Handle))throw new Exception("网页出现系统菜单，请亲自处理后继续。");
             using(new PhysicalCoordinates()) {
                 var popup=PopupMenu.Observe(w);
@@ -1600,6 +1604,14 @@ static partial class Native {
                     ValidateWindow(w,true);popup.Validate(w);return shot;
                 } catch {popup.Release();throw;}
             }
+        }
+        if(fileCopy) {
+            if(contentBounds.HasValue || !IsExplorerFolderWindow(w.Handle))throw new InputNotSent("文件复制需要已核对的资源管理器窗口。");
+            Controls(w,null,false);
+            RECT rect;
+            if(!GetWindowRect(w.Handle,out rect))throw new InputNotSent("无法核对资源管理器窗口的位置。");
+            ValidateWindow(w,true);
+            return new Shot {Rect=rect};
         }
         return CaptureSurface(w.Handle,contentBounds,Controls(w,contentBounds),null);
     }

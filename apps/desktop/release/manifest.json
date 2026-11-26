@@ -1,9 +1,9 @@
 {
   "version": "1.2.12",
   "platform": "win-x64",
-  "sha256": "cd18ac77944a4cf68f3d1d18cf8f037aba7ddcc33d150299892d12a3154fe752",
+  "sha256": "5d66cbd235e6ddc016a641e16bed57bf04da6d9547dd69e10274d598db724b37",
   "sources": {
-    "apps/desktop/XutiDesktop.cs": "51fbb889e3df79d47733505fbff982a62ad8b3fc0ad02b262be15f4030533169",
+    "apps/desktop/XutiDesktop.cs": "8254777cf46ef11b24ec72963355acd6c10d19609b06994027ef8f84d52d3f36",
     "apps/desktop/DesktopExplorer.cs": "7b5ad17f14342a1006c9832ee9ce88d8597e99b0906a633ad927d6104cd9f0aa",
     "apps/desktop/ExplorerCopy.cs": "3822665858f48305a0b3a191778cfa45a67b083f9ca82ac3a724ab79c9877f85",
     "apps/desktop/DesktopShell.cs": "9971dd142efb05944f12f14ea02991168d4671125c389ad4265689e2447c2a31",
