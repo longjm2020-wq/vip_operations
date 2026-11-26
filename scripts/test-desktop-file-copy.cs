@@ -88,7 +88,7 @@ public class ExplorerCopySmoke {
         shot.GetType().GetField("FileShortcut").SetValue(shot,evidence);
         var action=new Dictionary<string,object>{{"kind","key"},{"key",key},{"description","CI file shortcut"}};
         Call("VerifyOtherAction",action,window);
-        await (Task)Native("Execute",window,shot,action,check,null,session,check);
+        await (Task)Native("Execute",window,shot,action,check,null,session,check,false,"");
     }
     async Task Transfer(string fixture,IntPtr own) {
         await BackgroundExisting(fixture);
@@ -121,8 +121,13 @@ public class ExplorerCopySmoke {
         // Simulate the runner user copying a new item after source selection.
         Clipboard.SetText("runner-user-copy-"+Guid.NewGuid().ToString("N"));
         uint userCopy=GetClipboardSequenceNumber();bool kept=false;
-        try {await Shortcut(firstWindow,"COPY","copy");}catch(Exception e) {kept=e.GetBaseException().GetType().Name=="InputNotSent";}
-        if(!kept || GetClipboardSequenceNumber()!=userCopy)throw new Exception("Explicit Ctrl+C overwrote a newer user clipboard");
+        try {await Shortcut(firstWindow,"COPY","copy");}
+        catch(Exception e) {
+            if(e.GetBaseException().GetType().Name!="InputNotSent")throw;
+            kept=true;
+        }
+        if(GetClipboardSequenceNumber()!=userCopy)throw new Exception("Explicit Ctrl+C changed a newer user clipboard");
+        if(!kept)throw new Exception("Explicit Ctrl+C did not reject the stale selection");
         session=Activator.CreateInstance(copyType,new object[]{spec,"copy all files from "+source+" to "+target});
         Console.WriteLine("Opening source and target in Explorer");
         await (Task)Call("Open",own,check);
