@@ -121,7 +121,7 @@ sealed class AssistantForm : Form {
     readonly Button allow = new Button { Text = "继续当前任务", AutoSize = true, Enabled = false, Visible = false };
     readonly Button manualAllow = new Button { Text = "允许本次任务", AutoSize = true, Enabled = false };
     readonly Button pause = new Button { Text = "暂停", AutoSize = true };
-    readonly Button stop = new Button { Text = "停止 (Ctrl+Alt+X)", AutoSize = true };
+    readonly Button stop = new Button { Text = "停止", AutoSize = true };
     readonly Button authorization = new Button { Text = "授权跨窗口操作", AutoSize = true };
     readonly Label permission = new Label { AutoSize = true, MaximumSize = new Size(570, 0) };
     FlowLayoutPanel advancedPanel;
@@ -135,6 +135,9 @@ sealed class AssistantForm : Form {
     public event Action WorkspaceRequested;
     public bool Connected { get { return token.Length > 0; } }
     public bool Authorized { get { return Connected && authorizationId.Length > 0; } }
+    public bool EngineReady { get { return !closing && inputHook!=null && stopKey!=null && timer.Enabled; } }
+    public string EngineError { get; private set; }
+    public string StopShortcut { get { return stopKey==null ? "" : stopKey.Shortcut; } }
     public bool CanShowReleaseNotice { get {
         if(working || allowing || pairing || changingAuthorization)return false;
         if(!Connected)return true;
@@ -148,14 +151,19 @@ sealed class AssistantForm : Form {
     bool manualPauseSent, manualPausePending;
     long manualPauseVersion=-1;
     string manualPauseNote="", startFailureNote="", executingKind="";
+    string nativeAttemptId="";
     string failureTaskId="", failureDiagnostic="";
     Action<Action> manualPauseDispatch;
     Func<WindowChoice> startWindowOverride;
+    Func<string,Action,Task<WindowChoice>> notepadOverride;
     long epoch;
     Dictionary<string, object> task;
     bool BrowserOnly { get { return task!=null&&task.ContainsKey("localBrowser")&&Object.Equals(task["localBrowser"],true); } }
+    string NativeAction { get { return task==null?"":S(task,"nativeAction"); } }
     readonly Dictionary<string, string> journal = new Dictionary<string, string>();
     Native.Hook inputHook;
+    Native.StopKey stopKey;
+    DateTime retryProtectionAt;
 
     public AssistantForm() {
         Text = "电脑任务"; Width = 650; Height = 590; MinimumSize = new Size(620, 510);
@@ -210,19 +218,40 @@ sealed class AssistantForm : Form {
         authorization.Click += async (s,e) => await Safe(ChangeAuthorization);
         pause.Click += async (s,e) => await Safe(async () => { LocalPause(); await Control("pause", "你已暂停操作"); });
         stop.Click += async (s,e) => await StopTask();
-        timer.Tick += async (s,e) => await Poll();
+        timer.Tick += async (s,e) => {
+            if(!EngineReady && DateTime.UtcNow>=retryProtectionAt) StartProtection();
+            if(EngineReady) await Poll();
+        };
         Shown += (s,e) => { if(!isolatedPreview) StartEngine(); };
         FormClosing += (s,e) => Shutdown();
     }
     public void StartEngine() {
-            if (started) return;
-            started = true;
-            try {
-                LoadSaved(); ShowConnection(); RefreshWindows();
-                if (!Native.RegisterHotKey(Handle, 1, 3, 0x58)) throw new Exception("无法注册停止快捷键，请关闭占用 Ctrl+Alt+X 的程序后重启助手。");
-                inputHook = new Native.Hook(ManualInput);
-                timer.Start();
-            } catch(Exception ex) { status.Text = ex.Message; allow.Enabled = false; manualAllow.Enabled = false; }
+        if(started || closing) return;
+        started=true;
+        LoadSaved(); RefreshWindows();
+        timer.Start();
+        StartProtection();
+    }
+    void StartProtection() {
+        if(closing || EngineReady) return;
+        try {
+            stopKey=new Native.StopKey(()=>{LocalPause();BeginInvoke(new Action(async()=>await StopTask()));});
+            inputHook=new Native.Hook(ManualInput);
+            EngineError="";
+            stop.Text="停止 ("+StopShortcut+")";
+            status.Text=Connected?"正在接收电脑任务。":"连接后等待网站发送任务。";
+        } catch(Exception ex) {
+            ReleaseProtection();
+            EngineError=ex.Message;
+            retryProtectionAt=DateTime.UtcNow.AddSeconds(10);
+            stop.Text="停止";
+            status.Text=EngineError;
+        }
+        ShowConnection();
+    }
+    void ReleaseProtection() {
+        if(inputHook!=null) { inputHook.Dispose(); inputHook=null; }
+        if(stopKey!=null) { stopKey.Dispose(); stopKey=null; }
     }
     public async Task PairCode(string value) {
         if (pairing) throw new Exception("正在连接，请稍候。");
@@ -259,28 +288,23 @@ sealed class AssistantForm : Form {
     public void Shutdown() {
         if(closing) return;
         closing=true; LocalPause(); timer.Stop();
-        if(inputHook!=null) { inputHook.Dispose(); inputHook=null; }
-        if(IsHandleCreated) Native.UnregisterHotKey(Handle,1);
+        ReleaseProtection();
     }
     protected override void Dispose(bool disposing) {
         if(disposing) { Shutdown(); timer.Dispose(); http.Dispose(); }
         base.Dispose(disposing);
     }
-    protected override void WndProc(ref Message m) {
-        if (m.Msg == 0x312) { LocalPause(); BeginInvoke(new Action(async () => await StopTask())); }
-        base.WndProc(ref m);
-    }
     void ShowConnection() {
         connection.Text = token.Length > 0 ? "已连接 · " + owner : "未连接本机";
         bool granted = authorizationId.Length > 0;
-        permission.Text = granted ? "已允许并记住本机，新任务自动开始。可在高级设置中撤销。" : "尚未允许自动操作；点击「操作本机」完成首次确认。";
+        permission.Text = granted ? (EngineReady ? "已记住本机授权，可在工作台直接发送电脑指令。" : "已记住本机授权，等待执行器就绪。") : "尚未允许自动操作；点击「操作本机」完成首次确认。";
         authorization.Text = granted ? "撤销本机操作授权" : "允许并记住本机操作";
         authorization.Enabled = Connected && !changingAuthorization;
         ShowTaskControls();
         if(Changed!=null) Changed();
     }
     void ShowTaskControls() {
-        bool ready = task!=null && !captureBlocked && !working && !allowing && !changingAuthorization && new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state);
+        bool ready = EngineReady && task!=null && (!captureBlocked || NativeAction.Length>0) && !working && !allowing && !changingAuthorization && new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state);
         allow.Visible = Authorized && new[]{"PAUSED","NEEDS_USER"}.Contains(state);
         allow.Enabled = ready; manualAllow.Enabled = ready;
         manualAllow.Text = Authorized ? "从此窗口继续" : "允许本次任务";
@@ -312,7 +336,7 @@ sealed class AssistantForm : Form {
         if(token.Length==0 || closing || pairing || changingAuthorization) return;
         string connectionToken=token; long permissionVersion=permissionEpoch;
         try {
-            var result=await Request("poll",new {});
+            var result=await Request("poll",new {statusOnly=true});
             if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
             await ReconcileAuthorization(result);
         } catch(ApiFailure e) {
@@ -369,9 +393,9 @@ sealed class AssistantForm : Form {
             }
         } finally { changingAuthorization=false; ShowConnection(); }
     }
-    static Form AuthorizationDialog() {
+    static Form AuthorizationDialog(string shortcut) {
         var dialog=new Form { Text="允许小序操作本机", Width=540, Height=290, StartPosition=FormStartPosition.CenterParent, FormBorderStyle=FormBorderStyle.FixedDialog, MaximizeBox=false, MinimizeBox=false, ShowInTaskbar=false, Font=new Font("Microsoft YaHei UI",10), AutoScaleMode=AutoScaleMode.Dpi };
-            var text=new Label { Dock=DockStyle.Fill, Padding=new Padding(24,20,24,12), Text="按你的指令点击、输入和切换已打开的网页与应用。确认一次后记住本机，新任务无需再次确认。\n\n操作画面、控件文字及窗口标题会交给智能服务处理。登录、付款、发送和删除由你接手。\n\n随时可撤销；Ctrl + Alt + X 停止。" };
+            var text=new Label { Dock=DockStyle.Fill, Padding=new Padding(24,20,24,12), Text="按你的指令操作已打开的网页与应用，也可打开系统记事本。确认一次后记住本机。\n\n识屏操作会将画面、控件文字及窗口标题交给智能服务。登录、付款、发送和删除由你接手。\n\n随时可撤销；"+(String.IsNullOrEmpty(shortcut)?"可在电脑任务中点击停止。":shortcut+" 停止。") };
             var buttons=new FlowLayoutPanel { Dock=DockStyle.Bottom, Height=62, Padding=new Padding(18,10,18,10), FlowDirection=FlowDirection.RightToLeft };
             var accept=new Button { Text="允许并记住", Width=145, Height=36, DialogResult=DialogResult.Yes };
             var cancel=new Button { Text="取消", Width=100, Height=36, DialogResult=DialogResult.Cancel };
@@ -380,7 +404,7 @@ sealed class AssistantForm : Form {
         return dialog;
     }
     bool ConfirmAuthorization() {
-        using(var dialog=AuthorizationDialog()) return dialog.ShowDialog(TopLevelControl ?? this)==DialogResult.Yes;
+        using(var dialog=AuthorizationDialog(StopShortcut)) return dialog.ShowDialog(TopLevelControl ?? this)==DialogResult.Yes;
     }
     void SaveProtected(string name, string value) {
         Directory.CreateDirectory(folder);
@@ -486,8 +510,12 @@ sealed class AssistantForm : Form {
     }
     async Task ReportStartFailure(string id,string connectionToken,long version,string note) {
         if(!CurrentOperation(id,connectionToken,version))return;
-        var result=await Request("tasks/"+id+"/control",new {action="handoff",startupFailure=true,note=note.Substring(0,Math.Min(300,note.Length))});
+        var payload=new Dictionary<string,object>{{"action","handoff"},{"startupFailure",true},{"note",note.Substring(0,Math.Min(300,note.Length))}};
+        if(nativeAttemptId.Length>0)payload["attemptId"]=nativeAttemptId;
+        var result=await Request("tasks/"+id+"/control",payload);
         if(!CurrentOperation(id,connectionToken,version))return;
+        // A failed claim which never reached the server performed no local action.
+        if(nativeAttemptId.Length>0 && S(result,"status")=="WAITING")autoAttemptedId="";
         state=S(result,"status");task=result;status.Text=TaskStage(result);startFailureNote="";ShowTaskControls();
         if(Changed!=null)Changed();
     }
@@ -507,15 +535,32 @@ sealed class AssistantForm : Form {
         if(!CurrentStart(id,connectionToken,version,grant)) throw new Exception("开始操作已取消，请核对任务后继续。");
     }
     async Task StartTask(bool automatic) {
-        if (captureBlocked) throw new Exception("窗口截取未响应，请重启本机助手后重试。");
+        if(!EngineReady && !isolatedPreview) throw new Exception(EngineError??"本机执行器尚未就绪。");
         if (working || (polling && !automatic) || changingAuthorization || allowing || task == null || !new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state)) throw new Exception("请等待当前状态更新后再试。");
         allowing=true;
         LocalPause(); long version=epoch;
         string id=taskId, grant=authorizationId, connectionToken=token;
         manualPauseSent=false;manualPausePending=false;manualPauseVersion=-1;manualPauseNote="";startFailureNote="";autoAttemptedId=id;
-        failureTaskId="";failureDiagnostic="";
+        failureTaskId="";failureDiagnostic="";nativeAttemptId="";
         Exception failure=null;
         try {
+        string nativeAction=NativeAction;
+        if(nativeAction.Length>0) {
+            if(BrowserOnly || grant.Length==0 || (nativeAction!="open_notepad" && nativeAction!="focus_notepad"))
+                throw new Exception("请先在本机确认记住操作授权，再继续记事本任务。");
+            if(state!="WAITING") {
+                var resumed=await Request("tasks/"+id+"/control",new {action="resume"});
+                CheckStart(id,connectionToken,version,grant);
+                if(S(resumed,"status")!="WAITING")throw new Exception("任务状态已变化，请核对后继续。");
+                // The server clears delivery on every resume. A real poll must
+                // receive this attempt before the client may claim or execute it.
+                task=resumed;state="WAITING";autoAttemptedId="";status.Text=TaskStage(resumed);
+                ShowTaskControls();return;
+            }
+            await RunNotepad(id,connectionToken,version,grant,nativeAction);
+            return;
+        }
+        if(captureBlocked)throw new Exception("窗口截取未响应，请重启本机助手后继续此任务。");
         bool browserOnly=BrowserOnly;
         if(browserOnly) {
             selected=automatic?Native.Windows(Handle).FirstOrDefault(w=>Native.LocalBrowserWindows.ContainsKey(w.Handle)):windows.SelectedItem as WindowChoice;
@@ -526,7 +571,7 @@ sealed class AssistantForm : Form {
         if (selected == null) throw new Exception("请先打开要操作的应用，再刷新并选择窗口。");
         Native.ValidateWindow(selected, false);
         Native.RefreshTitle(selected);
-        if(automatic) { status.Text="已收到电脑任务，即将按设备授权开始；Ctrl+Alt+X 可停止。"; await Task.Delay(1500); }
+        if(automatic) { status.Text="已收到电脑任务，即将按设备授权开始；"+StopShortcut+" 可停止。"; await Task.Delay(1500); }
         CheckStart(id,connectionToken,version,grant);
         var payload=new Dictionary<string,object>{{"action","allow"},{"window",selected.Title},{"application",selected.App},{"windowId",selected.Id}};
         if(grant.Length>0) payload["authorizationId"]=grant;
@@ -551,18 +596,38 @@ sealed class AssistantForm : Form {
             await ReportStartFailure(id,connectionToken,version,startFailureNote);
         }
     }
+    async Task RunNotepad(string id,string connectionToken,long version,string grant,string nativeAction) {
+        Action check=()=>CheckStart(id,connectionToken,version,grant);
+        nativeAttemptId=Guid.NewGuid().ToString();
+        var claim=await Request("tasks/"+id+"/control",new {action="start_native",authorizationId=grant,attemptId=nativeAttemptId});
+        check();
+        if(S(claim,"status")!="RUNNING")throw new Exception("任务状态或本机授权已变化，请核对后继续。");
+        task=claim;state="RUNNING";status.Text="正在定位系统记事本窗口。";
+        var target=notepadOverride!=null
+            ? await notepadOverride(nativeAction,check)
+            : await Native.FocusNotepad(Handle,nativeAction=="open_notepad",check,()=>{
+                string key="notepad-launch:"+id;
+                if(journal.ContainsKey(key))throw new Exception("本任务已尝试启动记事本。请打开其窗口后继续。");
+                Record(key,"requested");
+            });
+        check();
+        var result=await Request("tasks/"+id+"/control",new {action="complete_native",authorizationId=grant,attemptId=nativeAttemptId,windowId=target.Id,window=target.Title,application="notepad"});
+        check();
+        state=S(result,"status");task=result;status.Text=TaskStage(result);ShowTaskControls();
+        if(Changed!=null)Changed();
+    }
     async Task Poll() {
         if (polling || allowing || changingAuthorization || token.Length == 0 || closing) return;
         polling = true;
         string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
-            var result = await Request("poll", new { localBrowser=true });
+            var result = await Request("poll", new { localBrowser=true, nativeActions=true });
             if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
             if (task.Count == 0) { taskId = ""; state = ""; allow.Enabled = false; LocalPause(); if (!working) status.Text = "暂无进行中的电脑任务；结果可在网站查看。"; return; }
             string id = S(task,"id"); state = S(task,"status");
-            if (taskId != id) { LocalPause(); approvedId = ""; autoAttemptedId="";startFailureNote="";manualPauseSent=false;manualPausePending=false; if(BrowserOnly)RefreshWindows(); }
+            if (taskId != id) { LocalPause(); approvedId = ""; autoAttemptedId="";startFailureNote="";nativeAttemptId="";manualPauseSent=false;manualPausePending=false; if(BrowserOnly)RefreshWindows(); }
             taskId = id; instruction.Text = S(task,"instruction"); if(!manualPausePending || !new[]{"WAITING","RUNNING"}.Contains(state))status.Text = TaskStage(task);
             allow.Enabled = !captureBlocked && !working && new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state);
             if (state != "RUNNING" && armed) LocalPause();
@@ -571,7 +636,7 @@ sealed class AssistantForm : Form {
                 // Retry only the failure report after a network loss, never desktop input.
                 await ReportStartFailure(id,connectionToken,epoch,startFailureNote);return;
             }
-            if (authorizationId.Length>0 && state=="WAITING" && autoAttemptedId!=id && !working && !captureBlocked) {
+            if (authorizationId.Length>0 && state=="WAITING" && autoAttemptedId!=id && !working) {
                 autoAttemptedId=id;
                 await StartTask(true);
                 return;
@@ -689,7 +754,7 @@ sealed class AssistantForm : Form {
                 System.Threading.SynchronizationContext.SetSynchronizationContext(null);
                 Action seed=()=>{form.token=new string('a',64);form.owner="Isolated self-test";form.deviceId=Guid.NewGuid().ToString();form.authorizationId=Guid.NewGuid().ToString();};
                 seed(); string grant=form.authorizationId;
-                fake.Reply=req=>{if(!req.RequestUri.AbsolutePath.EndsWith("/poll"))throw new Exception("Status must only poll");return TestResponse(200,"{\"data\":{\"authorizationId\":\""+grant+"\",\"task\":{\"status\":\"WAITING\"}}}");};
+                fake.Reply=req=>{var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));if(!req.RequestUri.AbsolutePath.EndsWith("/poll")||!Object.Equals(body["statusOnly"],true)||body.ContainsKey("localBrowser"))throw new Exception("Status refresh advertised a working engine");return TestResponse(200,"{\"data\":{\"authorizationId\":\""+grant+"\",\"task\":{\"status\":\"WAITING\"}}}");};
                 form.RefreshStatus().GetAwaiter().GetResult();
                 if(!form.Connected||!form.Authorized||form.taskId.Length>0||form.armed)throw new Exception("Status changed valid authorization or started execution");
                 foreach(int code in new[]{401,403}) {
@@ -741,6 +806,48 @@ sealed class AssistantForm : Form {
                 newTask();string newerTask=Guid.NewGuid().ToString();form.startWindowOverride=()=>{form.taskId=newerTask;return null;};
                 form.StartTask(true).GetAwaiter().GetResult();
                 if(calls!=0||form.taskId!=newerTask)throw new Exception("Old startup reported against a new task");
+                foreach(string nativeAction in new[]{"focus_notepad","open_notepad"}) {
+                    newTask();form.task["nativeAction"]=nativeAction;
+                    var events=new List<string>();string attempt=null;
+                    var target=new WindowChoice{Title="Notepad test",App="notepad"};
+                    form.notepadOverride=(operation,check)=>{
+                        check();if(operation!=nativeAction)throw new Exception("Focus changed to launch");
+                        events.Add("verified_foreground");return Task.FromResult(target);
+                    };
+                    fake.Reply=req=>{
+                        var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));
+                        string action=S(body,"action");events.Add(action);
+                        if(!req.RequestUri.AbsolutePath.EndsWith("/tasks/"+form.taskId+"/control")||S(body,"authorizationId")!=form.authorizationId)throw new Exception("Native operation left the authorized device task");
+                        if(action=="start_native") { attempt=S(body,"attemptId");Guid parsed;if(!Guid.TryParse(attempt,out parsed))throw new Exception("Missing native claim ID"); }
+                        else if(action!="complete_native"||S(body,"attemptId")!=attempt||S(body,"windowId")!=target.Id||S(body,"application")!="notepad")throw new Exception("No confirmed notepad");
+                        return TestResponse(200,form.json.Serialize(new{data=new{id=form.taskId,nativeAction,status=action=="start_native"?"RUNNING":"DONE"}}));
+                    };
+                    form.StartTask(true).GetAwaiter().GetResult();
+                    if(form.state!="DONE"||form.armed||!events.SequenceEqual(new[]{"start_native","verified_foreground","complete_native"}))throw new Exception("Notepad task bypassed claim, verification or completion");
+                }
+                newTask();form.task["nativeAction"]="focus_notepad";calls=0;
+                form.notepadOverride=(operation,check)=>{throw new Exception("No eligible Notepad");};
+                fake.Reply=req=>{
+                    var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));calls++;
+                    if(calls==2 && (S(body,"action")!="handoff"||S(body,"attemptId")!=form.nativeAttemptId||S(body,"note")!="No eligible Notepad"))throw new Exception("Missing native handoff");
+                    return TestResponse(200,form.json.Serialize(new{data=new{status=calls==1?"RUNNING":"NEEDS_USER"}}));
+                };
+                form.StartTask(true).GetAwaiter().GetResult();
+                if(calls!=2||form.state!="NEEDS_USER")throw new Exception("Missing Notepad reported success");
+                newTask();form.task["nativeAction"]="open_notepad";calls=0;
+                form.notepadOverride=(operation,check)=>{form.LocalPause();check();throw new Exception("Native action continued after takeover");};
+                fake.Reply=req=>{calls++;return TestResponse(200,"{\"data\":{\"status\":\"RUNNING\"}}");};
+                form.StartTask(true).GetAwaiter().GetResult();
+                if(calls!=1||form.armed)throw new Exception("Interrupted native operation posted completion");
+                newTask();form.task["nativeAction"]="open_notepad";form.authorizationId="";calls=0;starts=0;
+                form.notepadOverride=(operation,check)=>{starts++;return Task.FromResult(new WindowChoice());};
+                fake.Reply=req=>{calls++;var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));if(S(body,"action")!="handoff"||body.ContainsKey("attemptId"))throw new Exception("Unapproved Notepad claim attempted");return TestResponse(200,"{\"data\":{\"status\":\"NEEDS_USER\"}}");};
+                form.StartTask(true).GetAwaiter().GetResult();
+                if(calls!=1||starts!=0)throw new Exception("Unapproved native execution");
+                newTask();form.task["nativeAction"]="focus_notepad";form.state="NEEDS_USER";calls=0;
+                fake.Reply=req=>{calls++;var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));if(S(body,"action")!="resume")throw new Exception("A resumed task must be polled before claiming");return TestResponse(200,"{\"data\":{\"status\":\"WAITING\",\"nativeAction\":\"focus_notepad\"}}");};
+                form.StartTask(true).GetAwaiter().GetResult();
+                if(calls!=1||form.state!="WAITING"||form.autoAttemptedId.Length!=0)throw new Exception("Resume failed to wait for delivery");
                 newTask();starts=0;int reports=0;form.startWindowOverride=()=>{starts++;return null;};
                 fake.Reply=req=>{reports++;throw new HttpRequestException("failure report offline");};
                 try{form.StartTask(true).GetAwaiter().GetResult();}catch(HttpRequestException){}
@@ -804,7 +911,7 @@ sealed class AssistantForm : Form {
                 form.advancedPanel.Visible=true;foreach(Control child in form.Controls[0].Controls)if(child is Button && child.Text=="高级设置 ▸")child.Text="收起高级设置 ▾";form.Height=850;draw(form,"desktop-advanced.png");
                 form.authorizationId=Guid.NewGuid().ToString();form.token=new string('a',64);form.owner="隔离预览";form.task=new Dictionary<string,object>();form.state="PAUSED";form.status.Text="任务已暂停，核对窗口后可直接继续。";form.advancedPanel.Visible=false;foreach(Control child in form.Controls[0].Controls)if(child is Button && child.Text=="收起高级设置 ▾")child.Text="高级设置 ▸";form.Height=590;form.ShowConnection();draw(form,"desktop-paused.png");
             }
-            using(var dialog=AuthorizationDialog()) draw(dialog,"desktop-consent.png");
+            using(var dialog=AuthorizationDialog("Ctrl+Alt+X")) draw(dialog,"desktop-consent.png");
             Console.WriteLine("Desktop isolated UI previews saved; no engine or connection loaded.");return 0;
         } catch(Exception ex){Console.WriteLine(ex.Message);return 1;}
     }
@@ -836,7 +943,12 @@ static class Native {
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern bool ShowWindowAsync(IntPtr h,int command);
     [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h,StringBuilder text,int max);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h,StringBuilder text,int max);
+    [DllImport("user32.dll")] static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
+    [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformation(IntPtr handle,int index,StringBuilder value,int bytes,out int needed);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
@@ -855,16 +967,31 @@ static class Native {
     static readonly Regex Sensitive = new Regex("密码|验证码|密钥|授权码|付款|支付|删除|发送|转账|下单|安装|登录|password|passcode|api.?key|secret|credential|sign.?in|log.?in|payment|purchase|delete|send|checkout|install",RegexOptions.IgnoreCase);
     static string Title(IntPtr h) { var b=new StringBuilder(1024); GetWindowText(h,b,b.Capacity); return b.ToString(); }
     static string Cut(string s,int n) { return s.Length>n?s.Substring(0,n):s; }
-    public static IEnumerable<WindowChoice> Windows(IntPtr own) {
+    static bool IsSystemNotepad(string path) {
+        if(String.IsNullOrEmpty(path))return false;
+        string windows=Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        if(new[]{Path.Combine(Environment.SystemDirectory,"notepad.exe"),Path.Combine(windows,"notepad.exe"),Path.Combine(windows,"SysWOW64","notepad.exe")}.Contains(path,StringComparer.OrdinalIgnoreCase)) return true;
+        string packages=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"WindowsApps")+Path.DirectorySeparatorChar;
+        return path.StartsWith(packages,StringComparison.OrdinalIgnoreCase)
+            && Regex.IsMatch(path.Substring(packages.Length),@"^Microsoft\.WindowsNotepad_[0-9.]+_(?:x64|x86|arm64|neutral)__8wekyb3d8bbwe\\(?:Notepad\\)?Notepad\.exe$",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
+    }
+    static bool IsNotepadWindow(IntPtr h,Process process) {
+        if(!String.Equals(process.ProcessName,"notepad",StringComparison.OrdinalIgnoreCase))return false;
+        var name=new StringBuilder(128);
+        return GetClassName(h,name,name.Capacity)>0 && String.Equals(name.ToString(),"Notepad",StringComparison.OrdinalIgnoreCase)
+            && IsSystemNotepad(process.MainModule.FileName);
+    }
+    public static IEnumerable<WindowChoice> Windows(IntPtr own,bool notepadOnly=false) {
         var result=new List<WindowChoice>();
         EnumWindows((h,p)=>{
-            try { if(h==own||!IsWindowVisible(h)||IsIconic(h))return true;
+            try { bool minimized=IsIconic(h);if(h==own||!IsWindowVisible(h)||(!notepadOnly&&minimized))return true;
                 string title=Title(h); if(String.IsNullOrWhiteSpace(title))return true;
-                RECT rect; if(!GetWindowRect(h,out rect)||rect.Right-rect.Left<100||rect.Bottom-rect.Top<100)return true;
-                uint pid; GetWindowThreadProcessId(h,out pid); var process=Process.GetProcessById((int)pid);
+                RECT rect; if(!minimized&&(!GetWindowRect(h,out rect)||rect.Right-rect.Left<100||rect.Bottom-rect.Top<100))return true;
+                uint pid; GetWindowThreadProcessId(h,out pid); using(var process=Process.GetProcessById((int)pid)) {
+                if(notepadOnly && !IsNotepadWindow(h,process))return true;
                 if(BlockedApps.Contains(process.ProcessName)||(pid==Process.GetCurrentProcess().Id&&!BrowserWindows.ContainsKey(h)))return true;
                 var choice=new WindowChoice{Handle=h,Title=Cut(title,200).Trim(),App=Cut(process.ProcessName,80).Trim(),Pid=(int)pid,Started=process.StartTime.ToUniversalTime().Ticks};
-                ValidateWindow(choice,false); result.Add(choice);
+                ValidateWindow(choice,false,notepadOnly); result.Add(choice); }
             } catch { } return true;
         },IntPtr.Zero);
         return result;
@@ -873,6 +1000,43 @@ static class Native {
     public static WindowChoice InitialWindow(IEnumerable<WindowChoice> candidates) {
         var list=candidates.ToList();
         return list.FirstOrDefault(w=>w.Handle==GetForegroundWindow()) ?? list.FirstOrDefault();
+    }
+    static void CheckInputDesktop() {
+        IntPtr desktop=OpenInputDesktop(0,false,1); // DESKTOP_READOBJECTS
+        try {
+            var name=new StringBuilder(128); int needed;
+            if(desktop==IntPtr.Zero || !GetUserObjectInformation(desktop,2,name,name.Capacity*2,out needed) || !String.Equals(name.ToString(),"Default",StringComparison.OrdinalIgnoreCase))
+                throw new Exception("请解锁电脑并返回普通 Windows 桌面，再继续记事本任务。");
+        } finally { if(desktop!=IntPtr.Zero)CloseDesktop(desktop); }
+    }
+    public static async Task<WindowChoice> FocusNotepad(IntPtr own,bool open,Action check,Action beforeLaunch) {
+        check();CheckInputDesktop();
+        Func<WindowChoice> find=()=>InitialWindow(Windows(own,true).OrderBy(w=>IsIconic(w.Handle)));
+        var target=find();
+        if(target==null) {
+            if(!open)throw new Exception("没有找到已打开的系统记事本。请先打开记事本，再继续此任务。");
+            check();beforeLaunch();
+            // No user-supplied executable, arguments, file, or shell association.
+            using(Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"notepad.exe")){UseShellExecute=false})) {}
+            for(int i=0;i<40 && target==null;i++) {
+                await Task.Delay(200);check();CheckInputDesktop();target=find();
+            }
+            if(target==null)throw new Exception("已请求启动记事本，尚未找到可操作窗口。请查看记事本后继续。");
+        }
+        check();ValidateWindow(target,false,true);
+        if(IsIconic(target.Handle)) {
+            ShowWindowAsync(target.Handle,9); // SW_RESTORE
+            for(int i=0;i<10 && IsIconic(target.Handle);i++) { await Task.Delay(100);check(); }
+        }
+        check();CheckInputDesktop();ValidateWindow(target,false);
+        if(GetForegroundWindow()!=target.Handle)SetForegroundWindow(target.Handle);
+        for(int i=0;i<10 && GetForegroundWindow()!=target.Handle;i++) {
+            await Task.Delay(100);check();
+        }
+        check();CheckInputDesktop();
+        if(GetForegroundWindow()!=target.Handle)throw new Exception("Windows 未将记事本切换到前台。请点击任务栏中的记事本，再继续当前任务。");
+        ValidateWindow(target,true);RefreshTitle(target);
+        return target;
     }
     public static List<WindowChoice> ObservationWindows(IntPtr own,WindowChoice current) {
         var list=new List<WindowChoice>{current};
@@ -884,8 +1048,8 @@ static class Native {
         if(matches.Count!=1) throw new Exception("切换目标不在本次可用窗口中，请核对后继续。");
         return matches[0];
     }
-    public static void ValidateWindow(WindowChoice w,bool foreground) {
-        if(w==null||!IsWindow(w.Handle)||!IsWindowVisible(w.Handle)||IsIconic(w.Handle))throw new Exception("窗口已关闭或最小化，请重新选择");
+    public static void ValidateWindow(WindowChoice w,bool foreground,bool allowMinimized=false) {
+        if(w==null||!IsWindow(w.Handle)||!IsWindowVisible(w.Handle)||(!allowMinimized && IsIconic(w.Handle)))throw new Exception("窗口已关闭或最小化，请重新选择");
         uint pid; GetWindowThreadProcessId(w.Handle,out pid); var process=Process.GetProcessById((int)pid);
         if(pid!=w.Pid||process.StartTime.ToUniversalTime().Ticks!=w.Started||BlockedApps.Contains(process.ProcessName))throw new Exception("窗口应用已变化，请重新选择");
         if(pid==Process.GetCurrentProcess().Id&&!BrowserWindows.ContainsKey(w.Handle))throw new Exception("不能操作小序自身的控制界面");
@@ -996,6 +1160,31 @@ static class Native {
             }
         }
     }
+    // A message-only top-level window owns the global shortcut for its full
+    // lifetime, independent of the embedded task panel's HWND and visibility.
+    public sealed class StopKey : NativeWindow,IDisposable {
+        const int Id=1;
+        readonly Action stop;
+        public readonly string Shortcut;
+        public StopKey(Action stop) {
+            this.stop=stop;
+            CreateHandle(new CreateParams{Parent=new IntPtr(-3),Caption="XutiDesktopStop"});
+            try { Shortcut=SelectShortcut(modifiers=>RegisterHotKey(Handle,Id,modifiers,0x58)); }
+            catch { DestroyHandle();throw; }
+        }
+        public static string SelectShortcut(Func<uint,bool> register) {
+            if(register(3))return "Ctrl+Alt+X";
+            if(register(7))return "Ctrl+Alt+Shift+X";
+            throw new Exception("两个停止快捷键均被占用。请释放 Ctrl+Alt+X 或 Ctrl+Alt+Shift+X，客户端将自动恢复接单。");
+        }
+        protected override void WndProc(ref Message message) {
+            if(message.Msg==0x312 && message.WParam.ToInt32()==Id)stop();
+            base.WndProc(ref message);
+        }
+        public void Dispose() {
+            if(Handle!=IntPtr.Zero) { UnregisterHotKey(Handle,Id);DestroyHandle(); }
+        }
+    }
     public sealed class Hook : IDisposable {
         readonly HookProc mouseProc,keyProc;readonly IntPtr mouse,key;
         public Hook(Action<string> pause) {
@@ -1018,6 +1207,11 @@ static class Native {
     }
     public static int SelfTest() {
         try {
+            var modifiers=new List<uint>();
+            if(StopKey.SelectShortcut(m=>{modifiers.Add(m);return m==7;})!="Ctrl+Alt+Shift+X"||!modifiers.SequenceEqual(new uint[]{3,7}))throw new Exception("Occupied shortcut did not select the registered fallback");
+            if(StopKey.SelectShortcut(m=>m==3)!="Ctrl+Alt+X")throw new Exception("Primary stop shortcut mismatch");
+            bool blocked=false;try{StopKey.SelectShortcut(m=>false);}catch{blocked=true;}if(!blocked)throw new Exception("Executor started without a stop shortcut");
+            if(!IsSystemNotepad(Path.Combine(Environment.SystemDirectory,"notepad.exe"))||IsSystemNotepad(Path.Combine(Path.GetTempPath(),"notepad.exe")))throw new Exception("Notepad identity check failed");
             foreach(int message in new[]{0x0200,0x0202,0x0205,0x0208,0x020C})if(MouseInputReason(message,0)!=null)throw new Exception("Mouse movement/release incorrectly took over");
             foreach(int message in new[]{0x0201,0x0204,0x0207,0x020B,0x020A,0x020E}) {
                 if(MouseInputReason(message,0)==null)throw new Exception("Physical mouse press/wheel was ignored");

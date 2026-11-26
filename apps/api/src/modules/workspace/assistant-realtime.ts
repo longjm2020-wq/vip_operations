@@ -418,12 +418,18 @@ export async function startRealtime(c: Context, input: unknown) {
   if (desktopDeviceId) {
     const device = await one(
       db,
-      "SELECT id FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds'",
+      "SELECT id,native_actions,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds'",
       desktopDeviceId,
       c.actor.id,
     );
     if (!device)
       fail("DEVICE_OFFLINE", "请先连接所选电脑，再开始实时语音", 409);
+    if (device.native_actions !== null && !device.engine_ready)
+      fail(
+        "DEVICE_ENGINE_UNAVAILABLE",
+        "所选电脑已连接，但桌面端暂未接收任务。请先在本机打开「电脑任务」查看原因",
+        409,
+      );
     const model = await resolveAgentModel(b.model, "assistant_desktop");
     if (!model.vision)
       fail("VISION_REQUIRED", "操作电脑需要选择支持看图的助理能力", 400);

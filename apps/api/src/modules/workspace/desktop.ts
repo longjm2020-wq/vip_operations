@@ -8,6 +8,7 @@ import {
   one,
   rows,
   type Row,
+  type Tx,
 } from "../../../../../packages/database/src/index.js";
 import {
   desktopActionSchema,
@@ -25,6 +26,45 @@ import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 
 const active = ["WAITING", "RUNNING", "PAUSED", "NEEDS_USER"];
+const engineUnavailable =
+  "电脑已连接，但桌面端暂未接收任务。请在该电脑打开「电脑任务」查看原因，恢复后重试。";
+
+function notepadAction(instruction: string): DesktopTask["nativeAction"] {
+  const command = instruction
+    .normalize("NFKC")
+    .trim()
+    .replace(/^(?:小序[,、 ]*)?(?:请(?:你)?|帮我|麻烦你)?\s*/u, "")
+    .replace(
+      /^(?:(?:在|使用|用)\s*)?(?:我的电脑|本机|这台电脑|(?:小序)?桌面端|XUTI\s+DESKTOP)(?:上|中|里)?\s*[,、:]?\s*/iu,
+      "",
+    )
+    .replace(/[。.!！]\s*$/u, "")
+    .trim();
+  if (/^(?:打开|启动)\s*(?:记事本|Notepad)(?:窗口)?$/iu.test(command))
+    return "open_notepad";
+  if (
+    /^切换(?:到|至)\s*(?:已(?:经)?打开的)?\s*(?:记事本|Notepad)(?:窗口)?$/iu.test(
+      command,
+    )
+  )
+    return "focus_notepad";
+}
+
+// A client returning after an interruption must not silently run old instructions.
+// Once delivered, a manual task may legitimately wait for local approval while connected.
+async function expireWaiting(
+  dbClient: Pick<Tx, "$executeRawUnsafe">,
+  userId: string,
+  deviceId?: string,
+) {
+  await dbClient.$executeRawUnsafe(
+    `UPDATE assistant_desktop_tasks SET status='NEEDS_USER',stage='本机未及时接单，请恢复电脑任务连接后点击「继续当前任务」',updated_at=now()
+     WHERE user_id=$1::bigint AND ($2::uuid IS NULL OR device_id=$2::uuid) AND status='WAITING'
+       AND coalesce(delivered_at,updated_at)<now()-interval '30 seconds'`,
+    userId,
+    deviceId || null,
+  );
+}
 type DesktopDiagnostic = {
   code: string;
   message: string;
@@ -219,10 +259,16 @@ export function desktopTaskView(row: Row): DesktopTask {
     deviceName: row.device_name,
     instruction: row.instruction,
     status: row.status,
-    stage: assistantPublicText(row.stage),
+    stage:
+      row.status === "WAITING" && row.delivered_at
+        ? row.stage.startsWith("请")
+          ? "桌面端已请求此任务。" + assistantPublicText(row.stage)
+          : "桌面端已请求此任务，等待本机开始执行"
+        : assistantPublicText(row.stage),
     step: row.step,
     window: row.window_name,
     scope: row.authorization_id && !row.browser_only ? "device" : "window",
+    ...(row.native_action ? { nativeAction: row.native_action } : {}),
     ...(row.browser_only ? { localBrowser: true } : {}),
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
@@ -230,10 +276,11 @@ export function desktopTaskView(row: Row): DesktopTask {
 }
 export async function desktopState(c: Context) {
   requireAssistant(c);
+  await expireWaiting(db, c.actor.id);
   const [devices, tasks] = await Promise.all([
     rows(
       db,
-      "SELECT id,name,last_seen_at,expires_at,authorization_id,purpose,assistant_default FROM assistant_desktop_devices WHERE user_id=$1::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC",
+      "SELECT id,name,last_seen_at,expires_at,authorization_id,purpose,assistant_default,native_actions,coalesce(engine_seen_at>now()-interval '20 seconds',false) AS engine_ready FROM assistant_desktop_devices WHERE user_id=$1::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC",
       c.actor.id,
     ),
     rows(
@@ -253,6 +300,7 @@ export async function desktopState(c: Context) {
         !!d.last_seen_at &&
         Date.now() - new Date(d.last_seen_at).getTime() < 20000,
       lastSeenAt: d.last_seen_at,
+      ...(d.native_actions !== null ? { engineReady: !!d.engine_ready } : {}),
       expiresAt: d.expires_at,
       crossWindowAuthorized: !!d.authorization_id,
       purpose: d.purpose,
@@ -366,6 +414,7 @@ export async function pairDesktop(input: unknown) {
 export async function desktopIdentity(
   authorization: string | undefined,
   origin: string | undefined,
+  recordSeen = true,
 ) {
   // Device credentials are never browser credentials and never accepted from browser origins.
   if (origin || !/^Bearer [a-f0-9]{64}$/.test(authorization || ""))
@@ -379,10 +428,11 @@ export async function desktopIdentity(
   const actor = await actorForSessionHash(d.session_hash);
   const c = { actor, requestId: randomUUID() };
   requireAssistant(c);
-  await db.$executeRawUnsafe(
-    "UPDATE assistant_desktop_devices SET last_seen_at=now() WHERE id=$1::uuid",
-    d.id,
-  );
+  if (recordSeen)
+    await db.$executeRawUnsafe(
+      "UPDATE assistant_desktop_devices SET last_seen_at=now() WHERE id=$1::uuid",
+      d.id,
+    );
   return { c, deviceId: String(d.id) };
 }
 export async function revokeDesktop(c: Context, id: string) {
@@ -439,8 +489,29 @@ export async function setDesktopAuthorization(
 export async function queueDesktopTask(c: Context, input: unknown) {
   requireAssistant(c);
   const b = parse(desktopTaskSchema, input);
-  const model = await resolveAgentModel(b.model, "assistant_desktop");
-  if (!model.vision)
+  const requestedAction = !b.localBrowser
+    ? notepadAction(b.instruction)
+    : undefined;
+  // A previously issued request retains its original execution mode on retry.
+  const capability =
+    requestedAction &&
+    (await one(
+      db,
+      `SELECT d.authorization_id,CASE WHEN t.id IS NOT NULL THEN t.native_action IS NOT NULL
+       ELSE $4::text IS NULL AND d.native_actions AND d.authorization_id IS NOT NULL END AS use_native
+     FROM assistant_desktop_devices d LEFT JOIN assistant_desktop_tasks t
+       ON t.device_id=d.id AND t.user_id=d.user_id AND t.request_id=$3::uuid
+     WHERE d.id=$1::uuid AND d.user_id=$2::bigint`,
+      b.deviceId,
+      c.actor.id,
+      b.requestId,
+      b.model ?? null,
+    ));
+  const nativeAction = capability?.use_native ? requestedAction : undefined;
+  const model = nativeAction
+    ? null
+    : await resolveAgentModel(b.model, "assistant_desktop");
+  if (model && !model.vision)
     fail("VISION_REQUIRED", "操作电脑需要选择支持看图的助理能力", 400);
   return db.$transaction(async (tx) => {
     // Serialize this account's submissions so retries cannot create a second task.
@@ -459,7 +530,9 @@ export async function queueDesktopTask(c: Context, input: unknown) {
       if (
         existing.device_id !== b.deviceId ||
         existing.instruction !== b.instruction ||
-        existing.model_ref !== model.id ||
+        (existing.native_action
+          ? b.model !== undefined && existing.model_ref !== b.model
+          : existing.model_ref !== (model?.id ?? null)) ||
         existing.browser_only !== !!b.localBrowser
       )
         fail("REQUEST_CONFLICT", "任务标识已被其他请求使用", 409);
@@ -467,11 +540,22 @@ export async function queueDesktopTask(c: Context, input: unknown) {
     }
     const d = await one(
       tx,
-      "SELECT id,authorization_id,local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds' FOR UPDATE",
+      "SELECT id,authorization_id,native_actions,engine_seen_at>now()-interval '20 seconds' AS engine_ready,local_browser_seen_at>now()-interval '20 seconds' AS local_browser_available FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() AND last_seen_at>now()-interval '20 seconds' FOR UPDATE",
       b.deviceId,
       c.actor.id,
     );
     if (!d) fail("DEVICE_OFFLINE", "请先打开本机助手并连接电脑", 409);
+    if (d.native_actions !== null && !d.engine_ready)
+      fail("DEVICE_ENGINE_UNAVAILABLE", engineUnavailable, 409);
+    if (
+      nativeAction &&
+      (!d.native_actions || d.authorization_id !== capability?.authorization_id)
+    )
+      fail(
+        "AUTHORIZATION_CHANGED",
+        "本机连接或授权已变化，请核对后重新发送",
+        409,
+      );
     if (b.localBrowser && !d.local_browser_available)
       fail(
         "LOCAL_BROWSER_UNAVAILABLE",
@@ -489,13 +573,13 @@ export async function queueDesktopTask(c: Context, input: unknown) {
       fail("DESKTOP_BUSY", "这台电脑已有任务，请完成或停止后再发送", 409);
     const row = await one(
       tx,
-      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8) RETURNING *",
+      "INSERT INTO assistant_desktop_tasks(id,device_id,user_id,request_id,instruction,model_ref,stage,browser_only,native_action,authorization_id) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,$7,$8,$9,$10::uuid) RETURNING *",
       randomUUID(),
       b.deviceId,
       c.actor.id,
       b.requestId,
       b.instruction,
-      model.id,
+      model?.id ?? null,
       b.localBrowser
         ? d.authorization_id
           ? "等待小序桌面端按授权操作已打开的网页"
@@ -504,10 +588,74 @@ export async function queueDesktopTask(c: Context, input: unknown) {
           ? "等待本机按设备授权开始"
           : "请在本机助手选择窗口并允许本次任务",
       !!b.localBrowser,
+      nativeAction ?? null,
+      nativeAction ? d.authorization_id : null,
     );
     return desktopTaskView(row!);
   });
 }
+const nativeControlSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.literal("start_native"),
+      authorizationId: z.string().uuid(),
+      attemptId: z.string().uuid(),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("complete_native"),
+      authorizationId: z.string().uuid(),
+      attemptId: z.string().uuid(),
+      window: z.string().trim().min(1).max(200),
+      windowId: z.string().uuid(),
+      application: z.literal("notepad"),
+    })
+    .strict(),
+]);
+
+async function controlNotepad(
+  c: Context,
+  taskId: string,
+  input: unknown,
+  deviceId?: string,
+) {
+  if (!deviceId) fail("FORBIDDEN", "此操作需要本机桌面端确认", 403);
+  const b = parse(nativeControlSchema, input);
+  const start = b.action === "start_native";
+  const result = await one(
+    db,
+    `UPDATE assistant_desktop_tasks t SET
+       status=$6,stage=CASE WHEN $6='RUNNING' THEN '本机正在操作记事本' ELSE '已核验记事本窗口在前台' END,
+       started_at=CASE WHEN $6='RUNNING' THEN now() ELSE started_at END,
+       updated_at=now(), planning_id=CASE WHEN $6='RUNNING' THEN $5::uuid ELSE NULL END,
+       step=CASE WHEN $6='DONE' THEN step+1 ELSE step END,
+       window_id=coalesce($7::uuid,window_id),window_name=coalesce($8::text,window_name),
+       application=CASE WHEN $6='DONE' THEN 'notepad' ELSE application END
+     FROM assistant_desktop_devices d WHERE t.id=$1::uuid AND t.device_id=$2::uuid AND t.user_id=$3::bigint
+       AND d.id=t.device_id AND d.user_id=t.user_id AND d.token_hash IS NOT NULL AND d.revoked_at IS NULL AND d.expires_at>now()
+       AND t.native_action IN ('open_notepad','focus_notepad') AND NOT t.browser_only
+       AND t.authorization_id=$4::uuid AND d.authorization_id=$4::uuid
+       AND (($6='RUNNING' AND t.status='WAITING' AND t.delivered_at>now()-interval '30 seconds' AND d.native_actions AND d.engine_seen_at>now()-interval '20 seconds')
+         OR ($6='DONE' AND t.status='RUNNING' AND t.planning_id=$5::uuid)) RETURNING t.*`,
+    taskId,
+    deviceId,
+    c.actor.id,
+    b.authorizationId,
+    b.attemptId,
+    start ? "RUNNING" : "DONE",
+    b.action === "complete_native" ? b.windowId : null,
+    b.action === "complete_native" ? b.window : null,
+  );
+  if (!result)
+    fail(
+      "NATIVE_TASK_CHANGED",
+      "任务状态、本机接单或授权已变化，请核对任务后继续",
+      409,
+    );
+  return desktopTaskView(result!);
+}
+
 export async function desktopControl(
   c: Context,
   taskId: string,
@@ -516,6 +664,13 @@ export async function desktopControl(
 ) {
   requireAssistant(c);
   parse(z.string().uuid(), taskId);
+  if (
+    input &&
+    typeof input === "object" &&
+    "action" in input &&
+    (input.action === "start_native" || input.action === "complete_native")
+  )
+    return controlNotepad(c, taskId, input, deviceId);
   const b = parse(
     z
       .object({
@@ -526,6 +681,7 @@ export async function desktopControl(
         localBrowser: z.literal(true).optional(),
         authorizationId: z.string().uuid().optional(),
         startupFailure: z.literal(true).optional(),
+        attemptId: z.string().uuid().optional(),
         note: z.string().max(300).optional(),
       })
       .strict(),
@@ -541,10 +697,14 @@ export async function desktopControl(
     fail("NOT_FOUND", "任务不存在", 404);
   if (b.startupFailure && (!deviceId || b.action !== "handoff"))
     fail("FORBIDDEN", "启动失败只能由本机助手上报", 403);
+  if (b.attemptId && (!b.startupFailure || !old.native_action))
+    fail("FORBIDDEN", "只有本机记事本任务可上报执行尝试", 403);
   // A late startup report must preserve a user's pause or an already settled task.
   if (b.startupFailure && !["WAITING", "RUNNING"].includes(old.status))
     return desktopTaskView(old);
   if (!active.includes(old.status)) return desktopTaskView(old);
+  if (old.native_action && b.action === "allow")
+    fail("FORBIDDEN", "此任务需要支持记事本操作的本机桌面端和设备授权", 403);
   if (
     !deviceId &&
     (b.action === "allow" ||
@@ -582,14 +742,71 @@ export async function desktopControl(
     handoff: "NEEDS_USER",
   }[b.action];
   const resumeDevice =
-    b.action === "resume" && !old.browser_only
+    b.action === "resume"
       ? await one(
           db,
-          "SELECT authorization_id FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
+          "SELECT authorization_id,native_actions,last_seen_at>now()-interval '20 seconds' AS online,engine_seen_at>now()-interval '20 seconds' AS engine_ready FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
           old.device_id,
           c.actor.id,
         )
       : undefined;
+  if (b.action === "resume") {
+    if (!resumeDevice?.online)
+      fail("DEVICE_OFFLINE", "请先恢复所选电脑的连接", 409);
+    if (resumeDevice.native_actions !== null && !resumeDevice.engine_ready)
+      fail("DEVICE_ENGINE_UNAVAILABLE", engineUnavailable, 409);
+    if (
+      old.native_action &&
+      (!resumeDevice.native_actions || !resumeDevice.authorization_id)
+    )
+      fail(
+        "AUTHORIZATION_CHANGED",
+        "请在本机打开最新版桌面端并记住操作授权，再继续记事本任务",
+        409,
+      );
+    // An explicit continue may upgrade an old, never-started task. A previous
+    // input, approval or planning attempt must retain its original workflow.
+    const upgrade =
+      !old.native_action &&
+      !old.browser_only &&
+      old.step === 0 &&
+      !old.started_at &&
+      !old.window_id &&
+      !old.pending &&
+      !old.planning_at &&
+      !old.planning_id &&
+      !old.last_ack &&
+      !old.history?.length &&
+      resumeDevice.native_actions &&
+      resumeDevice.authorization_id &&
+      notepadAction(old.instruction);
+    if (upgrade) {
+      const upgraded = await one(
+        db,
+        `UPDATE assistant_desktop_tasks t SET native_action=$4,authorization_id=$5::uuid,
+           status='WAITING',stage='等待本机按设备授权继续',delivered_at=NULL,updated_at=now()
+         FROM assistant_desktop_devices d WHERE t.id=$1::uuid AND t.user_id=$2::bigint AND t.status=$3
+           AND t.native_action IS NULL AND NOT t.browser_only AND t.step=0 AND t.started_at IS NULL
+           AND t.window_id IS NULL AND t.pending IS NULL AND t.planning_at IS NULL AND t.planning_id IS NULL
+           AND t.last_ack IS NULL AND t.history='[]'::jsonb
+           AND d.id=t.device_id AND d.user_id=t.user_id AND d.authorization_id=$5::uuid AND d.native_actions
+           AND d.token_hash IS NOT NULL AND d.revoked_at IS NULL AND d.expires_at>now()
+           AND d.engine_seen_at>now()-interval '20 seconds' RETURNING t.*`,
+        taskId,
+        c.actor.id,
+        old.status,
+        upgrade,
+        resumeDevice.authorization_id,
+      );
+      if (!upgraded)
+        fail(
+          "NATIVE_TASK_CHANGED",
+          "任务、本机连接或授权已变化，请核对后继续",
+          409,
+        );
+      return desktopTaskView(upgraded!);
+    }
+  }
   const stage =
     b.note ||
     {
@@ -610,7 +827,7 @@ export async function desktopControl(
   // Resuming discards an unexecuted pending command. Local executor never replays uncertain inputs.
   const row = await one(
     db,
-    "UPDATE assistant_desktop_tasks SET status=$3,stage=$4,planning_id=NULL,pending=NULL,window_name=COALESCE($5,window_name),application=COALESCE($6,application),window_id=CASE WHEN $3='RUNNING' THEN $8::uuid ELSE window_id END,authorization_id=CASE WHEN $3='RUNNING' THEN $9::uuid ELSE authorization_id END,started_at=CASE WHEN $3='RUNNING' THEN now() ELSE started_at END,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND status=$7 AND ($3<>'RUNNING' OR EXISTS(SELECT 1 FROM assistant_desktop_devices d WHERE d.id=device_id AND d.revoked_at IS NULL AND d.token_hash IS NOT NULL AND d.expires_at>now() AND ($9::uuid IS NULL OR d.authorization_id=$9::uuid) AND (NOT browser_only OR d.local_browser_seen_at>now()-interval '20 seconds'))) RETURNING *",
+    "UPDATE assistant_desktop_tasks SET status=$3,stage=$4,planning_id=NULL,pending=NULL,window_name=COALESCE($5,window_name),application=COALESCE($6,application),window_id=CASE WHEN $3='RUNNING' THEN $8::uuid ELSE window_id END,authorization_id=CASE WHEN $3='RUNNING' OR ($3='WAITING' AND native_action IS NOT NULL) THEN $9::uuid ELSE authorization_id END,delivered_at=CASE WHEN $3='WAITING' THEN NULL ELSE delivered_at END,started_at=CASE WHEN $3='RUNNING' THEN now() ELSE started_at END,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND status=$7 AND ($10::uuid IS NULL OR planning_id=$10::uuid) AND ($3<>'RUNNING' OR EXISTS(SELECT 1 FROM assistant_desktop_devices d WHERE d.id=device_id AND d.revoked_at IS NULL AND d.token_hash IS NOT NULL AND d.expires_at>now() AND ($9::uuid IS NULL OR d.authorization_id=$9::uuid) AND (NOT browser_only OR d.local_browser_seen_at>now()-interval '20 seconds'))) RETURNING *",
     taskId,
     c.actor.id,
     status,
@@ -619,7 +836,10 @@ export async function desktopControl(
     b.action === "allow" ? b.application : null,
     old.status,
     b.windowId || null,
-    b.authorizationId || null,
+    (old.native_action && b.action === "resume"
+      ? resumeDevice?.authorization_id
+      : b.authorizationId) || null,
+    b.attemptId || null,
   );
   if (!row && b.action === "allow")
     fail(
@@ -635,27 +855,50 @@ export async function pollDesktop(
   c: Context,
   deviceId: string,
   localBrowser = false,
+  options: { nativeActions?: boolean; statusOnly?: boolean } = {},
 ) {
-  const d = await one(
-    db,
-    localBrowser
-      ? "UPDATE assistant_desktop_devices SET local_browser_seen_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND revoked_at IS NULL AND expires_at>now() RETURNING authorization_id"
-      : "SELECT authorization_id FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND revoked_at IS NULL AND expires_at>now()",
-    deviceId,
-    c.actor.id,
-  );
-  const row = await one(
-    db,
-    "SELECT * FROM assistant_desktop_tasks WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[]) AND (NOT browser_only OR $4::boolean) ORDER BY created_at LIMIT 1",
-    deviceId,
-    c.actor.id,
-    active,
-    !!d && localBrowser,
-  );
-  return {
-    task: row ? desktopTaskView(row) : null,
-    authorizationId: d?.authorization_id || null,
-  };
+  const confirmedPoll =
+    !options.statusOnly && (localBrowser || !!options.nativeActions);
+  return db.$transaction(async (tx) => {
+    const d = await one(
+      tx,
+      `UPDATE assistant_desktop_devices SET
+         last_seen_at=now(),
+         engine_seen_at=CASE WHEN $3 THEN now() ELSE engine_seen_at END,
+         local_browser_seen_at=CASE WHEN $4 THEN now() ELSE local_browser_seen_at END,
+         native_actions=CASE WHEN $3 THEN $5::boolean WHEN $6 THEN coalesce(native_actions,false) ELSE native_actions END
+       WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()
+       RETURNING authorization_id`,
+      deviceId,
+      c.actor.id,
+      confirmedPoll,
+      localBrowser && !options.statusOnly,
+      !!options.nativeActions,
+      !!options.statusOnly,
+    );
+    if (!d || options.statusOnly)
+      return { task: null, authorizationId: d?.authorization_id ?? null };
+    await expireWaiting(tx, c.actor.id, deviceId);
+    const row = await one(
+      tx,
+      `SELECT * FROM assistant_desktop_tasks WHERE device_id=$1::uuid AND user_id=$2::bigint AND status=ANY($3::text[])
+       AND (NOT browser_only OR $4::boolean) AND (native_action IS NULL OR $5::boolean) ORDER BY created_at LIMIT 1`,
+      deviceId,
+      c.actor.id,
+      active,
+      localBrowser,
+      !!options.nativeActions,
+    );
+    if (confirmedPoll && row?.status === "WAITING")
+      await tx.$executeRawUnsafe(
+        "UPDATE assistant_desktop_tasks SET delivered_at=now() WHERE id=$1::uuid AND status='WAITING'",
+        row.id,
+      );
+    return {
+      task: row ? desktopTaskView(row) : null,
+      authorizationId: d.authorization_id || null,
+    };
+  });
 }
 async function deviceTask(c: Context, deviceId: string, id: string) {
   parse(z.string().uuid(), id);
@@ -763,6 +1006,8 @@ export async function planDesktop(
   try {
     const b = parse(desktopObservationSchema, input);
     const old = await deviceTask(c, deviceId, id);
+    if (old.native_action)
+      fail("FORBIDDEN", "此记事本任务只在本机核验窗口", 403);
     if (old.status !== "RUNNING")
       return { task: desktopTaskView(old), command: null };
     if (

@@ -8,6 +8,7 @@ import {
 } from "../../../packages/contracts/src/assistant-desktop";
 import { api } from "./api";
 import { desktopClientRequest, isDesktopClient } from "./desktop-client";
+import { desktopReceiverProblem } from "./desktop-setup";
 
 export const isActiveDesktopTask = (task: DesktopTask) =>
   ["WAITING", "RUNNING", "PAUSED", "NEEDS_USER"].includes(task.status);
@@ -29,6 +30,7 @@ export function AssistantDesktopTaskCard({
   const [error, setError] = useState("");
   const pending = useRef(false);
   const active = isActiveDesktopTask(task);
+  const receiverProblem = device ? desktopReceiverProblem(device) : "";
   const taskLabel = task.localBrowser ? "本地浏览器任务" : "电脑任务";
   const control = async (action: "pause" | "resume" | "stop") => {
     if (pending.current) return;
@@ -99,11 +101,17 @@ export function AssistantDesktopTaskCard({
             手动接管请到所选电脑上操作。这里显示任务进度，不提供实时画面。
           </p>
         )}
-      {task.status === "WAITING" && device && !device.crossWindowAuthorized && (
-        <p className="assistant-desktop-task-hint">
-          请在该电脑的「电脑任务」选择窗口并允许本次任务。
-        </p>
+      {task.status === "WAITING" && receiverProblem && (
+        <p className="assistant-desktop-task-hint">{receiverProblem}</p>
       )}
+      {task.status === "WAITING" &&
+        !receiverProblem &&
+        device &&
+        !device.crossWindowAuthorized && (
+          <p className="assistant-desktop-task-hint">
+            请在该电脑的「电脑任务」选择窗口并允许本次任务。
+          </p>
+        )}
       {active && (
         <Space wrap className="assistant-desktop-task-actions">
           {task.status === "RUNNING" && (

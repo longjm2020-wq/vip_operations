@@ -78,12 +78,28 @@ export class AssistantDesktopController {
     @Req() r: AuthRequest,
     @Body() input: unknown,
   ) {
-    const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
+    const d = await desktopIdentity(
+      r.get("Authorization"),
+      r.get("Origin"),
+      false,
+    );
     const b = parse(
-      z.object({ localBrowser: z.literal(true).optional() }).strict(),
+      z.union([
+        z.object({ statusOnly: z.literal(true) }).strict(),
+        z
+          .object({
+            localBrowser: z.literal(true).optional(),
+            nativeActions: z.literal(true).optional(),
+          })
+          .strict(),
+      ]),
       input ?? {},
     );
-    return pollDesktop(d.c, d.deviceId, b.localBrowser);
+    return "statusOnly" in b
+      ? pollDesktop(d.c, d.deviceId, false, { statusOnly: true })
+      : pollDesktop(d.c, d.deviceId, b.localBrowser, {
+          nativeActions: b.nativeActions,
+        });
   }
   @Public() @Post("client/authorization") async authorization(
     @Req() r: AuthRequest,

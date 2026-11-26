@@ -169,6 +169,9 @@ beforeAll(async () => {
   await f.db.exec(
     await readFile("packages/database/migrations/111_realtime_native_app_commands.sql", "utf8"),
   );
+  await f.db.exec(
+    await readFile("packages/database/migrations/114_desktop_execution_readiness.sql", "utf8"),
+  );
 });
 beforeEach(async () => {
   await f.db!

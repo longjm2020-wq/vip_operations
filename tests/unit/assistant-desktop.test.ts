@@ -124,6 +124,12 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await fixture.db.exec(
+    await readFile(
+      "packages/database/migrations/114_desktop_execution_readiness.sql",
+      "utf8",
+    ),
+  );
 });
 beforeEach(async () => {
   fixture.session = true;
@@ -204,6 +210,236 @@ async function shot() {
 }
 
 describe("paired desktop task execution", () => {
+  it("distinguishes device authorization and status-only checks from an actual receiving engine", async () => {
+    const d = await paired();
+    const grant = await setDesktopAuthorization(actor(), d.deviceId, true);
+    const request = {
+      deviceId: d.deviceId,
+      requestId: randomUUID(),
+      instruction: "整理记事本里的段落",
+    };
+    await pollDesktop(actor(), d.deviceId, false, { statusOnly: true });
+    await desktopIdentity("Bearer " + d.token, undefined);
+    await pollDesktop(actor(), d.deviceId);
+    expect((await desktopState(actor())).devices[0]).toMatchObject({
+      online: true,
+      crossWindowAuthorized: true,
+      engineReady: false,
+    });
+    await expect(queueDesktopTask(actor(), request)).rejects.toMatchObject({
+      response: { error: { code: "DEVICE_ENGINE_UNAVAILABLE" } },
+    });
+    await pollDesktop(actor(), d.deviceId, true);
+    const t = await queueDesktopTask(actor(), request);
+    expect(
+      await pollDesktop(actor(), d.deviceId, false, { statusOnly: true }),
+    ).toEqual({ task: null, authorizationId: grant.authorizationId });
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_tasks SET updated_at=now()-interval '40 seconds' WHERE id=$1",
+      [t.id],
+    );
+    expect((await pollDesktop(actor(), d.deviceId, true)).task?.status).toBe(
+      "NEEDS_USER",
+    );
+    await desktopControl(actor(), t.id, { action: "resume" });
+    expect((await pollDesktop(actor(), d.deviceId, true)).task?.status).toBe(
+      "WAITING",
+    );
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_tasks SET updated_at=now()-interval '40 seconds' WHERE id=$1",
+      [t.id],
+    );
+    expect((await desktopState(actor())).tasks[0].status).toBe("WAITING");
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_devices SET engine_seen_at=now()-interval '40 seconds' WHERE id=$1",
+      [d.deviceId],
+    );
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_tasks SET delivered_at=now()-interval '40 seconds' WHERE id=$1",
+      [t.id],
+    );
+    expect((await pollDesktop(actor(), d.deviceId, true)).task?.status).toBe(
+      "NEEDS_USER",
+    );
+  });
+  it("keeps an ambiguous older client available for manual pickup and expires an unreceived task", async () => {
+    const d = await paired();
+    await pollDesktop(actor(), d.deviceId);
+    expect(
+      (await desktopState(actor())).devices[0].engineReady,
+    ).toBeUndefined();
+    const task = await queueDesktopTask(actor(), {
+      deviceId: d.deviceId,
+      requestId: randomUUID(),
+      instruction: "在我的电脑上打开记事本",
+    });
+    expect((await pollDesktop(actor(), d.deviceId)).task?.id).toBe(task.id);
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_tasks SET updated_at=now()-interval '40 seconds' WHERE id=$1",
+      [task.id],
+    );
+    expect((await desktopState(actor())).tasks[0].status).toBe("NEEDS_USER");
+  });
+  it("binds exact Notepad requests to the receiving device, live grant and native attempt", async () => {
+    const d = await paired();
+    const other = await paired();
+    const grant = await setDesktopAuthorization(actor(), d.deviceId, true);
+    await pollDesktop(actor(), d.deviceId, true, { nativeActions: true });
+    const request = {
+      deviceId: d.deviceId,
+      requestId: randomUUID(),
+      instruction: "在我的电脑上切换到已打开的记事本窗口",
+    };
+    const task = await queueDesktopTask(actor(), request);
+    expect(task).toMatchObject({
+      nativeAction: "focus_notepad",
+      scope: "device",
+      status: "WAITING",
+    });
+    expect((await pollDesktop(actor(), d.deviceId)).task).toBeNull();
+    const start = {
+      action: "start_native",
+      authorizationId: grant.authorizationId,
+      attemptId: randomUUID(),
+    };
+    const done = {
+      ...start,
+      action: "complete_native",
+      window: "无标题 - 记事本",
+      windowId: randomUUID(),
+      application: "notepad",
+    };
+    const ctl = (body: unknown, deviceId?: string) =>
+      desktopControl(actor(), task.id, body, deviceId);
+    await expect(ctl(start, d.deviceId)).rejects.toThrow();
+    expect(
+      (await pollDesktop(actor(), d.deviceId, true, { nativeActions: true }))
+        .task?.id,
+    ).toBe(task.id);
+    await expect(ctl(start)).rejects.toThrow();
+    await expect(ctl(start, other.deviceId)).rejects.toThrow();
+    await expect(
+      ctl({ ...start, authorizationId: randomUUID() }, d.deviceId),
+    ).rejects.toThrow();
+    expect((await ctl(start, d.deviceId)).status).toBe("RUNNING");
+    await expect(ctl(start, d.deviceId)).rejects.toThrow();
+    await expect(
+      ctl({ ...done, application: "other" }, d.deviceId),
+    ).rejects.toThrow();
+    await ctl({ action: "pause" });
+    await expect(ctl(done, d.deviceId)).rejects.toThrow();
+    await ctl({ action: "resume" });
+    await pollDesktop(actor(), d.deviceId, true, { nativeActions: true });
+    const secondAttempt = randomUUID();
+    await ctl({ ...start, attemptId: secondAttempt }, d.deviceId);
+    await expect(ctl(done, d.deviceId)).rejects.toThrow();
+    expect(
+      (
+        await ctl(
+          {
+            action: "handoff",
+            startupFailure: true,
+            attemptId: start.attemptId,
+            note: "迟到的结果",
+          },
+          d.deviceId,
+        )
+      ).status,
+    ).toBe("RUNNING");
+    expect(
+      await ctl({ ...done, attemptId: secondAttempt }, d.deviceId),
+    ).toMatchObject({ status: "DONE", step: 1, window: done.window });
+    expect((await queueDesktopTask(actor(), request)).id).toBe(task.id);
+    const open = await queueDesktopTask(actor(), {
+      ...request,
+      requestId: randomUUID(),
+      instruction: "打开记事本",
+    });
+    expect(open.nativeAction).toBe("open_notepad");
+    await pollDesktop(actor(), d.deviceId, true, { nativeActions: true });
+    await setDesktopAuthorization(actor(), d.deviceId, false);
+    await expect(
+      desktopControl(actor(), open.id, start, d.deviceId),
+    ).rejects.toThrow();
+    await desktopControl(actor(), open.id, { action: "stop" });
+    await setDesktopAuthorization(actor(), d.deviceId, true);
+    const composite = await queueDesktopTask(actor(), {
+      ...request,
+      requestId: randomUUID(),
+      instruction: "打开记事本，然后输入你好",
+    });
+    expect(composite.nativeAction).toBeUndefined();
+    await expect(
+      desktopControl(actor(), composite.id, start, d.deviceId),
+    ).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("resumes the same expired legacy Notepad task through the native path only if it never started", async () => {
+    const d = await paired();
+    await setDesktopAuthorization(actor(), d.deviceId, true);
+    await pollDesktop(actor(), d.deviceId, true);
+    const request = {
+      deviceId: d.deviceId,
+      requestId: randomUUID(),
+      instruction: "在我的电脑上切换到已打开的记事本窗口",
+    };
+    const task = await queueDesktopTask(actor(), request);
+    expect(task.nativeAction).toBeUndefined();
+    const originalModel = (
+      await fixture.db!.query<Row>(
+        "SELECT model_ref FROM assistant_desktop_tasks WHERE id=$1",
+        [task.id],
+      )
+    ).rows[0].model_ref;
+    expect(originalModel).toMatch(/^engine\//);
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_tasks SET updated_at=now()-interval '1 hour' WHERE id=$1",
+      [task.id],
+    );
+    expect(
+      (await pollDesktop(actor(), d.deviceId, true, { nativeActions: true }))
+        .task,
+    ).toMatchObject({ id: task.id, status: "NEEDS_USER" });
+    expect((await desktopState(actor())).tasks[0].nativeAction).toBeUndefined();
+    expect(
+      await desktopControl(actor(), task.id, { action: "resume" }),
+    ).toMatchObject({
+      id: task.id,
+      nativeAction: "focus_notepad",
+      status: "WAITING",
+    });
+    expect((await queueDesktopTask(actor(), request)).id).toBe(task.id);
+    expect(
+      (await queueDesktopTask(actor(), { ...request, model: originalModel }))
+        .id,
+    ).toBe(task.id);
+    await expect(
+      queueDesktopTask(actor(), {
+        ...request,
+        model: "engine/123456789012345678901234",
+      }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "REQUEST_CONFLICT" } },
+    });
+    await desktopControl(actor(), task.id, { action: "stop" });
+    await pollDesktop(actor(), d.deviceId, true);
+    const started = await queueDesktopTask(actor(), {
+      ...request,
+      requestId: randomUUID(),
+    });
+    await desktopControl(
+      actor(),
+      started.id,
+      { action: "allow", window: "旧窗口", application: "notepad" },
+      d.deviceId,
+    );
+    await desktopControl(actor(), started.id, { action: "pause" });
+    await pollDesktop(actor(), d.deviceId, true, { nativeActions: true });
+    expect(
+      (await desktopControl(actor(), started.id, { action: "resume" }))
+        .nativeAction,
+    ).toBeUndefined();
+  });
   it("keeps legacy pairing personal until the owner explicitly selects an independent environment", async () => {
     const first = await paired();
     const second = await paired();

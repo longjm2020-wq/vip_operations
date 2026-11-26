@@ -193,6 +193,7 @@ beforeAll(async () => {
     "103_browser_browsing_sessions.sql",
     "108_realtime_automatic_execution.sql",
     "109_assistant_local_browser.sql",
+    "114_desktop_execution_readiness.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -839,13 +840,34 @@ describe("assistant business tools and private memory", () => {
       }),
     ).rejects.toThrow();
   });
+  it.each([true, false])("dispatches a simple Notepad switch without a chat or vision connection (automatic routing: %s)", async (autoExecution) => {
+    const deviceId = randomUUID();
+    await fixture.database!.exec("UPDATE compass_ai_settings SET enabled=false, verified_at=NULL");
+    await fixture.database!.query(
+      `INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,engine_seen_at,native_actions,authorization_id)
+       VALUES($1,7,'测试电脑','session','token',now(),now(),true,$2)`,
+      [deviceId, randomUUID()],
+    );
+    const request = {
+      ...input(),
+      ...(autoExecution ? { autoExecution: true } : {}),
+      desktopDeviceId: deviceId,
+      message: "在我的电脑上切换到已打开的记事本窗口",
+    };
+    const answer = await sendAssistant(actor(), request);
+    expect(answer.messages.at(-1)?.desktopTaskId).toEqual(expect.any(String));
+    expect((await fixture.database!.query(
+      "SELECT device_id,status,native_action,model_ref FROM assistant_desktop_tasks",
+    )).rows).toEqual([{ device_id: deviceId, status: "WAITING", native_action: "focus_notepad", model_ref: null }]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("queues the native app instruction exactly once on the selected, live and authorized local device", async () => {
     const selected = randomUUID(),
       other = randomUUID();
     await fixture.database!.query(
-      `INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,authorization_id)
-       VALUES($1,7,'本机电脑','session','own-token',now(),$3),
-             ($2,7,'办公室电脑','session','other-token',now(),$4)`,
+      `INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,authorization_id,engine_seen_at,native_actions)
+       VALUES($1,7,'本机电脑','session','own-token',now(),$3,now(),false),
+             ($2,7,'办公室电脑','session','other-token',now(),$4,now(),false)`,
       [selected, other, randomUUID(), randomUUID()],
     );
     const message = "打开微信，给好友阿龙发句问候";
@@ -897,6 +919,19 @@ describe("assistant business tools and private memory", () => {
     ]) {
       expect(await resolve(chat, selected, selected)).toEqual({ kind: "site" });
     }
+    await fixture.database!.query(
+      "UPDATE assistant_desktop_devices SET engine_seen_at=now()-interval '2 minutes' WHERE id=$1",
+      [selected],
+    );
+    for (const text of [message, "在我的电脑上切换到已打开的记事本窗口"]) {
+      expect(await resolve(text, selected, selected)).toMatchObject({
+        kind: "clarify",
+        message: expect.stringContaining("暂未接收任务"),
+      });
+    }
+    expect(
+      await resolve("在办公室电脑上打开记事本", selected, selected),
+    ).toMatchObject({ kind: "desktop", deviceId: other });
     await fixture.database!.query(
       "UPDATE assistant_desktop_devices SET last_seen_at=now()-interval '2 minutes' WHERE id=$1",
       [selected],

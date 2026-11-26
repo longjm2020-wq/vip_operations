@@ -23,7 +23,7 @@ export async function resolveAutomaticAssistantExecution(
       nativeDesktopDeviceId === preferredDeviceId
         ? await rows(
             db,
-            `SELECT id FROM assistant_desktop_devices
+            `SELECT id,native_actions,coalesce(engine_seen_at>now()-interval '20 seconds',false) AS receiving FROM assistant_desktop_devices
           WHERE id=$1::uuid AND user_id=$2::bigint AND authorization_id IS NOT NULL
           AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()
           AND last_seen_at>now()-interval '20 seconds'`,
@@ -31,6 +31,12 @@ export async function resolveAutomaticAssistantExecution(
             c.actor.id,
           )
         : [];
+    if (device && device.native_actions !== null && !device.receiving)
+      return {
+        kind: "clarify",
+        message:
+          "本机已连接，但桌面端暂未接收任务。请打开「电脑任务」查看原因，恢复后再发送。",
+      };
     return device
       ? { kind: "desktop", deviceId: device.id }
       : {
@@ -60,7 +66,8 @@ export async function resolveAutomaticAssistantExecution(
 
   const devices = await rows(
     db,
-    `SELECT id, coalesce(last_seen_at > now() - interval '20 seconds', false) AS online
+    `SELECT id,name,native_actions,coalesce(engine_seen_at>now()-interval '20 seconds', false) AS receiving,
+            coalesce(last_seen_at > now() - interval '20 seconds', false) AS online
        FROM assistant_desktop_devices
       WHERE user_id = $1::bigint AND token_hash IS NOT NULL
         AND revoked_at IS NULL AND expires_at > now()
@@ -80,8 +87,14 @@ export async function resolveAutomaticAssistantExecution(
   if (!devices[0]?.online)
     return {
       kind: "clarify",
-      message:
-        "指定的电脑暂未连接或已离线。请在右侧「我的电脑」恢复连接后再试。",
+      message: devices[0]
+        ? `电脑「${devices[0].name}」已离线。请在这台电脑打开桌面端，或在右侧「我的电脑」选择目标设备。`
+        : "指定的电脑暂未连接或已离线。请在右侧「我的电脑」恢复连接后再试。",
+    };
+  if (devices[0].native_actions !== null && !devices[0].receiving)
+    return {
+      kind: "clarify",
+      message: `电脑「${devices[0].name}」已连接，但桌面端暂未接收任务。请在该电脑打开「电脑任务」查看原因，恢复后再发送。`,
     };
   return {
     kind: "desktop",

@@ -461,7 +461,7 @@ sealed class DesktopShell : Form {
             }
             if(action=="show-tasks")ShowTasks();
             if(action=="open-local-browser")await OpenLocalBrowser(data.ContainsKey("url")?(string)data["url"]:null,version);
-            Reply(version,new{channel="xuti-desktop",id,ok=true,data=new{version=ShellPolicy.Version,connected=assistant.Connected,deviceId=assistant.DeviceId,authorized=assistant.Authorized}});
+            Reply(version,new{channel="xuti-desktop",id,ok=true,data=new{version=ShellPolicy.Version,connected=assistant.Connected,deviceId=assistant.DeviceId,authorized=assistant.Authorized,engineReady=assistant.EngineReady,engineError=assistant.EngineError??"",stopShortcut=assistant.StopShortcut}});
         } catch(Exception ex) {
             if(id.Length>0)Reply(version,new{channel="xuti-desktop",id,ok=false,error=ex is ApiFailure||ex is InvalidOperationException?ex.Message:"客户端未能完成请求，请检查本机状态后重试。"});
         }

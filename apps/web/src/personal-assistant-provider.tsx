@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type ComponentRef,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -113,6 +114,7 @@ import {
 } from "./assistant-desktop-task-card";
 import {
   connectAndAuthorizeDesktop,
+  desktopReceiverProblem,
   desktopSetupMessage,
   readNativeWorkbenchDevice,
 } from "./desktop-setup";
@@ -285,6 +287,7 @@ export function PersonalAssistantProvider({
   };
   const [open, setOpen] = useState(false),
     [text, setText] = useState("");
+  const chatSender = useRef<ComponentRef<typeof Sender>>(null);
   const [artifactPreview, setArtifactPreview] = useState<{
     owner: string;
     file: AgentFile;
@@ -380,36 +383,15 @@ export function PersonalAssistantProvider({
   const browserMode = !docked && desktopChoice.mode === "browser";
   const desktopMode = !docked && desktopChoice.mode === "device";
   const externalMode = desktopMode || browserMode;
-  const desktopTargetId = docked
-    ? preferredDeviceId
-    : desktopChoice.mode === "device"
-      ? desktopChoice.deviceId
-      : undefined;
   const nativeDesktop = isDesktopClient();
-  const nativePreference = useRef(preferredDeviceId);
-  nativePreference.current =
-    docked && nativeDesktop ? preferredDeviceId : undefined;
-  const isNativeAppRequest = (value: string) =>
-    docked && nativeDesktop && isNativeDesktopAppCommand(value);
-  const verifiedNativeDevice = async (selected?: string) => {
-    if (!selected || selected !== nativePreference.current) return undefined;
-    const verified = await readNativeWorkbenchDevice(selected);
-    return selected === nativePreference.current ? verified : undefined;
-  };
-  const [localDesktopId, setLocalDesktopId] = useState<string>();
-  useEffect(() => {
-    if (!nativeDesktop) return;
-    let current = true;
-    void desktopClientRequest("status")
-      .then((result) => {
-        if (current)
-          setLocalDesktopId(result.connected ? result.deviceId : undefined);
-      })
-      .catch(() => {});
-    return () => {
-      current = false;
-    };
-  }, [nativeDesktop]);
+  const localClient = useQuery({
+    queryKey: ["assistant-desktop-local", user.id],
+    enabled: allowed && nativeDesktop,
+    queryFn: ({ signal }) => desktopClientRequest("status", undefined, signal),
+    refetchOnWindowFocus: "always",
+    refetchInterval: toolsVisible && panelSection === "desktop" ? 10000 : false,
+    retry: false,
+  });
   const [desktopConnecting, setDesktopConnecting] = useState(false);
   const [checkingVoiceTarget, setCheckingVoiceTarget] = useState(false);
   const voiceStartAttempt = useRef(0);
@@ -477,6 +459,31 @@ export function PersonalAssistantProvider({
     refetchOnWindowFocus: "always",
     refetchOnReconnect: "always",
   });
+  const localDesktopId = localClient.data?.connected
+    ? localClient.data.deviceId
+    : undefined;
+  const localDevice = desktop.data?.devices.find(
+    (device) => device.id === localDesktopId,
+  );
+  const implicitLocalId =
+    localClient.data?.authorized && localDevice?.crossWindowAuthorized
+      ? localDesktopId
+      : undefined;
+  const desktopTargetId = docked
+    ? (preferredDeviceId ?? implicitLocalId)
+    : desktopChoice.mode === "device"
+      ? desktopChoice.deviceId
+      : undefined;
+  const nativePreference = useRef(desktopTargetId);
+  nativePreference.current =
+    docked && nativeDesktop ? desktopTargetId : undefined;
+  const isNativeAppRequest = (value: string) =>
+    docked && nativeDesktop && isNativeDesktopAppCommand(value);
+  const verifiedNativeDevice = async (selected?: string) => {
+    if (!selected || selected !== nativePreference.current) return undefined;
+    const verified = await readNativeWorkbenchDevice(selected);
+    return selected === nativePreference.current ? verified : undefined;
+  };
   const revealBrowserAfter = useRef<Set<string> | null>(null);
   const [browserSelection, setBrowserSelection] = useState<{
     id?: string;
@@ -563,9 +570,7 @@ export function PersonalAssistantProvider({
         ? "暂时无法核对电脑连接，请刷新后重试。"
         : !desktopTarget
           ? "上次选择的电脑连接已失效，请重新连接或主动返回网站对话。"
-          : !desktopTarget.online
-            ? "所选电脑离线，请打开该电脑的小序桌面端。"
-            : "";
+          : desktopReceiverProblem(desktopTarget, localClient.data);
   const jobs = useQuery({
     queryKey: ["assistant-jobs", user.id],
     enabled: allowed,
@@ -670,11 +675,24 @@ export function PersonalAssistantProvider({
     !agent.attachments.length &&
     shouldSearchAssistantPublicWeb(value);
   const draftIsPublicSearch = shouldSearch(text);
+  const draftRoute = docked ? classifyAssistantExecution(text) : undefined;
+  const draftUsesNativeApp = isNativeAppRequest(text);
   const draftIsSite =
     !draftIsPublicSearch &&
-    (!docked ||
-      (!isNativeAppRequest(text) &&
-        classifyAssistantExecution(text).kind === "site"));
+    (!docked || (!draftUsesNativeApp && draftRoute?.kind === "site"));
+  const receiverReady =
+    desktopTarget?.engineReady === true &&
+    !desktopReceiverProblem(desktopTarget, localClient.data);
+  const desktopOnlyPrompt =
+    docked &&
+    receiverReady &&
+    (!data?.ready || !!modelProblem) &&
+    (!text.trim() ||
+      draftUsesNativeApp ||
+      (draftRoute?.kind === "desktop" &&
+        (!draftRoute.deviceName ||
+          draftRoute.deviceName === desktopTarget?.name)));
+  const showChatModel = !externalMode && draftIsSite && !desktopOnlyPrompt;
   const composerReady = draftIsPublicSearch
     ? !!data
     : docked
@@ -683,7 +701,9 @@ export function PersonalAssistantProvider({
         (!draftIsSite || (data.ready && !modelProblem))
       : browserMode
         ? !!data && browser.data?.ready && !browserProblem
-        : data?.ready && !modelProblem && !desktopProblem;
+        : desktopMode
+          ? !!data && !desktopProblem
+          : data?.ready && !modelProblem;
   const canEditComposer = docked || !externalMode ? !!data : composerReady;
   const showVoiceTask = (result?: {
     browserTaskId?: string;
@@ -790,13 +810,25 @@ export function PersonalAssistantProvider({
     !!executing ||
     gptVoice.active ||
     voice.listening;
+  const openDesktopComposer = () => {
+    setDesktopSetupNote("");
+    setSection("chat");
+    setOpen(true);
+    requestAnimationFrame(() => chatSender.current?.focus());
+  };
   const chooseDesktop = (id: string) => {
     if (executionBusy.current || desktopSetupRunning.current) return;
     const device = desktop.data?.devices.find((entry) => entry.id === id);
-    if (!device?.online) return;
+    if (!device) return;
+    const problem = desktopReceiverProblem(device, localClient.data);
+    if (problem) {
+      setDesktopSetupNote(problem);
+      setSection("desktop");
+      setOpen(true);
+      return;
+    }
     rememberDesktop(id);
-    setSection(docked ? "desktop" : "chat");
-    setOpen(true);
+    openDesktopComposer();
   };
   const stageBrowserDraft = (prefix: string) => {
     if (executionBusy.current || desktopSetupRunning.current) return;
@@ -825,7 +857,7 @@ export function PersonalAssistantProvider({
   };
   const chooseLocalBrowser = () => {
     if (executionBusy.current || desktopSetupRunning.current) return;
-    if (!localDesktopId || localDesktopId !== preferredDeviceId) {
+    if (!localDesktopId || localDesktopId !== desktopTargetId) {
       message.info(
         "请在「我的电脑」连接这台电脑并设为常用电脑，再操作本地网页",
       );
@@ -875,20 +907,25 @@ export function PersonalAssistantProvider({
       const refreshed = await desktop.refetch();
       if (!isCurrent() || executionBusy.current) return;
       if (result.authorized === true) {
-        if (
-          refreshed.error ||
-          !refreshed.data?.devices.some(
-            (device) => device.id === result.deviceId,
-          )
-        )
+        const device = refreshed.data?.devices.find(
+          (d) => d.id === result.deviceId,
+        );
+        if (refreshed.error || !device)
           throw new Error("本机连接尚未同步，请稍后重试。");
+        if (!device.crossWindowAuthorized)
+          throw new Error("本机授权尚未同步，请在「电脑任务」核对授权状态。");
         rememberDesktop(result.deviceId);
-        setLocalDesktopId(result.deviceId);
-        setSection(docked ? "desktop" : "chat");
-        setOpen(true);
+        queryClient.setQueryData(["assistant-desktop-local", owner], result);
+        const problem = desktopReceiverProblem(device, result);
+        if (problem) {
+          setSection("desktop");
+          setOpen(true);
+          return;
+        }
+        openDesktopComposer();
         message.success(
           docked
-            ? "已设为常用电脑，请在指令中说明要操作本机"
+            ? "已选择本机，可在小序输入框直接下达电脑指令"
             : "已选择本机，可以直接下达电脑操作指令",
         );
       } else {
@@ -976,10 +1013,9 @@ export function PersonalAssistantProvider({
     const requestId = crypto.randomUUID();
     if (!data) return;
     const publicSearch = shouldSearch(value);
-    const target =
-      docked && !publicSearch
-        ? classifyAssistantExecution(value).kind
-        : undefined;
+    const execution =
+      docked && !publicSearch ? classifyAssistantExecution(value) : undefined;
+    const target = execution?.kind;
     const nativeAppRequest = isNativeAppRequest(value);
     const siteRequest =
       !publicSearch &&
@@ -1015,6 +1051,14 @@ export function PersonalAssistantProvider({
     try {
       if (externalRequest && agent.attachments.length)
         throw new Error("外部操作仅接收本条指令，请先移除附件后发送。");
+      if (
+        execution?.kind === "desktop" &&
+        !execution.deviceName &&
+        localDevice &&
+        desktopTargetId === localDevice.id &&
+        localClient.data?.engineReady === false
+      )
+        throw new Error(desktopReceiverProblem(localDevice, localClient.data));
       if (browserMode) {
         const epoch = desktopSetupLifecycle.current.epoch;
         const current = await browser.refetch();
@@ -1051,10 +1095,12 @@ export function PersonalAssistantProvider({
         const currentDevice = current.data.devices.find(
           (device) => device.id === desktopDeviceId,
         );
-        if (!currentDevice?.online)
+        if (!currentDevice)
           throw new Error(
             "所选电脑的连接已变化，请重新选择后发送；未切换到其他电脑。",
           );
+        const problem = desktopReceiverProblem(currentDevice, localClient.data);
+        if (problem) throw new Error(problem);
         if (
           current.data.tasks.some(
             (task) =>
@@ -1082,7 +1128,9 @@ export function PersonalAssistantProvider({
       if (!isCurrent()) return;
       if (nativeAppRequest && !nativeDesktopDeviceId)
         throw new Error(
-          "请在「我的电脑」中确认本机在线、已记住授权并设为常用电脑，然后重试。",
+          (localDevice &&
+            desktopReceiverProblem(localDevice, localClient.data)) ||
+            "请在「我的电脑」检查本机连接和授权。已选择其他常用电脑时，请在指令中写明目标电脑。",
         );
       const input = {
         message: value.trim(),
@@ -1278,10 +1326,12 @@ export function PersonalAssistantProvider({
         const device = current.data?.devices.find(
           (entry) => entry.id === capturedDeviceId,
         );
-        if (current.error || !device?.online)
+        if (current.error || !device)
           throw new Error(
             "所选电脑的连接已变化，请重新选择后开始语音；未切换到其他电脑。",
           );
+        const problem = desktopReceiverProblem(device, localClient.data);
+        if (problem) throw new Error(problem);
       }
       if (!isCurrent()) return;
       if (browserMode)
@@ -1580,6 +1630,7 @@ export function PersonalAssistantProvider({
         </div>
       )}
       <Sender
+        ref={inDrawer ? chatSender : undefined}
         value={text}
         onChange={(value) => setText(value.slice(0, 4000))}
         onSubmit={(value) => void send(value)}
@@ -1596,7 +1647,7 @@ export function PersonalAssistantProvider({
             onUploading={setUploading}
             actions={
               <div className="assistant-send-actions">
-                {!externalMode && (
+                {!externalMode && !desktopOnlyPrompt && (
                   <AssistantModelPicker
                     catalog={modelCatalog.data}
                     value={chatModel}
@@ -1697,20 +1748,23 @@ export function PersonalAssistantProvider({
           />
         )}
         placeholder={
-          data?.ready ||
-          draftIsPublicSearch ||
-          ((docked || browserMode) && browser.data?.ready)
-            ? browserMode
-              ? "描述网页目标，小序将在独立浏览器中连续操作…"
-              : desktopMode
-                ? desktop.data?.devices?.find((d) => d.id === desktopDeviceId)
-                    ?.crossWindowAuthorized
-                  ? "描述电脑任务，小序将按设备授权执行…"
-                  : "描述电脑任务，发送后在所选电脑允许…"
-                : "告诉我你想完成什么，例如：打开经营分析…"
-            : q.isLoading
-              ? "正在连接个人助理…"
-              : "AI 尚未就绪，可打开小序的文字对话查看原因"
+          desktopOnlyPrompt
+            ? "告诉我你想完成什么，例如：在我的电脑上打开记事本…"
+            : data?.ready ||
+                desktopMode ||
+                draftIsPublicSearch ||
+                ((docked || browserMode) && browser.data?.ready)
+              ? browserMode
+                ? "描述网页目标，小序将在独立浏览器中连续操作…"
+                : desktopMode
+                  ? desktop.data?.devices?.find((d) => d.id === desktopDeviceId)
+                      ?.crossWindowAuthorized
+                    ? "描述电脑任务，小序将按设备授权执行…"
+                    : "描述电脑任务，发送后在所选电脑允许…"
+                  : "告诉我你想完成什么，例如：打开经营分析…"
+              : q.isLoading
+                ? "正在连接个人助理…"
+                : "AI 尚未就绪，可打开小序的文字对话查看原因"
         }
         autoSize={{ minRows: 2, maxRows: 5 }}
       />
@@ -1732,12 +1786,12 @@ export function PersonalAssistantProvider({
           正在搜索公开网页…
         </div>
       )}
-      {draftIsSite && modelProblem && (
+      {showChatModel && modelProblem && (
         <div className="assistant-voice-error" role="alert">
           {modelProblem}
         </div>
       )}
-      {draftIsSite && !modelProblem && modelHint && (
+      {showChatModel && !modelProblem && modelHint && (
         <div className="assistant-model-hint" role="status">
           {modelHint}
         </div>
@@ -1970,14 +2024,23 @@ export function PersonalAssistantProvider({
         <AssistantDesktopPanel
           open={toolsVisible && (docked || drawerSettled)}
           data={desktop.data}
+          client={localClient.data}
+          clientError={localClient.error?.message}
           error={desktop.error?.message || ""}
-          refresh={() => desktop.refetch()}
+          refresh={() =>
+            Promise.all([
+              desktop.refetch(),
+              ...(nativeDesktop ? [localClient.refetch()] : []),
+            ])
+          }
           choose={chooseDesktop}
+          compose={openDesktopComposer}
           connectLocal={() => void setupDesktop()}
           connecting={desktopConnecting}
           disabled={busy || voice.listening}
           setupNote={desktopSetupNote}
           selectedId={desktopTargetId}
+          preferredId={preferredDeviceId}
           automatic={docked}
         />
       )}
@@ -2060,9 +2123,13 @@ export function PersonalAssistantProvider({
                 ? browser.data?.ready
                   ? "独立浏览器已就绪"
                   : "独立浏览器暂未就绪"
-                : data?.ready
-                  ? "小序已就绪"
-                  : "小序暂未就绪"}
+                : desktopMode || desktopOnlyPrompt
+                  ? receiverReady
+                    ? `电脑可接收任务 · ${desktopTarget?.name}`
+                    : "我的电脑"
+                  : data?.ready
+                    ? "小序已就绪"
+                    : "普通对话暂未就绪"}
             </span>
             <Button
               type="text"
@@ -2075,7 +2142,7 @@ export function PersonalAssistantProvider({
           </div>
           {q.isLoading && <Spin />}
           {q.error && <Alert type="error" title={(q.error as Error).message} />}
-          {!browserMode && !q.isLoading && data && !data.ready && (
+          {showChatModel && !q.isLoading && data && !data.ready && (
             <Alert
               type="warning"
               title={
@@ -2089,12 +2156,19 @@ export function PersonalAssistantProvider({
                 ✦
               </span>
               <h3>你的工作，从一句话开始。</h3>
-              <p>说出问题，查库存、跟项目、看任务，也能记住你的工作偏好。</p>
-              {[
-                "帮我安排明天下午3点的选款会",
-                "查看我参与的项目进度",
-                "查看最近的同步任务结果",
-              ].map((prompt) => (
+              <p>
+                {desktopOnlyPrompt
+                  ? "在下方输入框描述要在电脑上执行的任务。"
+                  : "说出问题，查库存、跟项目、看任务，也能记住你的工作偏好。"}
+              </p>
+              {(desktopOnlyPrompt
+                ? ["在我的电脑上打开记事本"]
+                : [
+                    "帮我安排明天下午3点的选款会",
+                    "查看我参与的项目进度",
+                    "查看最近的同步任务结果",
+                  ]
+              ).map((prompt) => (
                 <button
                   type="button"
                   key={prompt}

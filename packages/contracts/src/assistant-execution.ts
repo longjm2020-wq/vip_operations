@@ -123,7 +123,7 @@ export function isNativeDesktopAppCommand(text: string): boolean {
     "",
   );
   const app =
-    /^(?:打开|启动|切换到)(?:已(?:经)?打开的)?\s*(?:企业微信|微信|记事本|计算器)(?=\s*(?:$|[,。！!；;\n]))/u;
+    /^(?:打开|启动|切换到|切换至)(?:已(?:经)?打开的)?\s*(?:企业微信|微信|记事本|计算器)(?:窗口)?(?=\s*(?:$|[,。！!；;\n]))/u;
   if (!app.test(command) || questionOutsideLiteral(command)) return false;
   // Explicit destinations, requests for advice, and cancellations belong to
   // the normal router even if they mention a familiar desktop application.

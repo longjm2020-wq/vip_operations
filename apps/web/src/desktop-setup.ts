@@ -1,6 +1,27 @@
 import { api } from "./api.js";
-import { desktopClientRequest, isDesktopClient } from "./desktop-client.js";
-import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop.js";
+import {
+  desktopClientRequest,
+  isDesktopClient,
+  type DesktopClientState,
+} from "./desktop-client.js";
+import type {
+  DesktopDevice,
+  DesktopState,
+} from "../../../packages/contracts/src/assistant-desktop.js";
+
+export function desktopReceiverProblem(
+  device: DesktopDevice,
+  client?: DesktopClientState,
+) {
+  const local =
+    client?.connected && client.deviceId === device.id ? client : undefined;
+  if (local?.engineReady === false && local.engineError)
+    return local.engineError;
+  if (!device.online) return "所选电脑离线，请打开该电脑的小序桌面端。";
+  if (local?.engineReady === false || device.engineReady === false)
+    return "桌面端尚未接收任务。请在这台电脑打开「电脑任务」查看原因。";
+  return "";
+}
 
 /** Recheck the device already chosen by the user in both the shell and the account. */
 export async function readNativeWorkbenchDevice(preferredId?: string) {
@@ -23,7 +44,9 @@ export async function readNativeWorkbenchDevice(preferredId?: string) {
     const device = (data as DesktopState).devices.find(
       (entry) => entry.id === preferredId,
     );
-    return device?.online === true && device.crossWindowAuthorized === true
+    return device &&
+      !desktopReceiverProblem(device, native) &&
+      device.crossWindowAuthorized === true
       ? preferredId
       : undefined;
   } catch {
@@ -79,6 +102,6 @@ export function desktopSetupMessage(authorized?: boolean) {
   return authorized === true
     ? "已连接并记住授权，现在可以直接下达电脑操作指令"
     : authorized === false
-      ? "已取消授权，点击「操作本机」可以重新开始"
+      ? "已取消授权，可点击「使用我的电脑」重新授权"
       : "本机已连接，请在电脑任务中授权；新版桌面端支持直接确认";
 }

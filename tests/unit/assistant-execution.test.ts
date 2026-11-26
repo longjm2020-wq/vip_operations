@@ -10,6 +10,8 @@ describe("workbench execution from direct instructions", () => {
     "打开微信，给好友阿龙发句问候",
     "请打开微信，给好友阿龙发送「最近好吗？」",
     "打开微信，给阿龙发送“Are you there?”",
+    "切换到已打开的记事本窗口",
+    "切换至记事本窗口",
   ])(
     "recognizes the user's desktop request and preserves questions inside message content: %s",
     (text) => {

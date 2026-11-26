@@ -1,10 +1,13 @@
 import { assistantWebsiteUrl } from "../../../packages/contracts/src/assistant-web-command.js";
 
-type ClientState = {
+export type DesktopClientState = {
   version: string;
   connected: boolean;
   deviceId: string;
   authorized?: boolean;
+  engineReady?: boolean;
+  engineError?: string;
+  stopShortcut?: string;
 };
 type WebViewBridge = {
   postMessage: (message: unknown) => void;
@@ -70,7 +73,7 @@ export function desktopClientRequest(
     !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(argument || "")
   )
     return Promise.reject(new Error("设备无效，请重新连接"));
-  return new Promise<ClientState>((resolve, reject) => {
+  return new Promise<DesktopClientState>((resolve, reject) => {
     const id = crypto.randomUUID();
     const clean = () => {
       clearTimeout(timer);
@@ -106,6 +109,12 @@ export function desktopClientRequest(
         typeof value.data?.deviceId !== "string" ||
         (value.data.authorized !== undefined &&
           typeof value.data.authorized !== "boolean") ||
+        (value.data.engineReady !== undefined &&
+          typeof value.data.engineReady !== "boolean") ||
+        (value.data.engineError !== undefined &&
+          typeof value.data.engineError !== "string") ||
+        (value.data.stopShortcut !== undefined &&
+          typeof value.data.stopShortcut !== "string") ||
         (action === "authorize" &&
           (typeof value.data.authorized !== "boolean" ||
             !value.data.connected ||

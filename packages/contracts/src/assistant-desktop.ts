@@ -138,6 +138,8 @@ export type DesktopDevice = {
   id: string;
   name: string;
   online: boolean;
+  /** Absent when this client's polling protocol cannot distinguish setup from execution. */
+  engineReady?: boolean;
   lastSeenAt: string | null;
   expiresAt: string;
   crossWindowAuthorized: boolean;
@@ -154,6 +156,7 @@ export type DesktopTask = {
   step: number;
   window: string;
   scope: "window" | "device";
+  nativeAction?: "open_notepad" | "focus_notepad";
   localBrowser?: boolean;
   createdAt: string;
   updatedAt: string;

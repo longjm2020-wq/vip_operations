@@ -262,9 +262,8 @@ export async function sendAssistant(
       "打开网页的结果与当前指令不符，请重新发送",
       400,
     );
-  // Automatic desktop and browser requests use their own registered planners.
-  const usesChat =
-    !publicSearch && (autoExecution ? siteExecution : !browserExecution);
+  // Desktop and browser tasks use their own execution paths in both input modes.
+  const usesChat = !publicSearch && siteExecution;
   const s = usesChat || publicSearch ? await settings() : undefined;
   const attachments = await ownedAgentFiles(c, body.attachmentIds);
   const chatSelection = usesChat
