@@ -237,6 +237,7 @@ export function createAigcService() {
                 "submitting",
                 "queued",
                 "generating",
+                "saving",
                 "starting",
                 "ready",
                 "uncertain",
@@ -255,7 +256,7 @@ export function createAigcService() {
             ).some((a) => !a.deletedAt) ||
               Object.values<any>(
                 studio.store.data.digitalHuman?.operations || {},
-              ).some((op) => op.remoteId))
+              ).some((op) => op.type !== "lip-sync" && op.remoteId))
           )
             return res.status(409).json({
               error:

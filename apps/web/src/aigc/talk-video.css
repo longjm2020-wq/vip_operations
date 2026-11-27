@@ -19,6 +19,10 @@
   color: var(--app-secondary);
 }
 
+.talk-video-modes {
+  margin-bottom: 12px;
+}
+
 .talk-video-composer,
 .talk-video-result {
   border-radius: 12px;
@@ -104,6 +108,60 @@
   aspect-ratio: 9 / 16;
   border-radius: 5px;
   background: #000;
+}
+
+.talk-video-lip-sync-player video {
+  aspect-ratio: auto;
+}
+
+.talk-video-lip-sync-files {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 12px 20px;
+}
+
+.talk-video-lip-sync-file {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 7px;
+  min-width: 0;
+}
+
+.talk-video-lip-sync-file > label {
+  font-weight: 600;
+}
+
+.talk-video-lip-sync-file input,
+.talk-video-lip-sync-file audio {
+  max-width: 100%;
+}
+
+.talk-video-lip-sync-file input::file-selector-button {
+  padding: 5px 8px;
+  margin-inline-end: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: inherit;
+  cursor: pointer;
+}
+
+.talk-video-lip-sync-file input:disabled::file-selector-button {
+  cursor: not-allowed;
+}
+
+.talk-video-lip-sync-photo {
+  display: block;
+  width: 50px;
+  height: 62px;
+  margin-top: 2px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.talk-video-lip-sync-file audio {
+  height: 34px;
 }
 
 .talk-video-details {

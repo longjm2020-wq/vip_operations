@@ -83,10 +83,10 @@ function signature(secret, assetId, jobId, expires) {
   return createHmac("sha256", secret).update(`media-reference/v1\n${assetId}\n${jobId}\n${expires}`).digest("hex");
 }
 
-export function referenceDownloadUrl(config, assetId, jobId, now = Date.now()) {
+export function referenceDownloadUrl(config, assetId, jobId, now = Date.now(), expiresInSeconds = 24 * 3600) {
   const base = new URL(config.publicBaseUrl || "https://unconfigured.invalid");
   if (!config.publicBaseUrl || base.protocol !== "https:" || base.username || base.password || !config.sessionSecret) throw new Error("请配置 XUTI_PUBLIC_BASE_URL 为网站 HTTPS 地址后使用视频、音频参考");
-  const expires = String(Math.floor(now / 1000) + 24 * 3600);
+  const expires = String(Math.floor(now / 1000) + expiresInSeconds);
   const url = new URL(`/api/v1/aigc/generation-reference/${encodeURIComponent(assetId)}`, base);
   url.search = new URLSearchParams({ job: jobId, expires, signature: signature(config.sessionSecret, assetId, jobId, expires) }).toString();
   return url.href;
@@ -96,8 +96,17 @@ export function referenceDownloadOwner(store, config, assetId, params, now = Dat
   const jobId = params.get("job"), expires = params.get("expires"), sig = params.get("signature") || "";
   if (!config.sessionSecret || !/^\d+$/.test(expires || "") || Number(expires) <= Math.floor(now / 1000) || !/^[a-f0-9]{64}$/.test(sig)) return null;
   if (!timingSafeEqual(Buffer.from(sig), Buffer.from(signature(config.sessionSecret, assetId, jobId, expires)))) return null;
-  const job = store.getJob(jobId), asset = store.getAssetMetadata(assetId);
-  if (!job || !["running", "waiting_provider", "queued", "paused"].includes(job.status) || !asset || asset.projectId !== job.projectId || asset.ownerId !== job.ownerId ) return null;
+  const asset = store.getAssetMetadata(assetId);
+  if (!asset) return null;
+  if (asset.source === "fal-lip-sync-input") {
+    const op = store.data.digitalHuman?.operations?.[jobId];
+    return op?.type === "lip-sync" && ["submitting", "generating", "uncertain"].includes(op.status) &&
+      asset.projectId === op.id && asset.ownerId === op.ownerId &&
+      ((op.imageAssetId === assetId && asset.kind === "lip-sync-image") ||
+       (op.audioAssetId === assetId && asset.kind === "lip-sync-audio")) ? op.ownerId : null;
+  }
+  const job = store.getJob(jobId);
+  if (!job || !["running", "waiting_provider", "queued", "paused"].includes(job.status) || asset.projectId !== job.projectId || asset.ownerId !== job.ownerId) return null;
   if (asset.kind === "referenceImage" && asset.source === "bailian-video-reference") {
     const selected = Object.values(job.payload?.bailianReferenceImages || {}).flatMap(value => value.assets || []);
     return job.payload?.videoRoute?.protocol === "bailian" && selected.some(file => file.path === assetId) ? asset.ownerId : null;

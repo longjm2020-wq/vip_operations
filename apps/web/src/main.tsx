@@ -86,7 +86,7 @@ const ProjectDetailPage = lazyPage(() => import("./projects").then(module => ({ 
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
-const coreFeatureSummary = "小序与 AI 员工 · 公司知识库 · 智选模型与用量 · 实时语音 · 网页搜索与电脑操作 · 文档、图片和服装口播视频 · 经营分析与商品决策 · 聚水潭库存 · 协作表格 · AIGC";
+const coreFeatureSummary = "小序与 AI 员工 · 公司知识库 · 智选模型与用量 · 实时语音 · 网页搜索与电脑操作 · 文档、图片与数字人口播 · 经营分析与商品决策 · 聚水潭库存 · 协作表格 · AIGC";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),

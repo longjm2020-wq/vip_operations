@@ -373,6 +373,10 @@ export async function aiModelManagement(
       row.statusText = a.configured
         ? "已配置；等待实际调用验证"
         : "当前线路尚未配置密钥";
+      if (feature.id === "aigc_lip_sync") {
+        if (!a.configured) row.statusText = "fal 密钥或 HTTPS 素材服务未配置";
+        row.usageNote += " 记录 fal 回执的成片秒数；刊例估价仅供提交前核对。";
+      }
       if (feature.id === "aigc_compile")
         row.choices = [
           ...catalog.models
@@ -611,7 +615,9 @@ export async function aiModelManagement(
       : usingBailianChat
         ? bailian
         : shared;
-    const matchingSource = usingAgentai
+    const matchingSource = feature.id === "aigc_lip_sync"
+      ? last?.source === "queue.fal.run"
+      : usingAgentai
       ? last?.source === "agentai.token6688.com"
       : selectedRelay
         ? Boolean(relayHostname && last?.source === relayHostname)

@@ -6,6 +6,7 @@ import {
 } from "../../../packages/contracts/src/ai-management.js";
 import { agentAiChatError } from "./agentai-chat-error.js";
 import { agentAiChatReceiptId } from "./agentai-receipt.js";
+import { FAL_LIP_SYNC_MODEL } from "../../../packages/aigc-engine/vendor/cloud/fal-lip-sync.mjs";
 
 const validFeatures = new Set<string>(aiFeatures.map((feature) => feature.id));
 const number = (value: unknown): number | null =>
@@ -86,7 +87,11 @@ export function providerUsage(payload: unknown, source: string): Receipt {
   const taskState = text(task.task_status);
   return {
     inputVideoSeconds: bailian ? number(usage.input_seconds) : null,
-    outputVideoSeconds: bailian ? number(usage.output_seconds) : null,
+    outputVideoSeconds: bailian
+      ? number(usage.output_seconds)
+      : source === "queue.fal.run" && response.model === FAL_LIP_SYNC_MODEL
+        ? number(response.duration)
+        : null,
     billableImages: bailian ? number(usage.image_count) : null,
     completedVideoTask: Boolean(
       taskId &&
@@ -310,6 +315,12 @@ export async function aiFetch(
   } else if (init.body instanceof FormData) {
     model = text(init.body.get("model")) || "";
   }
+  if (
+    feature === "aigc_lip_sync" &&
+    source === "queue.fal.run" &&
+    endpoint.pathname === `/${FAL_LIP_SYNC_MODEL}`
+  )
+    model = FAL_LIP_SYNC_MODEL;
   const id = randomUUID();
   await db.$queryRawUnsafe(
     "INSERT INTO public.ai_model_usage(id,feature_id,source,model) VALUES($1::uuid,$2,$3,$4)",

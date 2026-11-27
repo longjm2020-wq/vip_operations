@@ -79,7 +79,7 @@ export class DigitalGpuPower {
   }
   async update(patch) { await this.store.mutate(data => { data.digitalHuman.gpuControl = { ...data.digitalHuman.gpuControl, ...patch }; }); }
   get control() { return this.store.data.digitalHuman?.gpuControl || {}; }
-  activeCount() { return Object.values(this.store.data.digitalHuman?.operations || {}).filter(op => runningOperations.has(op.status)).length; }
+  activeCount() { return Object.values(this.store.data.digitalHuman?.operations || {}).filter(op => op.type !== "lip-sync" && runningOperations.has(op.status)).length; }
   assertNotStopping(data = this.store.data) {
     if (!this.configured()) return;
     const control = data.digitalHuman?.gpuControl || {};
@@ -157,7 +157,7 @@ export class DigitalGpuPower {
       } else {
         if (instance.State !== "Running") fail("仅运行中的 GPU 可以关机，请等待状态稳定", 409);
         await this.store.mutate(data => {
-          if (Object.values(data.digitalHuman.operations).some(op => runningOperations.has(op.status))) fail("仍有数字人任务运行或待核实，请先结束任务再关机", 409);
+          if (Object.values(data.digitalHuman.operations).some(op => op.type !== "lip-sync" && runningOperations.has(op.status))) fail("仍有数字人任务运行或待核实，请先结束任务再关机", 409);
           data.digitalHuman.gpuControl.operation = { requestId: input.requestId, action: "stop", actorId: user.id, at: this.clock(), deadline: this.clock() + 15 * 60_000, phase: "submitting", finished: false };
         });
         await this.client.call("StopCompShareInstance", parameters);

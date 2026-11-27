@@ -25,6 +25,7 @@ export const secretNames = [
   "XAI_API_KEY",
   "RUNNINGHUB_API_KEY",
   "OPENTALKING_GATEWAY_KEY",
+  "FAL_LIP_SYNC_API_KEY",
   "XYLP_VIDEO_H3_OMNI_KEY",
   "XYLP_VIDEO_SD20_OMNI_KEY",
   "XYLP_VIDEO_SD25_OMNI_KEY",
@@ -129,6 +130,13 @@ export async function saveSettings(userId: string, input: unknown) {
     : {};
   for (const [name, value] of Object.entries(parsed.secrets || {}))
     if (value.trim()) secrets[name] = value.trim();
+  if (
+    secrets.FAL_LIP_SYNC_API_KEY &&
+    !/^[!-~]{1,2048}$/.test(secrets.FAL_LIP_SYNC_API_KEY)
+  )
+    throw Object.assign(new Error("fal API Key 格式无效"), {
+      statusCode: 400,
+    });
   if (parsed.useSavedQwenConnection) {
     const qwen = await savedQwenConnection();
     if (!qwen?.qwen_api_key_encrypted || !qwen?.qwen_workspace_id)
@@ -236,6 +244,7 @@ export async function engineConfig() {
           )
         : [],
     opentalkingApiKey: secrets.OPENTALKING_GATEWAY_KEY || "",
+    falLipSyncApiKey: secrets.FAL_LIP_SYNC_API_KEY || "",
     runninghubApiKey: secrets.RUNNINGHUB_API_KEY || "",
     compileProvider: "openrouter",
     openrouterApiKey,

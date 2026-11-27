@@ -74,13 +74,7 @@ export function AigcPage() {
   const [params] = useSearchParams();
   if (!user.permissions.includes("aigc.use"))
     return <Alert type="warning" title="当前账号没有 AIGC 使用权限" />;
-  if (params.get("view") === "talk-video") {
-    return user.permissions.includes("product.read") ? (
-      <TalkVideo />
-    ) : (
-      <Alert type="warning" title="生成服装口播需要商品档案查看权限" />
-    );
-  }
+  if (params.get("view") === "talk-video") return <TalkVideo />;
   return <AigcStudio />;
 }
 
@@ -462,15 +456,15 @@ function AigcStudio() {
             />
             {view === "home" && (
               <>
-                {user.permissions.includes("product.read") && (
-                  <Button
-                    type="primary"
-                    icon={<PlayCircleOutlined />}
-                    onClick={() => navigate({ view: "talk-video" })}
-                  >
-                    服装口播
-                  </Button>
-                )}
+                <Button
+                  type="primary"
+                  icon={<PlayCircleOutlined />}
+                  onClick={() => navigate({ view: "talk-video" })}
+                >
+                  {user.permissions.includes("product.read")
+                    ? "服装口播"
+                    : "数字人口播"}
+                </Button>
                 <div className="aigc-entry-grid">
                   {tools.map((tool, i) => (
                     <button

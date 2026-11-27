@@ -17,12 +17,13 @@ export function normalizeDigitalAudio(file) {
   return alias || genericM4a ? new File([file], file.name, { type: "audio/mp4", lastModified: file.lastModified }) : file;
 }
 // Decode bounded input before any upstream POST; claimed MIME/duration is not trusted.
-export async function validateDigitalMedia(file, kind, maxSeconds) {
+export async function validateDigitalMedia(file, kind, maxSeconds, { requireSound = false } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), "xuti-digital-media-"));
   const input = path.join(dir, "input.bin");
   try {
     await writeFile(input, Buffer.from(await file.arrayBuffer()));
-    const { stderr } = await run(ffmpeg, ["-hide_banner", "-nostdin", "-protocol_whitelist", "file,pipe", "-threads", "1", "-f", formats[file.type], "-i", input, "-map", kind === "video" ? "0:v:0" : "0:a:0", "-t", String(maxSeconds + 1), "-threads", "1", "-f", "null", "-"], { timeout: 30_000, windowsHide: true, maxBuffer: 512 * 1024 });
+    const streams = kind === "video" ? ["-map", "0:v:0", ...(requireSound ? ["-map", "0:a:0"] : [])] : ["-map", "0:a:0"];
+    const { stderr } = await run(ffmpeg, ["-hide_banner", "-nostdin", "-protocol_whitelist", "file,pipe", "-threads", "1", "-f", formats[file.type], "-i", input, ...streams, "-t", String(maxSeconds + 1), "-threads", "1", "-f", "null", "-"], { timeout: 30_000, windowsHide: true, maxBuffer: 512 * 1024 });
     const durations = [...stderr.matchAll(/(?:Duration: |time=)(\d+):(\d+):([\d.]+)/g)].map(m => Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]));
     const duration = Math.max(0, ...durations);
     if (duration <= 0 || duration > maxSeconds + .1) fail(`素材时长须为 0～${maxSeconds} 秒`);

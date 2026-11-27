@@ -7,6 +7,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Segmented,
   Select,
   Tag,
 } from "antd";
@@ -20,6 +21,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useUser } from "../shared";
 import { studioApi } from "./api";
+import { LipSync, useLipSync, type LipSyncQuery } from "./lip-sync";
 import "./talk-video.css";
 
 const path = "/commerce-video";
@@ -102,10 +104,118 @@ function productLabel(product: Product) {
 }
 
 export function TalkVideo() {
+  const user = useUser();
+  const account = String(user.id);
+  const canUseCommerce = user.permissions.includes("product.read");
+  const [params] = useSearchParams();
+  const location = useLocation();
+  const connection = useLipSync(account);
+  const linkedCommerce = Boolean(
+    params.has("product") ||
+    params.has("job") ||
+    params.has("prompt") ||
+    location.state?.talkVideoPrompt,
+  );
+  if (
+    canUseCommerce &&
+    !linkedCommerce &&
+    !params.has("mode") &&
+    connection.isPending
+  ) {
+    return (
+      <section className="talk-video">
+        <Link to="/aigc">
+          <ArrowLeftOutlined /> 创作空间
+        </Link>
+        <p className="talk-video-state" role="status">
+          <LoadingOutlined /> 正在读取口播服务
+        </p>
+      </section>
+    );
+  }
+  return (
+    <TalkVideoWorkspace
+      key={account}
+      account={account}
+      canUseCommerce={canUseCommerce}
+      linkedCommerce={linkedCommerce}
+      connection={connection}
+    />
+  );
+}
+
+type TalkMode = "lip-sync" | "commerce";
+
+function TalkVideoWorkspace({
+  account,
+  canUseCommerce,
+  linkedCommerce,
+  connection,
+}: {
+  account: string;
+  canUseCommerce: boolean;
+  linkedCommerce: boolean;
+  connection: LipSyncQuery;
+}) {
+  const [params, setParams] = useSearchParams();
+  const [defaultMode] = useState<TalkMode>(() =>
+    connection.data?.configured ? "lip-sync" : "commerce",
+  );
+  const selected = params.get("mode");
+  const mode =
+    !canUseCommerce || selected === "lip-sync"
+      ? "lip-sync"
+      : selected === "commerce" || linkedCommerce
+        ? "commerce"
+        : defaultMode;
+  const portrait = mode === "lip-sync";
+  return (
+    <section className="talk-video" aria-labelledby="talk-video-title">
+      <Link to="/aigc">
+        <ArrowLeftOutlined /> 创作空间
+      </Link>
+      <header className="talk-video-heading">
+        <h1 id="talk-video-title">{portrait ? "数字人口播" : "服装口播"}</h1>
+        <p>
+          {portrait
+            ? "上传人物照片和原声录音，生成对口型视频。"
+            : "选一款衣服，用一句话生成带字幕的竖屏视频。"}
+        </p>
+      </header>
+      {canUseCommerce && (
+        <Segmented<TalkMode>
+          className="talk-video-modes"
+          aria-label="口播制作方式"
+          value={mode}
+          options={[
+            { value: "lip-sync", label: "原声对口型" },
+            { value: "commerce", label: "商品口播" },
+          ]}
+          onChange={(value) =>
+            setParams(
+              (current) => {
+                const next = new URLSearchParams(current);
+                next.set("mode", value);
+                return next;
+              },
+              { replace: true },
+            )
+          }
+        />
+      )}
+      {portrait ? (
+        <LipSync account={account} connection={connection} />
+      ) : (
+        <CommerceTalkVideo account={account} />
+      )}
+    </section>
+  );
+}
+
+function CommerceTalkVideo({ account }: { account: string }) {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
   const client = useQueryClient();
-  const account = String(useUser().id);
   const optionsKey = ["commerce-video", account, "options"];
   const taskListKey = ["commerce-video", account, "jobs"];
   const productId = params.get("product") || undefined;
@@ -250,14 +360,7 @@ export function TalkVideo() {
   const currentJob = job.data;
   const recent = history.data?.jobs || [];
   return (
-    <section className="talk-video" aria-labelledby="talk-video-title">
-      <Link to="/aigc">
-        <ArrowLeftOutlined /> 创作空间
-      </Link>
-      <header className="talk-video-heading">
-        <h1 id="talk-video-title">服装口播</h1>
-        <p>选一款衣服，用一句话生成带字幕的竖屏视频。</p>
-      </header>
+    <>
       {options.isError && (
         <Alert
           className="talk-video-notice"
@@ -520,7 +623,7 @@ export function TalkVideo() {
           }}
         />
       )}
-    </section>
+    </>
   );
 }
 

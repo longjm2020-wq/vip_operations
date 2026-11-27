@@ -7,6 +7,7 @@ import { MEDIA_LIMIT, OpenTalkingClient, remoteId, serviceUrl } from "./opentalk
 import { normalizeDigitalAudio, validateDigitalMedia } from "./digital-human-media.mjs";
 import { DigitalGpuPower } from "./compshare-gpu.mjs";
 import { inferenceFetch } from "./ai-accounting.mjs";
+import { FalLipSyncService, FAL_LIP_SYNC_UPLOAD_BYTES } from "./fal-lip-sync.mjs";
 
 const now = () => new Date().toISOString();
 const active = op => ["submitting", "queued", "generating", "starting", "ready", "closing", "uncertain", "saving"].includes(op.status);
@@ -27,6 +28,7 @@ const audioTypes = ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audi
 export class DigitalHumanService {
   constructor(store, config = {}, options = {}) {
     this.store = store; this.config = config; this.clientFactory = options.clientFactory || (settings => new OpenTalkingClient(settings)); this.busy = false; this.locks = new Set(); this.videoRefresh = new Set(); this.validating = new Set();
+    this.lipSync = new FalLipSyncService(store, config);
     this.gpu = new DigitalGpuPower(store, config.compshareGpu, { ...options.gpu, ready: async () => {
       if (!this.connection().baseUrl) return false;
       const result = await this.client().request("/models", { timeoutMs: 5000 });
@@ -344,7 +346,7 @@ export class DigitalHumanService {
   async tick() {
     if (this.busy) return; this.busy = true;
     try {
-      const operations = Object.values(this.data.operations).filter(op => active(op) && op.remoteId && op.type !== "avatar").sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+      const operations = Object.values(this.data.operations).filter(op => active(op) && op.remoteId && ["video", "session"].includes(op.type)).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
       // Bound concurrency; there is no automatic POST resubmission on restart/timeouts.
       await Promise.allSettled(operations.slice(0, 24).map(async op => {
         if (this.locks.has(op.id) || !op.remoteId) return;
@@ -370,6 +372,7 @@ export class DigitalHumanService {
     const op = this.data.operations[id];
     if (!op || op.status !== "uncertain" || input.confirmed !== true || !["failed", "completed"].includes(input.result) || cleanText(input.note, 500).length < 5) fail("请核实服务端记录并填写处理依据");
     if (op.type === "session" && input.result === "completed") fail("请先在服务端关闭该会话，再按未完成处理");
+    if (op.type === "lip-sync" && input.result === "completed") fail("原声口播须取得成片后才能显示完成");
     await this.store.mutate(data => {
       Object.assign(data.digitalHuman.operations[id], { status: input.result, message: "站长已核实原请求", updatedAt: now(), resolution: { actorId: user.id, note: cleanText(input.note, 500), at: now() } });
       settle(data, id, input.result === "completed", `数字人请求人工核实：${cleanText(input.note, 200)}`, user.id);
@@ -383,10 +386,10 @@ export async function handleDigitalHuman({ request, response, url, user, service
   if (!admin && !pathname.startsWith("/api/digital-human")) return false;
   if (admin) requireRole(user, ["super_admin"]);
   const send = value => { json(response, 200, value); return true; };
-  const form = async () => {
+  const form = async (maxBytes = MEDIA_LIMIT + 64 * 1024) => {
     const type = request.headers["content-type"] || "";
     if (!type.startsWith("multipart/form-data")) fail("请通过表单上传", 415);
-    const data = await new Request("http://localhost/upload", { method: "POST", headers: { "content-type": type }, body: await readBody(request, MEDIA_LIMIT + 64 * 1024) }).formData();
+    const data = await new Request("http://localhost/upload", { method: "POST", headers: { "content-type": type }, body: await readBody(request, maxBytes) }).formData();
     return Object.fromEntries(data);
   };
   if (request.method !== "GET") platform.throttle(`digital-human:${user.id}`, 180, 60_000);
@@ -402,6 +405,14 @@ export async function handleDigitalHuman({ request, response, url, user, service
   const resolve = pathname.match(/^\/api\/admin\/digital-human\/operations\/([\w-]+)$/);
   if (resolve && request.method === "POST") return send(await service.resolve(user, resolve[1], await readJson(request)));
   if (pathname === "/api/digital-human/catalog" && request.method === "GET") return send(service.catalog(user));
+  if (pathname === "/api/digital-human/lip-sync") {
+    if (request.method === "GET") return send(service.lipSync.catalog(user));
+    if (request.method === "POST") {
+      const operation = await service.lipSync.create(user, () => form(FAL_LIP_SYNC_UPLOAD_BYTES));
+      json(response, 202, operation);
+      return true;
+    }
+  }
   if (pathname === "/api/digital-human/projects") {
     if (request.method === "GET") return send(service.projects(user));
     if (request.method === "POST") return send(await service.saveProject(user, await readJson(request)));

@@ -27,6 +27,7 @@ const secretLabels: Record<string, string> = {
   XAI_API_KEY: "xAI 官方视频 Key",
   RUNNINGHUB_API_KEY: "RunningHub 深度参考 Key",
   OPENTALKING_GATEWAY_KEY: "OpenTalking 网关 Key",
+  FAL_LIP_SYNC_API_KEY: "fal API Key",
   XYLP_VIDEO_H3_OMNI_KEY: "海螺 H3 视频渠道 Key",
   XYLP_VIDEO_SD20_OMNI_KEY: "SD 2.0 视频渠道 Key",
   XYLP_VIDEO_SD25_OMNI_KEY: "SD 2.5 视频渠道 Key",
@@ -467,6 +468,26 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                             配置；以下是玄宇编译专用密钥，地址与「图片生成」分组共用。
                           </p>
                           {scriptKeys.map(secretField)}
+                        </>
+                      ),
+                    },
+                    {
+                      key: "lip-sync",
+                      label: label("原声对口型", "MiniMax H3 Max Lip Sync"),
+                      extra: keyStatus(["FAL_LIP_SYNC_API_KEY"]),
+                      children: (
+                        <>
+                          <p className="aigc-connection-note">
+                            使用 fal 云端服务生成 768P 口播。保存后可在口播页提交照片和录音。仅实际生成按 fal 计费。{" "}
+                            <a
+                              href="https://fal.ai/dashboard/keys"
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              管理 fal 密钥
+                            </a>
+                          </p>
+                          {secretField("FAL_LIP_SYNC_API_KEY")}
                         </>
                       ),
                     },

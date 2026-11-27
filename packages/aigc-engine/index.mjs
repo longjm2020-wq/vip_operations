@@ -47,6 +47,7 @@ export async function createStudio({ config, persistence, users = [] }) {
     stopped = false; worker.start();
     timers.push(setInterval(() => { if (!stopped) void depthJobs.tick().catch(() => {}); }, 3000));
     timers.push(setInterval(() => { if (!stopped) void digitalHuman.tick().catch(() => {}); }, 3000));
+    timers.push(setInterval(() => { if (!stopped) void digitalHuman.lipSync.tick().catch(() => {}); }, 3000));
     timers.push(setInterval(() => { if (!stopped) void processDetailJobs(store, config).catch(() => {}); }, 3000));
   }
   function stop() { stopped = true; for(const timer of timers) clearInterval(timer); timers.length=0; worker.stop(); depthJobs.stop(); }

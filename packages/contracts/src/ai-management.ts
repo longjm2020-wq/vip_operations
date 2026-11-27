@@ -146,6 +146,15 @@ export const aiFeatures = [
     kind: "external",
   },
   {
+    id: "aigc_lip_sync",
+    name: "数字人口播 · 原声对口型",
+    group: "AIGC",
+    href: "/aigc?view=talk-video&mode=lip-sync",
+    boundary:
+      "固定 MiniMax H3 Max Lip Sync，使用独立 fal API Key。将一张授权照片和 5～15 秒录音送往 fal，生成保留原声的 768P 口播视频。记录供应商回执的成片秒数，未回传的金额与 Token 显示未知。",
+    kind: "external",
+  },
+  {
     id: "aigc_digitalhuman",
     name: "AIGC 数字人",
     group: "AIGC",

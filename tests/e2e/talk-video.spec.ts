@@ -297,7 +297,7 @@ test("服装口播在窄屏上可完成创建、播放下载和更换指定分�
   });
 
   await page.setViewportSize({ width: 420, height: 900 });
-  await page.goto("/aigc?view=talk-video");
+  await page.goto("/aigc?view=talk-video&mode=commerce");
   const panel = page.getByRole("region", { name: "服装口播", exact: true });
   await expect(panel).toBeVisible();
   const run = panel.getByRole("button", { name: "生成视频" });
@@ -387,4 +387,154 @@ test("服装口播在窄屏上可完成创建、播放下载和更换指定分�
     path: testInfo.outputPath("talk-video-desktop.png"),
     fullPage: true,
   });
+});
+
+test("原声对口型可独立提交照片和录音，并播放及下载已保存的视频", async ({
+  page,
+}) => {
+  const preview = await sharp({
+    create: { width: 384, height: 512, channels: 3, background: "#627d93" },
+  })
+    .jpeg()
+    .toBuffer();
+  const temp = await mkdtemp(join(tmpdir(), "lip-sync-e2e-"));
+  let recording: Buffer;
+  let video: Buffer;
+  try {
+    const media = join(temp, "sample.mp4");
+    const audio = join(temp, "recording.wav");
+    await runMedia([
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=navy:s=144x192:d=5.72",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:duration=5.72",
+      "-map",
+      "0:v",
+      "-map",
+      "1:a",
+      "-c:v",
+      "libx264",
+      "-threads",
+      "1",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-movflags",
+      "+faststart",
+      media,
+      "-map",
+      "1:a",
+      "-c:a",
+      "pcm_s16le",
+      audio,
+    ]);
+    [recording, video] = await Promise.all([readFile(audio), readFile(media)]);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+  await page.route("**/api/v1/**", (route) =>
+    route.fulfill({
+      json: {
+        data:
+          new URL(route.request().url()).pathname === "/api/v1/auth/me"
+            ? {
+                id: "100",
+                displayName: "拍视频",
+                permissions: ["aigc.use"],
+                roleCodes: [],
+                csrfToken: "fixture",
+              }
+            : [],
+      },
+    }),
+  );
+  let submits = 0;
+  let completed = false;
+  const task = () => ({
+    id: "lip-sync-sample",
+    status: completed ? "completed" : "submitting",
+    createdAt: "2026-11-27T06:00:00Z",
+    ...(completed ? { output: "lip-sync-video" } : {}),
+  });
+  await page.route("**/api/v1/aigc/digital-human/lip-sync", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postData() || "";
+      expect(body).toContain('name="image"; filename="portrait.jpg"');
+      expect(body).toContain('name="audio"; filename="recording.wav"');
+      expect(body).toMatch(/name="authorized"\r\n\r\ntrue\r\n/);
+      expect(body).toMatch(/name="requestId"\r\n\r\n[\da-f-]{36}\r\n/);
+      submits++;
+      return route.fulfill({ status: 202, json: task() });
+    }
+    await route.fulfill({
+      json: {
+        configured: true,
+        minSeconds: 5,
+        maxSeconds: 15,
+        maxImageBytes: 20 * 1024 * 1024,
+        maxAudioBytes: 10 * 1024 * 1024,
+        resolution: "768P",
+        priceUsdPerSecond: 0.08,
+        jobs: submits ? [task()] : [],
+      },
+    });
+  });
+  await page.route("**/api/v1/aigc/assets/lip-sync-video*", (route) =>
+    route.fulfill({
+      contentType: "video/mp4",
+      body: video,
+      headers: {
+        "Content-Disposition": new URL(route.request().url()).searchParams.has(
+          "download",
+        )
+          ? 'attachment; filename="lip-sync.mp4"'
+          : "inline",
+      },
+    }),
+  );
+  await page.setViewportSize({ width: 420, height: 900 });
+  await page.goto("/aigc?view=talk-video&mode=lip-sync");
+  await expect(page.getByRole("heading", { name: "数字人口播" })).toBeVisible();
+  await expect(page.getByText("商品口播", { exact: true })).toHaveCount(0);
+  const generate = page.getByRole("button", { name: "生成视频" });
+  await expect(generate).toBeDisabled();
+  await page.getByLabel("人物照片", { exact: true }).setInputFiles({
+    name: "portrait.jpg",
+    mimeType: "image/jpeg",
+    buffer: preview,
+  });
+  await page.getByLabel("原声录音", { exact: true }).setInputFiles({
+    name: "recording.wav",
+    mimeType: "audio/wav",
+    buffer: recording,
+  });
+  await expect(page.getByText("预估 US$0.46", { exact: false })).toBeVisible();
+  await expect(generate).toBeDisabled();
+  await page.getByRole("checkbox", { name: /我已获肖像和声音授权/ }).check();
+  await generate.click();
+  const result = page.getByRole("region", { name: "数字人口播任务" });
+  await expect(result.getByText("正在提交")).toBeVisible();
+  await expect(page.getByRole("button", { name: "已提交" })).toBeDisabled();
+  completed = true;
+  const player = result.getByLabel("数字人口播成片");
+  await expect(player).toHaveAttribute(
+    "src",
+    "/api/v1/aigc/assets/lip-sync-video",
+    { timeout: 7000 },
+  );
+  await expect
+    .poll(() =>
+      player.evaluate((element) => (element as HTMLVideoElement).readyState),
+    )
+    .toBeGreaterThanOrEqual(1);
+  const download = page.waitForEvent("download");
+  await result.getByRole("link", { name: "下载 MP4" }).click();
+  expect((await download).suggestedFilename()).toBe("lip-sync.mp4");
+  expect(submits).toBe(1);
 });

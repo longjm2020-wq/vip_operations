@@ -12,13 +12,48 @@ vi.mock("../../packages/database/src/index.js", () => ({
 import {
   aiFetch,
   providerUsage,
+  recordAiReceipt,
   withProviderBillingHeaders,
 } from "../../apps/api/src/ai-metering.js";
 import { agentAiChatError } from "../../apps/api/src/agentai-chat-error.js";
+import { FAL_LIP_SYNC_MODEL } from "../../packages/aigc-engine/vendor/cloud/fal-lip-sync.mjs";
 const source = "agentai.token6688.com";
 afterEach(() => {
   vi.unstubAllGlobals();
   writes.length = 0;
+});
+describe("fal lip sync metering", () => {
+  const host = "queue.fal.run";
+  const requestId = "30e4ef65-490f-4e04-b0f0-f77a3043a865";
+
+  it("records the fixed model when the queue requests omit the model field", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ request_id: requestId, status: "IN_QUEUE" })),
+    );
+    const response = await aiFetch("aigc_lip_sync", `https://${host}/${FAL_LIP_SYNC_MODEL}`, {
+      method: "POST",
+      body: JSON.stringify({ resolution: "768P" }),
+    });
+    await response.json();
+    expect(writes[0]?.slice(2, 5)).toEqual(["aigc_lip_sync", host, FAL_LIP_SYNC_MODEL]);
+    expect(writes.at(-1)?.[2]).toBe("responded");
+    expect(writes.at(-1)?.[11]).toBe(requestId);
+  });
+
+  it("uses reported seconds and keeps unreported costs and tokens unknown", async () => {
+    const result = { request_id: requestId, model: FAL_LIP_SYNC_MODEL, duration: 5.72 };
+    expect(providerUsage(result, host)).toMatchObject({
+      outputVideoSeconds: 5.72,
+      total: null,
+      amount: null,
+      unit: null,
+    });
+    expect(providerUsage(result, "other.example").outputVideoSeconds).toBeNull();
+    await recordAiReceipt("aigc_lip_sync", host, FAL_LIP_SYNC_MODEL, result);
+    expect(writes.at(-1)?.[2]).toBe("success");
+    expect(writes.at(-1)?.[14]).toBe(5.72);
+  });
 });
 describe("AgentAI actual usage", () => {
   it("keeps provider CNY receipts distinct from credits and estimates", () => {

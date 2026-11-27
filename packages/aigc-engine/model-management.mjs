@@ -13,6 +13,10 @@ import {
 } from "./vendor/cloud/video-providers.mjs";
 import { enhancementRoute } from "./vendor/cloud/video-enhance.mjs";
 import { RUNNINGHUB_DEPTH_WORKFLOW_ID } from "./vendor/cloud/runninghub-depth.mjs";
+import {
+  FAL_LIP_SYNC_MODEL,
+  falLipSyncConfigured,
+} from "./vendor/cloud/fal-lip-sync.mjs";
 
 const source = (label, url) => `${label} · ${new URL(url).origin}`;
 /** Deliberate safe projection: engine configuration contains credentials. */
@@ -42,7 +46,7 @@ export function aigcModelManagement(config, settings) {
       id: "aigc_commerce_script",
       model: config.openrouterModel,
       selection: "",
-      source: source("OpenRouter", config.openrouterBaseUrl),
+      source: source("OpenRouter", config.openrouterBaseUrl || "https://openrouter.ai"),
       configured: !!config.openrouterApiKey,
       choices: [],
     },
@@ -107,6 +111,14 @@ export function aigcModelManagement(config, settings) {
       selection: "",
       source: "RunningHub · https://www.runninghub.cn",
       configured: !!config.runninghubApiKey,
+      choices: [],
+    },
+    {
+      id: "aigc_lip_sync",
+      model: FAL_LIP_SYNC_MODEL,
+      selection: "",
+      source: "fal · https://queue.fal.run",
+      configured: falLipSyncConfigured(config),
       choices: [],
     },
     {
