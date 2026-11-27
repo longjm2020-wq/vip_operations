@@ -465,6 +465,51 @@ test("导演台可从空白手工创作、采用候选文案、锁定并只导�
   ).toBe(false);
 });
 
+test("导演台保存当前分镜后下载可继续编辑的 Nomi 项目", async ({ page }) => {
+  const fixture = await mockDirector(page, {
+    brief: "做一条服装商品短片",
+    assets: [initialAsset],
+    shots: [initialShot],
+  });
+  await page.goto(`${path}?project=${id}`);
+  await openStage(page, "编排分镜");
+  await page.getByRole("button", { name: /展示纹理/ }).click();
+  const script = "给衣领一个近景，再展示纹理。";
+  await page.getByLabel("口播与分镜脚本").fill(script);
+  await openStage(page, "交付导出");
+  await page.getByRole("button", { name: "导出到 Nomi", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: /Nomi/ });
+  await expect(dialog).toBeVisible();
+  expect(fixture.project().revision).toBe(1);
+  const download = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "下载 Nomi 项目包", exact: true }).click();
+  const archive = await download;
+  expect(archive.suggestedFilename()).toMatch(/Nomi.*\.zip$/i);
+  const zip = await JSZip.loadAsync(await readFile((await archive.path())!));
+  const files = Object.values(zip.files).filter((entry) => !entry.dir);
+  const manifests = files.filter((entry) => /(?:^|\/)\.nomi\/project\.json$/.test(entry.name));
+  expect(manifests).toHaveLength(1);
+  const manifest = await manifests[0].async("string");
+  const projectDocument = JSON.parse(manifest);
+  expect(projectDocument.name).toBe("春款商品视频");
+  const payload = projectDocument.payload;
+  const documentText = JSON.stringify(payload.workbenchDocuments[0].contentJson);
+  expect(documentText).toContain("做一条服装商品短片");
+  expect(documentText).toContain(script);
+  expect(documentText).toContain(initialAsset.name);
+  const [{ plan }] = payload.storyboardDesignsByDocumentId[payload.activeDocumentId];
+  expect(plan.shots).toMatchObject([{
+    index: 1,
+    durationSec: 3.5,
+    params: { aspect_ratio: "9:16" },
+    prompt: expect.stringContaining("展示纹理"),
+  }]);
+  expect(files.some((entry) => /\.(jpg|mp4|wav)$/i.test(entry.name))).toBe(false);
+  expect(fixture.project().revision).toBe(2);
+  expect(fixture.project().shots[0].script).toBe(script);
+  expect(fixture.uploadedFiles).toEqual([]);
+});
+
 test("文件夹导入几十 GiB 的本机素材后列出跳过项并可分页保存", async ({ page }) => {
   const localId = randomUUID();
   const assets = Array.from({ length: 499 }, (_, index) => ({

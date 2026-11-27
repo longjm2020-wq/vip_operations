@@ -57,6 +57,8 @@ import { acceptsDirectorFolderRole } from "../../../packages/contracts/src/direc
 import { uniqueDirectorKinds } from "../../../packages/contracts/src/director-intent";
 import { api } from "./api";
 import { desktopClientRequest } from "./desktop-client";
+import { releaseSheetDownload, triggerSheetDownload } from "./download-sheet";
+import { exportNomiProject } from "./director-nomi";
 import {
   localDirectorRequest,
   supportsLocalDirector,
@@ -414,6 +416,8 @@ function DirectorEditor({
   const [error, setError] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
+  const [nomiOpen, setNomiOpen] = useState(false);
+  const [nomiError, setNomiError] = useState("");
   const [linkOpen, setLinkOpen] = useState(false);
   const [shareText, setShareText] = useState("");
   const [linkError, setLinkError] = useState("");
@@ -1225,6 +1229,28 @@ function DirectorEditor({
     });
   }
 
+  function exportToNomi() {
+    setNomiError("");
+    void run("正在准备 Nomi 项目包…", async (isCurrent) => {
+      try {
+        const project = await save(draft, isCurrent);
+        if (!isCurrent()) return;
+        const { blob, fileName } = await exportNomiProject(project);
+        if (!isCurrent()) return;
+        const file = { url: URL.createObjectURL(blob), fileName };
+        try {
+          triggerSheetDownload(file);
+        } finally {
+          releaseSheetDownload(file);
+        }
+        setNomiOpen(false);
+        setNotice("已发起 Nomi 项目包下载。解压后在 Nomi 中打开项目文件夹。");
+      } catch (cause) {
+        if (isCurrent()) setNomiError(messageOf(cause));
+      }
+    });
+  }
+
   function controlRender(operation: "pause" | "resume", entry: DirectorRender) {
     void run(operation === "pause" ? "正在暂停…" : "正在继续…", async () => {
       await cache.cancelQueries({
@@ -1979,7 +2005,7 @@ function DirectorEditor({
               </div>
               {!draft.shots.length && (
                 <p className="director-muted">
-                  先添加一个分镜，就可以导出脚本。
+                  先添加一个分镜，就可以导出脚本或 Nomi 项目包。
                 </p>
               )}
               {draft.output === "video" && (
@@ -2005,6 +2031,15 @@ function DirectorEditor({
                   onClick={exportScript}
                 >
                   导出分镜脚本
+                </Button>
+                <Button
+                  disabled={!!busy || !draft.shots.length}
+                  onClick={() => {
+                    setNomiError("");
+                    setNomiOpen(true);
+                  }}
+                >
+                  导出到 Nomi
                 </Button>
                 {draft.output === "video" && (
                   <Button
@@ -2221,6 +2256,27 @@ function DirectorEditor({
           onClose={() => setTemplateOpen(false)}
         />
       )}
+      <Modal
+        title="导出到 Nomi"
+        width={480}
+        open={nomiOpen}
+        onCancel={() => setNomiOpen(false)}
+        onOk={exportToNomi}
+        okText="下载 Nomi 项目包"
+        cancelText="取消"
+        confirmLoading={!!busy}
+        cancelButtonProps={{ disabled: !!busy }}
+        closable={!busy}
+        keyboard={!busy}
+        mask={{ closable: !busy }}
+      >
+        <div className="director-form">
+          <p>下载时会先保存当前项目。项目包含可编辑的分镜和文稿，原始素材和配音留在原位置。</p>
+          <p>解压后，在 Nomi「项目库」点「打开已有文件夹」，选中包里的项目文件夹。需要原文件时，可按素材清单重新导入。</p>
+          <a href="https://github.com/aqm857886159/Nomi/releases/tag/v0.24.1" target="_blank" rel="noreferrer">下载 Nomi v0.24.1</a>
+          {nomiError && <Alert type="error" showIcon title={nomiError} />}
+        </div>
+      </Modal>
       <Modal
         title="从作品链接拆解参考片"
         open={linkOpen}
