@@ -15,6 +15,7 @@ test("未启用 AIGC 时真实登录、创建、上传、编辑、刷新并下�
   await page.getByRole("button", { name: "进入工作台" }).click();
   expect((await login).ok()).toBe(true);
   await page.goto("/my-workspace/director");
+  await expect(page.getByRole("heading", { name: "开始第一个项目" })).toBeVisible();
   await page.getByRole("button", { name: "新建项目" }).click();
   await page.getByLabel("项目名称", { exact: true }).fill("真实保存分镜测试");
   await page.getByRole("button", { name: "创建", exact: true }).click();
@@ -27,6 +28,8 @@ test("未启用 AIGC 时真实登录、创建、上传、编辑、刷新并下�
   await expect(
     page.getByRole("button", { name: /产品说明.txt/ }),
   ).toBeVisible();
+  const workflow = page.getByRole("navigation", { name: "导演台制作流程" });
+  await workflow.getByRole("button", { name: "编排分镜", exact: true }).click();
   await page.getByRole("button", { name: "新增空白分镜" }).click();
   await page.getByLabel("口播与分镜脚本").fill("从袋口的收边开始看。");
   const saved = page.waitForResponse(
@@ -40,9 +43,11 @@ test("未启用 AIGC 时真实登录、创建、上传、编辑、刷新并下�
   await expect(page.getByLabel("口播与分镜脚本")).toHaveValue(
     "从袋口的收边开始看。",
   );
+  await workflow.getByRole("button", { name: "整理素材", exact: true }).click();
   await expect(
     page.getByRole("button", { name: /产品说明.txt/ }),
   ).toBeVisible();
+  await workflow.getByRole("button", { name: "交付导出", exact: true }).click();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出分镜脚本" }).click();
   const artifact = await download;

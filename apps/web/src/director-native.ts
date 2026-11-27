@@ -156,7 +156,10 @@ export function localDirectorRequest<Operation extends keyof LocalOperations>(
         ? 120_000
         : operation === "capabilities"
           ? 65_000
-          : 20_000;
+          : operation === "read-frame"
+            // The native client verifies the device/project grant (9s) before extracting a frame (15s).
+            ? 30_000
+            : 20_000;
     // The native picker can stay open while the user chooses a folder. Linked
     // imports report progress while indexing it and finish with one receipt.
     const timeout = operation === "pick" && "remaining" in payload

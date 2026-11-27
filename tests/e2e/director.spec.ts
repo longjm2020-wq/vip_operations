@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import sharp from "sharp";
 import type { AssistantMessage } from "../../packages/contracts/src/personal-assistant.js";
 import {
   emptyDirectorLocks,
@@ -40,6 +41,20 @@ const initialAsset = {
   mime: "image/jpeg",
 } as const;
 
+type DirectorStage = "整理素材" | "编排分镜" | "交付导出";
+
+function stageButton(page: Page, name: DirectorStage) {
+  return page
+    .getByRole("navigation", { name: "导演台制作流程" })
+    .getByRole("button", { name, exact: true });
+}
+
+async function openStage(page: Page, name: DirectorStage) {
+  const button = stageButton(page, name);
+  await button.click();
+  await expect(button).toHaveAttribute("aria-current", "step");
+}
+
 async function mockDirector(
   page: Page,
   initial: Partial<DirectorProject> = {},
@@ -49,6 +64,8 @@ async function mockDirector(
     assistantReady?: boolean;
     pickedAssets?: { id: string; name: string; kind: string; bytes: number; durationMs?: number }[];
     linkedImport?: boolean;
+    pickSummary?: { skippedFolders: number; skippedFiles: number; problems: string[]; duplicates: number; overLimit: boolean };
+    previewFrame?: string;
   },
 ) {
   const assistant = await mockDirectorAssistant(page, options?.assistantReady);
@@ -88,14 +105,15 @@ async function mockDirector(
           };
         if (action === "director-capabilities")
           return { ffmpeg: true, installation: "", localReferenceImport: options?.linkedImport };
+        if (action === "director-read-frame")
+          return { mime: "image/jpeg", base64: options?.previewFrame || "" };
         if (action === "director-pick") {
           if (!options?.linkedImport) {
             expect(Object.keys(payload).sort()).toEqual(["kind", "projectId"]);
             return { assets: options?.pickedAssets || [] };
           }
           return {
-            assets: options.pickedAssets || [], skippedFolders: 1, skippedFiles: 2,
-            problems: ["说明.txt：不支持此格式"], duplicates: 1, overLimit: true,
+            assets: options.pickedAssets || [], ...options.pickSummary,
           };
         }
         if (action === "director-import")
@@ -377,11 +395,16 @@ test("导演台可从空白手工创作、采用候选文案、锁定并只导�
   const fixture = await mockDirector(page);
   await page.goto(path);
   await expect(page.getByRole("link", { name: "AI 导演台" })).toBeVisible();
-  await page.goto(`${path}?project=${id}`);
+  await page.getByRole("button", { name: /春款商品视频/ }).click();
+  await expect(page).toHaveURL(`${path}?project=${id}`);
   await expect(page.getByRole("heading", { name: "AI 导演台" })).toBeVisible();
+  await expect(stageButton(page, "整理素材")).toHaveAttribute("aria-current", "step");
+  await openStage(page, "编排分镜");
   await page.getByRole("button", { name: "新增空白分镜" }).click();
   await page.getByLabel("镜头名称").fill("开场取近景");
   await page.getByLabel("口播与分镜脚本").fill("这是我的初稿。");
+  await expect(page.getByRole("button", { name: "提供两种本镜文案" })).toBeHidden();
+  await page.locator("summary").filter({ hasText: "更多镜头设置" }).click();
   await page.getByRole("button", { name: "提供两种本镜文案" }).click();
   await expect(page.getByLabel("口播与分镜脚本")).toHaveValue("这是我的初稿。");
   await page.getByRole("button", { name: "采用方案 2" }).click();
@@ -391,6 +414,7 @@ test("导演台可从空白手工创作、采用候选文案、锁定并只导�
   await page.getByRole("checkbox", { name: "锁文案" }).check();
   await expect(page.getByLabel("口播与分镜脚本")).toBeDisabled();
   await expect(page.getByLabel("画面素材")).toBeEnabled();
+  await openStage(page, "交付导出");
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出分镜脚本" }).click();
   expect((await download).suggestedFilename()).toContain("分镜脚本.md");
@@ -415,7 +439,10 @@ test("文件夹导入几十 GiB 的本机素材后列出跳过项并可分页保
   }));
   const fixture = await mockDirector(page, {
     assets: [{ id: assetId, source: "local", role: "product", localId, deviceId, name: "已有.jpg", mime: "image/jpeg" }],
-  }, true, { linkedImport: true, pickedAssets: assets });
+  }, true, {
+    linkedImport: true, pickedAssets: assets,
+    pickSummary: { skippedFolders: 1, skippedFiles: 2, problems: ["说明.txt：不支持此格式"], duplicates: 1, overLimit: true },
+  });
   await page.goto(`${path}?project=${id}`);
   await page.getByRole("button", { name: "导入本机文件夹" }).click();
   const notice = page.getByText(/已加入 499 份本机素材（36 GiB）/);
@@ -444,6 +471,78 @@ test("旧 Windows 导演台继续使用原来的选文件桥接", async ({ page 
   expect(fixture.nativeActions.find((a) => a.action === "director-pick")?.payload).toEqual({ projectId: id, kind: "files" });
 });
 
+test("新手从本机导入视频、查看本地画面并用它创建第一个分镜", async ({ page }, testInfo) => {
+  const localId = randomUUID();
+  const name = "20251118_WG7769.MP4";
+  const previewFrame = (await sharp("tests/fixtures/selection-care-label.png")
+    .resize({ width: 320 })
+    .jpeg()
+    .toBuffer()).toString("base64");
+  const fixture = await mockDirector(page, { title: "羊绒衫面料展示" }, true, {
+    pickedAssets: [{ id: localId, name, kind: "video", bytes: 1200000, durationMs: 8000 }],
+    linkedImport: true,
+    previewFrame,
+  });
+  const sentFrames: string[] = [];
+  page.on("request", (request) => {
+    if (request.postData()?.includes(previewFrame)) sentFrames.push(request.url());
+  });
+  await page.goto(`${path}?project=${id}`);
+  await expect(stageButton(page, "整理素材")).toHaveAttribute("aria-current", "step");
+  const importFile = page.getByRole("button", { name: "导入本机文件", exact: true });
+  await expect(importFile).toBeInViewport();
+  await expect(page.getByLabel("口播与分镜脚本")).toBeHidden();
+  await expect(page.getByRole("button", { name: "导出分镜脚本" })).toBeHidden();
+  await page.screenshot({ path: testInfo.outputPath("director-getting-started.png") });
+  await importFile.click();
+  const selected = page.getByRole("region", { name: "素材库" }).getByRole("button", { name: /WG7769\.MP4/ });
+  await expect(selected).toContainText("视频");
+  await expect(selected).toContainText("商品素材");
+  await expect.poll(() => fixture.nativeActions.find((action) => action.action === "director-read-frame")?.payload)
+    .toMatchObject({ projectId: id, assetId: localId });
+  const frame = page.locator('img[src^="data:image/jpeg;base64,"]:visible').first();
+  await expect(frame).toBeInViewport();
+  await expect.poll(() => frame.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(320);
+  await page.screenshot({ path: testInfo.outputPath("director-media-desktop.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const stage of ["整理素材", "编排分镜", "交付导出"] as const) {
+    await expect(stageButton(page, stage)).toBeInViewport();
+  }
+  expect(await page.locator(".director-page").evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("director-media-mobile.png"), fullPage: true, animations: "disabled" });
+  await page.getByRole("button", { name: "用此素材创建分镜", exact: true }).click();
+  await expect(stageButton(page, "编排分镜")).toHaveAttribute("aria-current", "step");
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect.poll(() => fixture.project().shots.length).toBe(1);
+  expect(fixture.project().shots[0].visualId).toBe(fixture.project().assets[0].id);
+  await openStage(page, "交付导出");
+  await expect(page.getByRole("button", { name: "导出分镜脚本" })).toBeEnabled();
+  expect(sentFrames).toEqual([]);
+  expect(fixture.calls.some((call) => /\/(storyboard|renders)$/.test(call.action))).toBe(false);
+});
+
+test("外机视频仍显示媒体类型并保留其已有用途，只有改选角色后才用作商品画面", async ({ page }) => {
+  const fixture = await mockDirector(page, {
+    assets: [{
+      id: assetId, localId: fileId, deviceId: randomUUID(), source: "local",
+      name: "WG7769.MP4", role: "document", mime: "video/mp4", durationMs: 8000,
+    }],
+  }, true);
+  await page.goto(`${path}?project=${id}`);
+  const media = page.getByRole("region", { name: "素材库" });
+  const video = media.getByRole("button", { name: /WG7769\.MP4/ });
+  await expect(video).toContainText("视频");
+  await expect(video).toContainText("文字资料");
+  const useAsset = page.getByRole("button", { name: "用此素材创建分镜", exact: true });
+  await expect(useAsset).toBeHidden();
+  expect(fixture.project().assets[0].role).toBe("document");
+  await page.getByRole("button", { name: "用作商品画面", exact: true }).click();
+  await expect(useAsset).toBeEnabled();
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect.poll(() => fixture.project().assets[0].role).toBe("product");
+  expect(fixture.nativeActions.some((action) => action.action === "director-read-frame")).toBe(false);
+});
+
 test("浏览器打开聊天的智能交办会编排一次并提示 Windows 剪辑", async ({
   page,
 }) => {
@@ -463,6 +562,7 @@ test("浏览器打开聊天的智能交办会编排一次并提示 Windows 剪�
     ],
   });
   await page.goto(`${path}?project=${id}&run=1`);
+  await openStage(page, "编排分镜");
   await expect(page.getByRole("button", { name: "AI 编排分镜" })).toBeEnabled();
   expect(fixture.calls.some((call) => call.method === "POST")).toBe(false);
   await page.evaluate(
@@ -482,6 +582,7 @@ test("浏览器打开聊天的智能交办会编排一次并提示 Windows 剪�
       "分镜已编排。请在具备剪辑能力的 Windows 桌面端打开此项目，继续生成成片。",
     ),
   ).toBeVisible();
+  await openStage(page, "交付导出");
   await expect(
     page.getByRole("button", { name: "后台剪辑", exact: true }),
   ).toBeDisabled();
@@ -542,6 +643,7 @@ test("人工确认后使用冻结版本启动本机，暂停再继续并打开�
     true,
   );
   await page.goto(`${path}?project=${id}`);
+  await openStage(page, "交付导出");
   await expect(
     page.getByRole("button", { name: "确认分镜并后台剪辑" }),
   ).toBeEnabled();
@@ -549,11 +651,12 @@ test("人工确认后使用冻结版本启动本机，暂停再继续并打开�
     fixture.nativeActions.some((call) => call.action === "director-start"),
   ).toBe(false);
   await page.getByRole("button", { name: "确认分镜并后台剪辑" }).click();
-  await expect(page.getByText("后台剪辑中")).toBeVisible();
-  await page.getByRole("button", { name: "暂停", exact: true }).click();
-  await expect(page.getByText("已暂停", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "继续", exact: true }).click();
-  await expect(page.getByText("已导出", { exact: true })).toBeVisible();
+  const delivery = page.getByRole("region", { name: "后台进度与交付" });
+  await expect(delivery.getByText("后台剪辑中")).toBeVisible();
+  await delivery.getByRole("button", { name: "暂停", exact: true }).click();
+  await expect(delivery.getByText("已暂停", { exact: true })).toBeVisible();
+  await delivery.getByRole("button", { name: "继续", exact: true }).click();
+  await expect(delivery.getByText("已导出", { exact: true })).toBeVisible();
   for (const name of ["视频成片（MP4）", "分镜脚本", "字幕（SRT）", "剪辑方案"])
     await expect(page.getByRole("button", { name, exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "视频成片（MP4）" }).click();
@@ -616,12 +719,12 @@ test("小序提交简短创作指令及两份附件，带正确角色进入智�
   await expect(
     page.getByRole("heading", { name: "AI 导演台", exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("智能导演", { exact: true })).toBeVisible();
   await expect
     .poll(() =>
       fixture.nativeActions.some((call) => call.action === "director-start"),
     )
     .toBe(true);
+  await expect(stageButton(page, "交付导出")).toHaveAttribute("aria-current", "step");
   const creation = fixture.calls.find(
     (call) => call.method === "POST" && !call.action,
   );
@@ -664,9 +767,11 @@ test("普通对话模型不可用时仍可打开导演台和创建人工项目�
   await composer.locator("textarea").fill(brief);
   await composer.getByRole("button", { name: "发送给个人助理" }).click();
   await expect(page).toHaveURL(`${path}?project=${id}`);
+  await openStage(page, "编排分镜");
   await expect(
     page.getByRole("button", { name: "新增空白分镜" }),
   ).toBeVisible();
+  await openStage(page, "交付导出");
   await expect(
     page.getByRole("button", { name: "确认分镜并后台剪辑" }),
   ).toBeDisabled();
@@ -790,10 +895,14 @@ test("人工接管先暂停同机活动渲染并保存人工模式", async ({ pa
     true,
   );
   await page.goto(`${path}?project=${id}`);
+  await openStage(page, "交付导出");
   await page.getByRole("button", { name: "后台剪辑", exact: true }).click();
-  await expect(page.getByText("后台剪辑中")).toBeVisible();
+  const delivery = page.getByRole("region", { name: "后台进度与交付" });
+  await expect(delivery.getByText("后台剪辑中")).toBeVisible();
   await page.getByRole("button", { name: "人工接管", exact: true }).click();
-  await expect(page.getByText("已暂停", { exact: true })).toBeVisible();
+  await expect(stageButton(page, "编排分镜")).toHaveAttribute("aria-current", "step");
+  await openStage(page, "交付导出");
+  await expect(delivery.getByText("已暂停", { exact: true })).toBeVisible();
   await expect(
     page.getByText("已切换到人工确定。下一次剪辑需由你确认。"),
   ).toBeVisible();
@@ -811,7 +920,7 @@ test("人工接管先暂停同机活动渲染并保存人工模式", async ({ pa
   await expect(
     page.getByRole("button", { name: "确认分镜并后台剪辑" }),
   ).toBeEnabled();
-  await expect(page.getByText("已暂停", { exact: true })).toBeVisible();
+  await expect(delivery.getByText("已暂停", { exact: true })).toBeVisible();
 });
 
 test("编排中的人工接管保留手工编辑，迟到 AI 结果无法启动剪辑", async ({
@@ -828,6 +937,7 @@ test("编排中的人工接管保留手工编辑，迟到 AI 结果无法启动�
     { storyboardGate },
   );
   await page.goto(`${path}?project=${id}`);
+  await openStage(page, "编排分镜");
   await page.getByRole("button", { name: "智能编排并剪辑" }).click();
   await expect
     .poll(() =>

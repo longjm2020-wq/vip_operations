@@ -45,6 +45,20 @@ export function isVisual(mime: string) {
   return mime.startsWith("image/") || mime.startsWith("video/");
 }
 
+export function directorMediaTypeLabel(mime: string) {
+  if (mime.startsWith("video/")) return "视频";
+  if (mime.startsWith("image/")) return "图片";
+  if (mime.startsWith("audio/")) return "音频";
+  return "文档";
+}
+
+export function canUseDirectorVisual(asset: Pick<DirectorAsset, "role" | "mime">) {
+  return (
+    (asset.role === "product" && isVisual(asset.mime)) ||
+    (asset.role === "portrait" && asset.mime.startsWith("image/"))
+  );
+}
+
 export function canContainAudio(mime: string) {
   return mime.startsWith("audio/") || mime.startsWith("video/");
 }

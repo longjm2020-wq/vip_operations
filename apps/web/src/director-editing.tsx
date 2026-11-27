@@ -1,13 +1,11 @@
 import {
   Button,
   Checkbox,
-  Empty,
   Input,
   InputNumber,
   Select,
   Space,
 } from "antd";
-import { VideoCameraOutlined } from "@ant-design/icons";
 import type { ReactNode } from "react";
 import {
   directorEffects,
@@ -16,9 +14,8 @@ import {
 } from "../../../packages/contracts/src/director";
 import {
   canContainAudio,
-  directorFileUrl,
+  canUseDirectorVisual,
   effectNames,
-  isVisual,
 } from "./director-project";
 
 export function Field({
@@ -66,64 +63,7 @@ export function Seconds({
   );
 }
 
-export function MediaPreview({
-  asset,
-  projectId,
-  canOpenLocal,
-  onOpen,
-}: {
-  asset?: DirectorAsset;
-  projectId: string;
-  canOpenLocal: boolean;
-  onOpen: (id: string) => void;
-}) {
-  if (!asset)
-    return (
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="选择素材或为当前分镜绑定画面"
-      />
-    );
-  if (asset.source === "local")
-    return (
-      <div className="director-preview-file">
-        <VideoCameraOutlined aria-hidden />
-        <strong>{asset.name}</strong>
-        <Button
-          disabled={!canOpenLocal || !asset.localId || !projectId}
-          onClick={() => {
-            if (asset.localId) onOpen(asset.localId);
-          }}
-        >
-          在本机预览
-        </Button>
-        {!canOpenLocal && <span>请切换到导入此素材的 Windows 电脑。</span>}
-      </div>
-    );
-  if (!asset.fileId) return null;
-  const url = directorFileUrl(asset.fileId);
-  if (asset.mime.startsWith("image/"))
-    return <img src={url} alt={asset.name} />;
-  if (asset.mime.startsWith("video/"))
-    return (
-      <video
-        aria-label={asset.name}
-        src={url}
-        controls
-        playsInline
-        preload="metadata"
-      />
-    );
-  if (asset.mime.startsWith("audio/"))
-    return (
-      <audio aria-label={asset.name} src={url} controls preload="metadata" />
-    );
-  return (
-    <a href={url} target="_blank" rel="noreferrer">
-      打开 {asset.name}
-    </a>
-  );
-}
+export { MediaPreview } from "./director-media-preview";
 
 export function ShotEditor({
   shot,
@@ -171,32 +111,21 @@ export function ShotEditor({
       />
     </Field>
   );
+  const lockedParts = [
+    shot.locks.script && "文案",
+    shot.locks.asset && "素材",
+    shot.locks.effect && "动效",
+  ].filter(Boolean).join("、");
+  const lockSummary = shot.locks.all ? "整镜已锁定" : lockedParts && `${lockedParts}已锁定`;
+  const settingsSummary = [
+    lockSummary,
+    (shot.audioId || shot.voiceSampleId) && "已选配音",
+    shot.portraitId && "已选肖像",
+    (shot.startMs > 0 || shot.audioStartMs > 0) && "已设置入点",
+    shot.effect !== "none" && effectNames[shot.effect],
+  ].filter(Boolean).join(" · ");
   return (
     <div className="director-form">
-      <div className="director-locks">
-        {Object.entries({
-          all: "锁定整镜",
-          script: "锁文案",
-          asset: "锁素材",
-          effect: "锁效果",
-        }).map(([key, label]) => {
-          const lock = key as keyof DirectorShot["locks"];
-          return (
-            <Checkbox
-              key={lock}
-              disabled={disabled || (shot.locks.all && lock !== "all")}
-              checked={shot.locks[lock]}
-              onChange={(event) =>
-                onChange({
-                  locks: { ...shot.locks, [lock]: event.target.checked },
-                })
-              }
-            >
-              {label}
-            </Checkbox>
-          );
-        })}
-      </div>
       <Field label="镜头名称">
         <Input
           aria-label="镜头名称"
@@ -206,6 +135,19 @@ export function ShotEditor({
           onChange={(event) => onChange({ title: event.target.value })}
         />
       </Field>
+      <div className="director-shot-media-timing">
+        {assetSelect("画面素材", "visualId", canUseDirectorVisual)}
+        <Field label="镜头时长（秒）">
+          <Seconds
+            label="镜头时长（秒）"
+            value={shot.durationMs}
+            minimum={100}
+            maximum={600_000}
+            disabled={mediaLocked}
+            onChange={(durationMs) => onChange({ durationMs })}
+          />
+        </Field>
+      </div>
       <Field label="口播与分镜脚本">
         <Input.TextArea
           aria-label="口播与分镜脚本"
@@ -226,170 +168,190 @@ export function ShotEditor({
           onChange={(event) => onChange({ caption: event.target.value })}
         />
       </Field>
-      {assetSelect(
-        "画面素材",
-        "visualId",
-        (item) => isVisual(item.mime) && item.role !== "reference",
-      )}
-      {assetSelect(
-        "配音素材",
-        "audioId",
-        (item) => canContainAudio(item.mime) && item.role === "narration",
-      )}
-      {assets.some((item) => item.role === "portrait") &&
-        assetSelect(
-          "口播肖像",
-          "portraitId",
-          (item) => item.mime.startsWith("image/") && item.role === "portrait",
-        )}
-      {assets.some((item) => item.role === "voiceSample") &&
-        assetSelect(
-          "合成音色",
-          "voiceSampleId",
-          (item) => canContainAudio(item.mime) && item.role === "voiceSample",
-        )}
-      <div className="director-inspector-timing">
-        <Field label="画面入点（秒）">
-          <Seconds
-            label="画面入点（秒）"
-            value={shot.startMs}
-            minimum={0}
-            maximum={86_400_000}
-            disabled={mediaLocked}
-            onChange={(startMs) => onChange({ startMs })}
-          />
-        </Field>
-        {shot.audioId && (
-          <Field label="配音入点（秒）">
-            <Seconds
-              label="配音入点（秒）"
-              value={shot.audioStartMs}
-              minimum={0}
-              maximum={86_400_000}
-              disabled={mediaLocked}
-              onChange={(audioStartMs) => onChange({ audioStartMs })}
-            />
-          </Field>
-        )}
-        <Field label="镜头时长（秒）">
-          <Seconds
-            label="镜头时长（秒）"
-            value={shot.durationMs}
-            minimum={100}
-            maximum={600_000}
-            disabled={mediaLocked}
-            onChange={(durationMs) => onChange({ durationMs })}
-          />
-        </Field>
-      </div>
-      <Field label="动效">
-        <Select
-          aria-label="动效"
-          value={shot.effect}
-          disabled={effectLocked}
-          options={directorEffects.map((value) => ({
-            value,
-            label: effectNames[value],
-            disabled: value === "ae-template" && !templates.length,
-          }))}
-          onChange={(effect) =>
-            onChange({
-              effect,
-              ...(effect === "ae-template" ? {} : { templateId: undefined }),
-            })
-          }
-        />
-      </Field>
-      {shot.effect === "ae-template" && (
-        <Field label="动效模板">
-          <Select
-            aria-label="动效模板"
-            value={shot.templateId}
-            disabled={effectLocked}
-            options={templates.map((value) => ({
-              value: value.id,
-              label: value.id,
-            }))}
-            onChange={(templateId) => onChange({ templateId })}
-          />
-        </Field>
-      )}
-      {(shot.effect === "ae-template" ||
-        shot.effect === "callout" ||
-        shot.effect === "size-card") && (
-        <Field label="动效文字">
-          <Input
-            aria-label="动效文字"
-            maxLength={300}
-            disabled={effectLocked}
-            value={shot.effectText || ""}
-            onChange={(event) => onChange({ effectText: event.target.value })}
-          />
-        </Field>
-      )}
-      <details className="director-analysis">
-        <summary>镜头构思</summary>
+      <details key={shot.id} className="director-analysis director-shot-advanced">
+        <summary>
+          更多镜头设置
+          {settingsSummary && <small>{settingsSummary}</small>}
+        </summary>
         <div className="director-form">
-          <Field label="镜头目的">
-            <Input
-              aria-label="镜头目的"
-              value={shot.purpose ?? ""}
-              maxLength={400}
-              disabled={textLocked}
-              onChange={(event) => onChange({ purpose: event.target.value })}
+          <fieldset className="director-shot-locks">
+            <legend>锁定内容</legend>
+            <div className="director-locks">
+              {Object.entries({
+                all: "锁定整镜",
+                script: "锁文案",
+                asset: "锁素材",
+                effect: "锁效果",
+              }).map(([key, label]) => {
+                const lock = key as keyof DirectorShot["locks"];
+                return (
+                  <Checkbox
+                    key={lock}
+                    disabled={disabled || (shot.locks.all && lock !== "all")}
+                    checked={shot.locks[lock]}
+                    onChange={(event) =>
+                      onChange({
+                        locks: { ...shot.locks, [lock]: event.target.checked },
+                      })
+                    }
+                  >
+                    {label}
+                  </Checkbox>
+                );
+              })}
+            </div>
+          </fieldset>
+          {assetSelect(
+            "配音素材",
+            "audioId",
+            (item) => canContainAudio(item.mime) && item.role === "narration",
+          )}
+          {assets.some((item) => item.role === "portrait") &&
+            assetSelect(
+              "口播肖像",
+              "portraitId",
+              (item) => item.mime.startsWith("image/") && item.role === "portrait",
+            )}
+          {assets.some((item) => item.role === "voiceSample") &&
+            assetSelect(
+              "合成音色",
+              "voiceSampleId",
+              (item) => canContainAudio(item.mime) && item.role === "voiceSample",
+            )}
+          <div className="director-inspector-timing">
+            <Field label="画面入点（秒）">
+              <Seconds
+                label="画面入点（秒）"
+                value={shot.startMs}
+                minimum={0}
+                maximum={86_400_000}
+                disabled={mediaLocked}
+                onChange={(startMs) => onChange({ startMs })}
+              />
+            </Field>
+            {shot.audioId && (
+              <Field label="配音入点（秒）">
+                <Seconds
+                  label="配音入点（秒）"
+                  value={shot.audioStartMs}
+                  minimum={0}
+                  maximum={86_400_000}
+                  disabled={mediaLocked}
+                  onChange={(audioStartMs) => onChange({ audioStartMs })}
+                />
+              </Field>
+            )}
+          </div>
+          <Field label="动效">
+            <Select
+              aria-label="动效"
+              value={shot.effect}
+              disabled={effectLocked}
+              options={directorEffects.map((value) => ({
+                value,
+                label: effectNames[value],
+                disabled: value === "ae-template" && !templates.length,
+              }))}
+              onChange={(effect) =>
+                onChange({
+                  effect,
+                  ...(effect === "ae-template" ? {} : { templateId: undefined }),
+                })
+              }
             />
           </Field>
-          <Field label="镜头景别">
-            <Input
-              aria-label="镜头景别"
-              value={shot.framing ?? ""}
-              maxLength={400}
-              disabled={textLocked}
-              onChange={(event) => onChange({ framing: event.target.value })}
-            />
-          </Field>
-          <Field label="执行说明">
-            <Input
-              aria-label="执行说明"
-              value={shot.direction ?? ""}
-              maxLength={700}
-              disabled={textLocked}
-              onChange={(event) => onChange({ direction: event.target.value })}
-            />
-          </Field>
+          {shot.effect === "ae-template" && (
+            <Field label="动效模板">
+              <Select
+                aria-label="动效模板"
+                value={shot.templateId}
+                disabled={effectLocked}
+                options={templates.map((value) => ({
+                  value: value.id,
+                  label: value.id,
+                }))}
+                onChange={(templateId) => onChange({ templateId })}
+              />
+            </Field>
+          )}
+          {(shot.effect === "ae-template" ||
+            shot.effect === "callout" ||
+            shot.effect === "size-card") && (
+            <Field label="动效文字">
+              <Input
+                aria-label="动效文字"
+                maxLength={300}
+                disabled={effectLocked}
+                value={shot.effectText || ""}
+                onChange={(event) => onChange({ effectText: event.target.value })}
+              />
+            </Field>
+          )}
+          <details className="director-analysis">
+            <summary>镜头构思</summary>
+            <div className="director-form">
+              <Field label="镜头目的">
+                <Input
+                  aria-label="镜头目的"
+                  value={shot.purpose ?? ""}
+                  maxLength={400}
+                  disabled={textLocked}
+                  onChange={(event) => onChange({ purpose: event.target.value })}
+                />
+              </Field>
+              <Field label="镜头景别">
+                <Input
+                  aria-label="镜头景别"
+                  value={shot.framing ?? ""}
+                  maxLength={400}
+                  disabled={textLocked}
+                  onChange={(event) => onChange({ framing: event.target.value })}
+                />
+              </Field>
+              <Field label="执行说明">
+                <Input
+                  aria-label="执行说明"
+                  value={shot.direction ?? ""}
+                  maxLength={700}
+                  disabled={textLocked}
+                  onChange={(event) => onChange({ direction: event.target.value })}
+                />
+              </Field>
+            </div>
+            {shot.evidence && <p>选片依据 · {shot.evidence}</p>}
+          </details>
+          <Space wrap>
+            <Button size="small" disabled={textLocked} onClick={propose}>
+              提供两种本镜文案
+            </Button>
+            <Button
+              size="small"
+              disabled={disabled || shot.locks.all}
+              onClick={regenerate}
+            >
+              仅重编本镜
+            </Button>
+            <Button
+              size="small"
+              disabled={
+                disabled || !canPreview || !(shot.visualId || shot.portraitId)
+              }
+              onClick={preview}
+            >
+              单镜试剪
+            </Button>
+            <Button
+              size="small"
+              type="text"
+              danger
+              disabled={disabled || shot.locks.all}
+              onClick={remove}
+            >
+              删除分镜
+            </Button>
+          </Space>
         </div>
-        {shot.evidence && <p>选片依据 · {shot.evidence}</p>}
       </details>
-      <Space wrap>
-        <Button size="small" disabled={textLocked} onClick={propose}>
-          提供两种本镜文案
-        </Button>
-        <Button
-          size="small"
-          disabled={disabled || shot.locks.all}
-          onClick={regenerate}
-        >
-          仅重编本镜
-        </Button>
-        <Button
-          size="small"
-          disabled={
-            disabled || !canPreview || !(shot.visualId || shot.portraitId)
-          }
-          onClick={preview}
-        >
-          单镜试剪
-        </Button>
-        <Button
-          size="small"
-          type="text"
-          danger
-          disabled={disabled || shot.locks.all}
-          onClick={remove}
-        >
-          删除分镜
-        </Button>
-      </Space>
     </div>
   );
 }

@@ -7,10 +7,10 @@
 }
 
 .director-heading,
-.director-project-bar,
 .director-section-heading,
 .director-projects,
-.director-project-controls,
+.director-project-actions,
+.director-project-summary,
 .director-status,
 .director-render-status {
   display: flex;
@@ -19,7 +19,6 @@
 }
 
 .director-heading,
-.director-project-bar,
 .director-section-heading {
   justify-content: space-between;
 }
@@ -58,12 +57,38 @@
   display: grid;
   place-items: center;
 }
+.director-start h2 { margin: 0 0 12px; font-size: 18px; }
+.director-project-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  gap: 10px;
+}
+.director-project-list button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-bg);
+  color: var(--app-text);
+  cursor: pointer;
+  text-align: start;
+  font: inherit;
+}
+.director-project-list button:hover { background: var(--app-hover); }
+.director-project-list button .anticon { color: var(--app-accent); }
+.director-project-list button > span:nth-child(2) { min-width: 0; flex: 1; }
+.director-project-list strong { display: block; overflow-wrap: anywhere; }
+.director-project-list small { color: var(--app-secondary); }
 .director-project-title {
   display: grid;
   gap: 4px;
   width: min(100%, 390px);
 }
-.director-project-title .ant-input {
+.director-project-title strong {
+  overflow-wrap: anywhere;
   font-size: 17px;
   font-weight: 650;
 }
@@ -72,17 +97,30 @@
   color: var(--app-secondary);
   font-size: 12px;
 }
-.director-project-controls {
-  align-items: end;
+.director-project-bar {
+  display: grid;
+  gap: 14px;
+}
+.director-project-summary {
+  justify-content: space-between;
   flex-wrap: wrap;
-  justify-content: end;
 }
-.director-project-controls .director-field {
-  width: max-content;
-  min-width: 86px;
+.director-project-actions {
+  flex-wrap: wrap;
+  gap: 8px;
 }
-.director-project-controls .director-field:nth-child(4) {
-  min-width: 100px;
+.director-save-state {
+  color: var(--app-secondary);
+  font-size: 12px;
+  margin-inline-end: 5px;
+}
+.director-project-controls {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.6fr) repeat(4, minmax(92px, 1fr));
+  align-items: end;
+  gap: 12px;
+  border-top: 1px solid var(--app-border);
+  padding-top: 14px;
 }
 .director-status {
   flex-wrap: wrap;
@@ -91,28 +129,102 @@
 .director-status .ant-tag {
   margin: 0;
 }
-.director-busy {
-  margin-inline-start: auto;
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-}
 
-.director-workbench {
+.director-steps {
   display: grid;
-  grid-template-columns: minmax(205px, 0.85fr) minmax(285px, 1.7fr) minmax(
-      230px,
-      1fr
-    );
-  gap: 12px;
-  align-items: start;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--app-surface);
 }
-.director-lower {
+.director-steps button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px clamp(12px, 2vw, 28px);
+  border: 0;
+  border-inline-end: 1px solid var(--app-border);
+  background: transparent;
+  color: var(--app-text);
+  text-align: start;
+  font: inherit;
+  cursor: pointer;
+}
+.director-steps button:last-child { border-inline-end: 0; }
+.director-steps button:hover { background: var(--app-hover); }
+.director-steps button:focus-visible { outline: 2px solid var(--app-accent); outline-offset: -3px; }
+.director-steps button[aria-current="step"] {
+  background: var(--app-accent-soft);
+  box-shadow: inset 0 -3px var(--app-accent-fill);
+}
+.director-step-icon, .director-export-icon {
+  flex-shrink: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--app-muted);
+  color: var(--app-secondary);
+  font-size: 19px;
 }
+.director-steps [aria-current="step"] .director-step-icon, .director-export-icon {
+  color: var(--app-on-accent);
+  background: var(--app-accent-fill);
+}
+.director-steps strong, .director-steps small { display: block; }
+.director-steps strong { font-size: 15px; }
+.director-steps small { color: var(--app-secondary); font-size: 12px; margin-top: 3px; }
+.director-studio {
+  display: grid;
+  grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.44fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+.director-stage-storyboard {
+  grid-template-columns: minmax(0, 1.6fr) minmax(275px, 1fr);
+  grid-template-areas: "sequence inspector" "preview inspector" "planning inspector";
+  grid-template-rows: auto auto 1fr;
+}
+.director-stage-storyboard[data-has-shots="false"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas: "planning sequence";
+  grid-template-rows: auto;
+}
+.director-stage-storyboard .director-edit { grid-area: preview; }
+.director-sequence { grid-area: sequence; }
+.director-planning { grid-area: planning; }
+.director-inspector { grid-area: inspector; }
+.director-export, .director-sequence { display: grid; gap: 14px; }
+.director-preview-actions, .director-export-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.director-preview-actions { justify-content: flex-end; }
+.director-export-summary {
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--app-bg);
+}
+.director-export-summary > div { min-width: 0; overflow-wrap: anywhere; }
+.director-export-summary p { margin: 4px 0 0; color: var(--app-secondary); }
+.director-export > .ant-btn, .director-next-step { justify-self: start; }
+.director-duration-track {
+  display: flex;
+  height: 8px;
+  overflow: hidden;
+  gap: 1px;
+  border-radius: 4px;
+  background: var(--app-bg);
+}
+.director-duration-track span { flex-basis: 0; background: var(--app-accent-border); }
+.director-duration-track [data-active="true"] { background: var(--app-accent-fill); }
 .director-media,
 .director-edit,
 .director-inspector,
@@ -128,7 +240,7 @@
 .director-section-heading h2 {
   margin: 0;
   color: var(--app-text);
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 680;
 }
 .director-section-heading > span {
@@ -241,8 +353,8 @@
 }
 
 .director-preview {
-  min-height: 175px;
-  aspect-ratio: 16 / 10;
+  min-width: 0;
+  height: clamp(200px, 33vh, 365px);
   display: grid;
   place-items: center;
   padding: 10px;
@@ -261,27 +373,11 @@
   width: 100%;
   height: 100%;
   min-height: 0;
-  max-height: 380px;
+  max-height: 100%;
   object-fit: contain;
 }
 .director-preview audio {
   width: min(90%, 380px);
-}
-.director-preview-file {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  text-align: center;
-  min-width: 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-.director-preview-file > .anticon {
-  color: var(--app-accent);
-  font-size: 27px;
-}
-.director-preview-file span {
-  color: var(--app-secondary);
 }
 .director-timeline {
   display: grid;
@@ -369,59 +465,57 @@
   overflow: auto;
 }
 
-@media (max-width: 1100px) {
-  .director-project-bar {
-    align-items: start;
-    flex-direction: column;
-  }
-  .director-project-controls {
-    justify-content: start;
-  }
-  .director-workbench {
-    grid-template-columns: minmax(165px, 0.75fr) minmax(225px, 1.2fr) minmax(
-        200px,
-        1fr
-      );
-  }
-  .director-panel {
-    padding: 12px;
-  }
-}
-
 @media (max-width: 900px) {
-  .director-workbench {
-    grid-template-columns: minmax(170px, 0.7fr) minmax(0, 1.3fr);
+  .director-project-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .director-panel { padding: 14px; }
+  .director-stage-storyboard { grid-template-columns: minmax(0, 1.25fr) minmax(240px, 1fr); }
+}
+@media (max-width: 720px) {
+  .director-stage-storyboard, .director-stage-storyboard[data-has-shots="false"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "sequence" "preview" "inspector" "planning";
+    grid-template-rows: auto;
   }
-  .director-inspector {
-    grid-column: 1 / -1;
-  }
-  .director-inspector .director-form {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .director-inspector
-    .director-form
-    > :is(.director-locks, .director-analysis) {
-    grid-column: 1 / -1;
-  }
+  .director-stage-storyboard[data-has-shots="false"] { grid-template-areas: "planning" "sequence"; }
+  .director-stage-media, .director-stage-delivery { grid-template-columns: minmax(0, 1fr); }
+  .director-project-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .director-step-icon { width: 27px; height: 27px; font-size: 15px; }
+  .director-steps button { gap: 8px; padding: 11px 9px; }
+}
+@media (max-width: 600px) {
+  .director-page { padding: 12px; gap: 12px; }
+  .director-heading { flex-direction: column; align-items: stretch; }
+  .director-projects { flex-basis: auto; }
+  .director-project-title { width: auto; }
+  .director-project-summary { gap: 9px; }
+  .director-steps button { justify-content: center; }
+  .director-steps small { display: none; }
+  .director-steps strong { font-size: 13px; white-space: nowrap; }
+  .director-steps .director-step-icon { width: auto; height: auto; color: inherit; background: none; }
+  .director-preview { height: clamp(170px, 48vw, 250px); }
+  .director-asset-list { max-height: 200px; }
 }
 
-@media (max-width: 600px) {
-  .director-page {
-    padding: 12px;
-  }
-  .director-heading {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .director-projects {
-    flex-basis: auto;
-  }
-  .director-workbench,
-  .director-lower,
-  .director-inspector .director-form {
-    grid-template-columns: 1fr;
-  }
-  .director-busy {
-    margin-inline-start: 0;
-  }
+.director-shot-media-timing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 7rem;
+  gap: 10px;
+}
+.director-shot-media-timing > .director-field { min-width: 0; }
+.director-shot-advanced > summary small {
+  margin-inline-start: 8px;
+  color: var(--app-secondary);
+}
+.director-shot-advanced[open] > .director-form { margin-top: 12px; }
+.director-shot-locks {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.director-shot-locks legend {
+  margin: 0 0 5px;
+  padding: 0;
+  color: var(--app-secondary);
+  font-size: 12px;
 }

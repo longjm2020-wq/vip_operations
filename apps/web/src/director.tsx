@@ -4,7 +4,6 @@ import {
   Alert,
   Button,
   Checkbox,
-  Empty,
   Input,
   Modal,
   Pagination,
@@ -16,12 +15,18 @@ import {
 } from "antd";
 import {
   AudioOutlined,
+  ArrowRightOutlined,
   CheckOutlined,
   CloudUploadOutlined,
+  DownloadOutlined,
+  FileTextOutlined,
   FolderOpenOutlined,
   LockOutlined,
+  PictureOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  SettingOutlined,
+  SnippetsOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import { useLocation, useSearchParams } from "react-router-dom";
@@ -49,6 +54,7 @@ import {
 import {
   acceptsDirectorRole,
   artifactNames,
+  directorMediaTypeLabel,
   directorPath,
   getDirectorCapabilities,
   isVisual,
@@ -70,6 +76,7 @@ const uploadTypes =
 const prettySeconds = (milliseconds: number) =>
   `${Number((milliseconds / 1000).toFixed(2))} 秒`;
 const assetPageSize = 40;
+type DirectorStep = "media" | "storyboard" | "delivery";
 const assetLimitMessage = `每个项目最多使用 ${directorAssetLimit} 份素材。`;
 function formatImportSize(bytes: number) {
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -194,7 +201,7 @@ export function DirectorPage() {
           <h1>
             <VideoCameraOutlined aria-hidden /> AI 导演台
           </h1>
-          <p>整理素材、编排分镜，在 Windows 本机后台剪辑并交付成片。</p>
+          <p>把手里的素材编成分镜，再导出脚本或视频。</p>
         </div>
         <div className="director-projects">
           <Select
@@ -230,15 +237,21 @@ export function DirectorPage() {
         />
       )}
       {!projectId && (
-        <section className="director-empty director-panel">
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="选择一个项目，或新建项目开始编排"
-          >
-            <Button type="primary" onClick={() => setCreateOpen(true)}>
-              新建分镜项目
-            </Button>
-          </Empty>
+        <section className="director-panel director-start">
+          <h2>{projects.data?.items.length ? "继续制作" : "开始第一个项目"}</h2>
+          {projects.data?.items.length ? (
+            <div className="director-project-list">
+              {projects.data.items.slice(0, 6).map((item) => (
+                <button key={item.id} type="button" onClick={() => choose(item.id)}>
+                  {item.output === "script" ? <FileTextOutlined /> : <VideoCameraOutlined />}
+                  <span><strong>{item.title}</strong><small>{item.output === "script" ? "分镜脚本" : "视频成片"} · 版本 {item.revision}</small></span>
+                  <ArrowRightOutlined />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="director-muted">点「新建项目」，给作品取个名字。进入后可以导入素材，也可以直接写第一镜。</p>
+          )}
         </section>
       )}
       {projectId &&
@@ -354,6 +367,11 @@ function DirectorEditor({
   const connection = useDirectorConnection(userId);
   const [draft, setDraft] = useState(initial);
   const [saved, setSaved] = useState(initial);
+  const [step, setStep] = useState<DirectorStep>(
+    initial.renders.length ? "delivery" : initial.shots.length || autostart ? "storyboard" : "media",
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const stepNav = useRef<HTMLElement>(null);
   const [selectedShotId, setSelectedShotId] = useState(
     initial.shots[0]?.id || "",
   );
@@ -390,11 +408,9 @@ function DirectorEditor({
     >(),
   );
   const pendingPauses = useRef(new Map<string, Promise<DirectorLocalJob>>());
-  const asset = draft.assets.find((item) => item.id === assetId);
+  const asset = draft.assets.find((item) => item.id === assetId) ?? draft.assets[0];
   const selectedShot = draft.shots.find((item) => item.id === selectedShotId);
-  const previewAsset =
-    asset ||
-    draft.assets.find(
+  const previewAsset = step === "media" ? asset : draft.assets.find(
       (item) =>
         item.id === (selectedShot?.visualId || selectedShot?.portraitId),
     );
@@ -441,6 +457,13 @@ function DirectorEditor({
     queryFn: ({ signal }) => libraryDirectorFiles(signal),
     enabled: libraryOpen,
   });
+
+  function showStep(next: DirectorStep) {
+    setStep(next);
+    requestAnimationFrame(() => {
+      stepNav.current?.querySelector<HTMLButtonElement>('[aria-current="step"]')?.focus();
+    });
+  }
 
   function apply(project: DirectorProject, edits?: Partial<DirectorProject>) {
     setDraft({ ...project, ...edits });
@@ -643,6 +666,7 @@ function DirectorEditor({
     updateRender(queued);
     if (!isCurrent()) return;
     setSelectedRenderId(queued.id);
+    setStep("delivery");
     setVersionProject(undefined);
     if (queued.status === "done") return;
     const starting = localDirectorRequest("start", {
@@ -713,6 +737,7 @@ function DirectorEditor({
     );
     if (!isCurrent()) return;
     apply(planned);
+    setStep("storyboard");
     setInstruction("");
     if (start && planned.output === "video") {
       if (connection.canRender)
@@ -813,6 +838,7 @@ function DirectorEditor({
         );
       }
       apply(project, edits);
+      setStep("storyboard");
       if (pauseProblems.length) setError(pauseProblems.join(" "));
       setNotice("已切换到人工确定。下一次剪辑需由你确认。");
     } catch (caught) {
@@ -1010,22 +1036,24 @@ function DirectorEditor({
     if (assetId === id) setAssetId("");
   }
 
-  function addBlank() {
+  function addShot(visual?: DirectorAsset) {
+    if (busy || draft.shots.length >= 100) return;
     const id = crypto.randomUUID();
     const row: DirectorShot = {
       id,
-      title: "",
+      title: visual ? visual.name.replace(/\.[^.]+$/, "").slice(0, 180) : "",
+      visualId: visual?.id,
       script: "",
       caption: "",
       startMs: 0,
       audioStartMs: 0,
-      durationMs: 3000,
+      durationMs: visual?.durationMs ? Math.max(100, Math.min(3000, visual.durationMs)) : 3000,
       effect: "none",
       locks: { ...emptyDirectorLocks },
     };
     setDraft((current) => ({ ...current, shots: [...current.shots, row] }));
     setSelectedShotId(id);
-    setAssetId("");
+    showStep("storyboard");
   }
 
   function moveShot(index: number, amount: -1 | 1) {
@@ -1162,106 +1190,167 @@ function DirectorEditor({
     <>
       <section
         className="director-project-bar director-panel"
-        aria-label="项目设置"
+        aria-label="当前项目"
       >
-        <div className="director-project-title">
-          <Input
-            aria-label="编辑项目名称"
-            value={draft.title}
-            maxLength={160}
-            onChange={(event) => updateDraft("title", event.target.value)}
-            disabled={!!busy}
-          />
-          <span>{dirty ? "有未保存修改" : `项目版本 ${saved.revision}`}</span>
+        <div className="director-project-summary">
+          <div className="director-project-title">
+            <strong>{draft.title || "未命名项目"}</strong>
+            <span>
+              {draft.aspect} · {prettySeconds(draft.durationMs)} ·{" "}
+              {draft.output === "video" ? "剪辑成片" : "只交付脚本"}
+            </span>
+          </div>
+          <div className="director-project-actions">
+            <span className="director-save-state">
+              {dirty ? "有未保存修改" : `已保存 · 版本 ${saved.revision}`}
+            </span>
+            <Button
+              icon={<SettingOutlined />}
+              aria-expanded={settingsOpen}
+              aria-controls="director-settings"
+              onClick={() => setSettingsOpen(!settingsOpen)}
+            >
+              项目设置
+            </Button>
+            <Button
+              icon={<CheckOutlined />}
+              disabled={!dirty || !!busy}
+              onClick={() =>
+                void run("正在保存…", async () => {
+                  await save();
+                  setNotice("项目已保存。");
+                })
+              }
+            >
+              保存项目
+            </Button>
+            {draft.mode === "smart" &&
+              (canInterruptSmartWork ||
+                renders.some(
+                  (entry) =>
+                    entry.status === "running" || entry.status === "queued",
+                )) && (
+                <Button
+                  disabled={!!busy && !canInterruptSmartWork}
+                  onClick={() => void takeManualControl()}
+                >
+                  人工接管
+                </Button>
+              )}
+          </div>
         </div>
-        <div className="director-project-controls">
-          <Field label="创作方式">
-            <Select
-              aria-label="创作方式"
-              value={draft.mode}
-              options={explicitApprovalModes}
-              onChange={(value) => {
-                if (value === "manual" && draft.mode === "smart")
-                  void takeManualControl();
-                else updateDraft("mode", value);
-              }}
-              disabled={!!busy}
-            />
-          </Field>
-          <Field label="交付目标">
-            <Select
-              aria-label="交付目标"
-              value={draft.output}
-              options={outputModes}
-              onChange={(value) => updateDraft("output", value)}
-              disabled={!!busy}
-            />
-          </Field>
-          <Field label="画幅">
-            <Select
-              aria-label="画幅"
-              value={draft.aspect}
-              options={directorAspects.map((value) => ({
-                value,
-                label: value,
-              }))}
-              onChange={(value) => updateDraft("aspect", value)}
-              disabled={!!busy}
-            />
-          </Field>
-          <Field label="目标时长（秒）">
-            <Seconds
-              label="目标时长（秒）"
-              value={draft.durationMs}
-              minimum={1000}
-              maximum={600000}
-              onChange={(value) => updateDraft("durationMs", value)}
-              disabled={!!busy}
-            />
-          </Field>
-          <Button
-            icon={<CheckOutlined />}
-            disabled={!dirty || !!busy}
-            onClick={() =>
-              void run("正在保存…", async () => {
-                await save();
-                setNotice("项目已保存。");
-              })
-            }
-          >
-            保存项目
-          </Button>
-          {draft.mode === "smart" &&
-            (canInterruptSmartWork ||
-              renders.some(
-                (entry) =>
-                  entry.status === "running" || entry.status === "queued",
-              )) && (
-              <Button
-                disabled={!!busy && !canInterruptSmartWork}
-                onClick={() => void takeManualControl()}
-              >
-                人工接管
-              </Button>
-            )}
-        </div>
+        {settingsOpen && (
+          <div className="director-project-controls" id="director-settings">
+            <Field label="项目名称">
+              <Input
+                aria-label="编辑项目名称"
+                value={draft.title}
+                maxLength={160}
+                disabled={!!busy}
+                onChange={(event) => updateDraft("title", event.target.value)}
+              />
+            </Field>
+            <Field label="创作方式">
+              <Select
+                aria-label="创作方式"
+                value={draft.mode}
+                options={explicitApprovalModes}
+                onChange={(value) => {
+                  if (value === "manual" && draft.mode === "smart")
+                    void takeManualControl();
+                  else updateDraft("mode", value);
+                }}
+                disabled={!!busy}
+              />
+            </Field>
+            <Field label="交付目标">
+              <Select
+                aria-label="交付目标"
+                value={draft.output}
+                options={outputModes}
+                onChange={(value) => updateDraft("output", value)}
+                disabled={!!busy}
+              />
+            </Field>
+            <Field label="画幅">
+              <Select
+                aria-label="画幅"
+                value={draft.aspect}
+                options={directorAspects.map((value) => ({
+                  value,
+                  label: value,
+                }))}
+                onChange={(value) => updateDraft("aspect", value)}
+                disabled={!!busy}
+              />
+            </Field>
+            <Field label="目标时长（秒）">
+              <Seconds
+                label="目标时长（秒）"
+                value={draft.durationMs}
+                minimum={1000}
+                maximum={600000}
+                onChange={(value) => updateDraft("durationMs", value)}
+                disabled={!!busy}
+              />
+            </Field>
+          </div>
+        )}
       </section>
-      <div className="director-status" role="status">
-        <Tag color={connection.canRender ? "success" : "default"}>
-          {connection.canRender ? "本机可剪辑" : "剪辑能力"}
-        </Tag>
-        <span>{desktopAvailability}</span>
-        {connection.supported && !connection.canRender && (
-          <Button size="small" onClick={() => void connection.local.refetch()}>
-            重新检查
-          </Button>
-        )}
-        {busy && (
-          <span className="director-busy">
-            <Spin size="small" /> {busy}
-          </span>
-        )}
-      </div>
+      <nav ref={stepNav} className="director-steps" aria-label="导演台制作流程">
+        {(
+          [
+            {
+              id: "media",
+              title: "整理素材",
+              note: draft.assets.length
+                ? `${draft.assets.length} 份素材`
+                : "导入图片、视频或文档",
+              icon: <FolderOpenOutlined />,
+            },
+            {
+              id: "storyboard",
+              title: "编排分镜",
+              note: draft.shots.length
+                ? `${draft.shots.length} 镜 · ${prettySeconds(totalDuration)}`
+                : "手工编排或由 AI 起草",
+              icon: <SnippetsOutlined />,
+            },
+            {
+              id: "delivery",
+              title: "交付导出",
+              note: renders.length
+                ? renderStatuses[renders[0].status]
+                : draft.output === "script"
+                  ? "下载分镜脚本"
+                  : "导出脚本或成片",
+              icon: <DownloadOutlined />,
+            },
+          ] as const
+        ).map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            aria-label={item.title}
+            aria-current={step === item.id ? "step" : undefined}
+            onClick={() => setStep(item.id)}
+          >
+            <span className="director-step-icon" aria-hidden>
+              {item.icon}
+            </span>
+            <span>
+              <strong>{item.title}</strong>
+              <small>{item.note}</small>
+            </span>
+          </button>
+        ))}
+      </nav>
+      {busy && (
+        <div className="director-status" role="status">
+          <Spin size="small" />
+          {busy}
+        </div>
+      )}
       {error && (
         <Alert
           type="error"
@@ -1280,617 +1369,801 @@ function DirectorEditor({
           onClose={() => setNotice("")}
         />
       )}
-      <div className="director-workbench">
-        <section className="director-panel director-media" aria-label="素材库">
-          <div className="director-section-heading">
-            <h2>素材</h2>
-            <span>{draft.assets.length} / {directorAssetLimit}</span>
-          </div>
-          <div className="director-imports">
-            <Button
-              icon={<CloudUploadOutlined aria-hidden />}
-              disabled={
-                !!busy ||
-                draft.assets.length >= directorAssetLimit ||
-                (connection.supported && !connection.paired)
-              }
-              onClick={() =>
-                connection.supported
-                  ? pickNative("files")
-                  : filesRef.current?.click()
-              }
-            >
-              {connection.supported ? "导入本机文件" : "上传文件"}
-            </Button>
-            <Button
-              icon={<FolderOpenOutlined aria-hidden />}
-              disabled={
-                !!busy ||
-                draft.assets.length >= directorAssetLimit ||
-                (connection.supported && !connection.paired)
-              }
-              onClick={() =>
-                connection.supported
-                  ? pickNative("folder")
-                  : folderRef.current?.click()
-              }
-            >
-              {connection.supported ? "导入本机文件夹" : "上传文件夹"}
-            </Button>
-            <Button
-              type="text"
-              disabled={!!busy || draft.assets.length >= directorAssetLimit}
-              onClick={() => {
-                setLibrarySelected([]);
-                setLibraryOpen(true);
-              }}
-            >
-              从工作台文件选择
-            </Button>
-            {connection.supported && (
+      <div
+        className={`director-studio director-stage-${step}`}
+        data-has-shots={!!draft.shots.length}
+      >
+        {step === "media" && (
+          <section
+            className="director-panel director-media"
+            aria-label="素材库"
+          >
+            <div className="director-section-heading">
+              <h2>项目素材</h2>
+              <span>
+                {draft.assets.length} / {directorAssetLimit}
+              </span>
+            </div>
+            <div className="director-imports">
+              <Button
+                type={draft.assets.length ? "default" : "primary"}
+                icon={<CloudUploadOutlined aria-hidden />}
+                disabled={
+                  !!busy ||
+                  draft.assets.length >= directorAssetLimit ||
+                  (connection.supported && !connection.paired)
+                }
+                onClick={() =>
+                  connection.supported
+                    ? pickNative("files")
+                    : filesRef.current?.click()
+                }
+              >
+                {connection.supported ? "导入本机文件" : "上传文件"}
+              </Button>
+              <Button
+                icon={<FolderOpenOutlined aria-hidden />}
+                disabled={
+                  !!busy ||
+                  draft.assets.length >= directorAssetLimit ||
+                  (connection.supported && !connection.paired)
+                }
+                onClick={() =>
+                  connection.supported
+                    ? pickNative("folder")
+                    : folderRef.current?.click()
+                }
+              >
+                {connection.supported ? "导入本机文件夹" : "上传文件夹"}
+              </Button>
               <Button
                 type="text"
                 disabled={!!busy || draft.assets.length >= directorAssetLimit}
-                onClick={() => filesRef.current?.click()}
+                onClick={() => {
+                  setLibrarySelected([]);
+                  setLibraryOpen(true);
+                }}
               >
-                上传到工作台
+                从工作台文件选择
               </Button>
-            )}
-            <input
-              className="director-file-input"
-              ref={filesRef}
-              type="file"
-              multiple
-              accept={uploadTypes}
-              onChange={(event) => void upload(event)}
-              aria-label="上传项目文件"
-            />
-            <input
-              className="director-file-input"
-              ref={folderRef}
-              type="file"
-              multiple
-              {...{ webkitdirectory: "" }}
-              accept={uploadTypes}
-              onChange={(event) => void upload(event)}
-              aria-label="上传项目文件夹"
-            />
-          </div>
-          <p className="director-muted">
-            {connection.local.data?.localReferenceImport
-              ? "本机素材直接引用原文件。导入文件夹会包含子目录，剪辑期间请保留原文件的位置和内容。"
-              : connection.supported && connection.paired
-                ? "当前客户端复制本机素材，单份最多 512 MiB。大素材包请更新至 Windows 桌面端 1.3.1 或更新版本。"
-                : "可上传文件或从工作台选择。几十 GB 的本机素材包可在 Windows 桌面端按文件夹导入。"}
-          </p>
-          <div className="director-asset-list">
-            {draft.assets.slice((currentAssetPage - 1) * assetPageSize, currentAssetPage * assetPageSize).map((item) => (
-              <button
-                type="button"
-                key={item.id}
-                onClick={() => setAssetId(item.id)}
-                aria-pressed={assetId === item.id}
-              >
-                <span className="director-asset-icon" aria-hidden>
-                  {item.mime.startsWith("audio/") ? (
-                    <AudioOutlined />
-                  ) : isVisual(item.mime) ? (
-                    <VideoCameraOutlined />
-                  ) : (
-                    <FolderOpenOutlined />
-                  )}
-                </span>
-                <span>
-                  <strong>{item.name}</strong>
-                  <small>
-                    {roleNames[item.role]} ·{" "}
-                    {item.source === "local" ? "本机" : "工作台"}
-                  </small>
-                </span>
-              </button>
-            ))}
-          </div>
-          {draft.assets.length > assetPageSize && (
-            <Pagination size="small" current={currentAssetPage} total={draft.assets.length}
-              pageSize={assetPageSize} showSizeChanger={false} onChange={setAssetPage} />
-          )}
-          {asset && (
-            <div className="director-asset-settings">
-              <Field label="素材角色">
-                <Select
-                  aria-label="素材角色"
-                  virtual={false}
-                  disabled={!!busy}
-                  value={asset.role}
-                  options={directorRoles.map((value) => ({
-                    value,
-                    label: roleNames[value],
-                    disabled: !acceptsDirectorRole(value, asset.mime),
-                  }))}
-                  onChange={(value) =>
-                    updateAsset(asset.id, {
-                      role: value,
-                      authorized:
-                        value === asset.role ? asset.authorized : undefined,
-                    })
+              {connection.supported && (
+                <Button
+                  type="text"
+                  disabled={
+                    !!busy || draft.assets.length >= directorAssetLimit
                   }
-                />
-              </Field>
-              {(asset.role === "portrait" || asset.role === "voiceSample") && (
-                <Checkbox
-                  disabled={!!busy}
-                  checked={!!asset.authorized}
-                  onChange={(event) =>
-                    updateAsset(asset.id, { authorized: event.target.checked })
-                  }
+                  onClick={() => filesRef.current?.click()}
                 >
-                  我已取得在此项目中的授权
-                </Checkbox>
+                  上传到工作台
+                </Button>
               )}
-              {asset.role === "voiceSample" && (
-                <Field label="样本原文（可选）">
-                  <Input
-                    aria-label="样本原文"
-                    maxLength={2000}
+              <input
+                className="director-file-input"
+                ref={filesRef}
+                type="file"
+                multiple
+                accept={uploadTypes}
+                onChange={(event) => void upload(event)}
+                aria-label="上传项目文件"
+              />
+              <input
+                className="director-file-input"
+                ref={folderRef}
+                type="file"
+                multiple
+                {...{ webkitdirectory: "" }}
+                accept={uploadTypes}
+                onChange={(event) => void upload(event)}
+                aria-label="上传项目文件夹"
+              />
+            </div>
+            <p className="director-muted">
+              {connection.supported && !connection.paired
+                ? desktopAvailability
+                : connection.local.data?.localReferenceImport
+                  ? "本机素材直接引用原文件。导入文件夹会包含子目录，剪辑期间请保留原文件的位置和内容。"
+                  : connection.supported && connection.paired
+                    ? "当前客户端复制本机素材，单份最多 512 MiB。大素材包请更新至 Windows 桌面端 1.3.1 或更新版本。"
+                    : "可上传文件或从工作台选择。几十 GB 的本机素材包可在 Windows 桌面端按文件夹导入。"}
+            </p>
+            {connection.supported &&
+              (!connection.paired || !connection.local.data?.ffmpeg) && (
+                <div className="director-status">
+                  {connection.paired && (
+                    <span>导入音视频需在本机安装 FFmpeg。</span>
+                  )}
+                  <Button
+                    size="small"
+                    loading={connection.local.isFetching}
+                    onClick={() => void connection.local.refetch()}
+                  >
+                    重新检查
+                  </Button>
+                </div>
+              )}
+            <div className="director-asset-list">
+              {draft.assets
+                .slice(
+                  (currentAssetPage - 1) * assetPageSize,
+                  currentAssetPage * assetPageSize,
+                )
+                .map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    onClick={() => setAssetId(item.id)}
+                    aria-pressed={asset?.id === item.id}
+                  >
+                    <span className="director-asset-icon" aria-hidden>
+                      {item.mime.startsWith("audio/") ? (
+                        <AudioOutlined />
+                      ) : item.mime.startsWith("image/") ? (
+                        <PictureOutlined />
+                      ) : isVisual(item.mime) ? (
+                        <VideoCameraOutlined />
+                      ) : (
+                        <FileTextOutlined />
+                      )}
+                    </span>
+                    <span>
+                      <strong>{item.name}</strong>
+                      <small>
+                        {directorMediaTypeLabel(item.mime)} ·{" "}
+                        {roleNames[item.role]} ·{" "}
+                        {item.source === "local" ? "本机" : "工作台"}
+                      </small>
+                    </span>
+                  </button>
+                ))}
+            </div>
+            {draft.assets.length > assetPageSize && (
+              <Pagination
+                size="small"
+                current={currentAssetPage}
+                total={draft.assets.length}
+                pageSize={assetPageSize}
+                showSizeChanger={false}
+                onChange={setAssetPage}
+              />
+            )}
+            {asset && (
+              <div className="director-asset-settings">
+                <Field label="素材角色">
+                  <Select
+                    aria-label="素材角色"
+                    virtual={false}
                     disabled={!!busy}
-                    value={asset.note || ""}
-                    onChange={(event) =>
-                      updateAsset(asset.id, { note: event.target.value })
+                    value={asset.role}
+                    options={directorRoles.map((value) => ({
+                      value,
+                      label: roleNames[value],
+                      disabled: !acceptsDirectorRole(value, asset.mime),
+                    }))}
+                    onChange={(value) =>
+                      updateAsset(asset.id, {
+                        role: value,
+                        authorized:
+                          value === asset.role ? asset.authorized : undefined,
+                      })
                     }
                   />
                 </Field>
+                {asset.role === "document" && isVisual(asset.mime) && (
+                  <Button
+                    disabled={!!busy}
+                    onClick={() =>
+                      updateAsset(asset.id, {
+                        role: "product",
+                        authorized: undefined,
+                      })
+                    }
+                  >
+                    用作商品画面
+                  </Button>
+                )}
+                {(asset.role === "portrait" ||
+                  asset.role === "voiceSample") && (
+                  <Checkbox
+                    disabled={!!busy}
+                    checked={!!asset.authorized}
+                    onChange={(event) =>
+                      updateAsset(asset.id, {
+                        authorized: event.target.checked,
+                      })
+                    }
+                  >
+                    我已取得在此项目中的授权
+                  </Checkbox>
+                )}
+                {asset.role === "voiceSample" && (
+                  <Field label="样本原文（可选）">
+                    <Input
+                      aria-label="样本原文"
+                      maxLength={2000}
+                      disabled={!!busy}
+                      value={asset.note || ""}
+                      onChange={(event) =>
+                        updateAsset(asset.id, { note: event.target.value })
+                      }
+                    />
+                  </Field>
+                )}
+                {asset.role === "reference" && asset.source === "local" && (
+                  <p className="director-muted">
+                    拆解本机参考片时，工作台会上传所抽样的关键帧以供分析。
+                  </p>
+                )}
+                <Space wrap>
+                  {asset.role === "reference" && (
+                    <Button
+                      size="small"
+                      disabled={!!busy}
+                      onClick={() => analyzeReference(asset)}
+                    >
+                      {asset.source === "local"
+                        ? "授权上传截帧并拆解"
+                        : analyses.some((item) => item.assetId === asset.id)
+                          ? "重新拆解参考片"
+                          : "拆解参考片"}
+                    </Button>
+                  )}
+                  <Button
+                    type="text"
+                    danger
+                    size="small"
+                    disabled={!!busy}
+                    onClick={() => removeAsset(asset.id)}
+                  >
+                    移出项目
+                  </Button>
+                </Space>
+              </div>
+            )}
+          </section>
+        )}
+        {(step === "media" || (step === "storyboard" && !!selectedShot)) && (
+          <section
+            className="director-panel director-edit"
+            aria-label="预览与分镜"
+          >
+            <div className="director-section-heading">
+              <h2>{step === "media" ? "素材预览" : "镜头预览"}</h2>
+              {previewAsset && (
+                <span title={previewAsset.name}>{previewAsset.name}</span>
               )}
-              {asset.role === "reference" && asset.source === "local" && (
+            </div>
+            <div className="director-preview">
+              <MediaPreview
+                asset={previewAsset}
+                projectId={draft.id}
+                canOpenLocal={
+                  connection.paired &&
+                  previewAsset?.deviceId === connection.local.data?.deviceId
+                }
+                atMs={step === "storyboard" ? (selectedShot?.startMs ?? 0) : 0}
+                canReadFrame={connection.canRender}
+                emptyDescription={
+                  step === "media"
+                    ? "导入一张图片或一段视频，在这里查看画面"
+                    : "为这个分镜选择画面素材，即可预览"
+                }
+                onOpen={(id) =>
+                  void run("正在打开本机素材…", async () => {
+                    await localDirectorRequest("preview", {
+                      projectId: draft.id,
+                      assetId: id,
+                    });
+                  })
+                }
+              />
+            </div>
+            {step === "media" && (
+              <div className="director-preview-actions">
+                {asset?.role === "product" && isVisual(asset.mime) && (
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined aria-hidden />}
+                    disabled={!!busy || draft.shots.length >= 100}
+                    onClick={() => addShot(asset)}
+                  >
+                    用此素材创建分镜
+                  </Button>
+                )}
+                <Button type="link" onClick={() => showStep("storyboard")}>
+                  去编排分镜 <ArrowRightOutlined aria-hidden />
+                </Button>
+              </div>
+            )}
+          </section>
+        )}
+        {step === "storyboard" && (
+          <>
+            <section
+              className="director-panel director-sequence"
+              aria-label="分镜时间线"
+            >
+              <div className="director-section-heading">
+                <div>
+                  <h2>分镜时间线</h2>
+                  <span>
+                    {draft.shots.length} 镜 · {prettySeconds(totalDuration)}
+                  </span>
+                </div>
+                <Button
+                  icon={<PlusOutlined />}
+                  disabled={!!busy || draft.shots.length >= 100}
+                  onClick={() => addShot()}
+                >
+                  新增空白分镜
+                </Button>
+              </div>
+              {draft.shots.length ? (
+                <>
+                  <div className="director-duration-track" aria-hidden="true">
+                    {draft.shots.map((shot) => (
+                      <span
+                        key={shot.id}
+                        style={{ flexGrow: shot.durationMs }}
+                        data-active={shot.id === selectedShotId}
+                      />
+                    ))}
+                  </div>
+                  <ol className="director-timeline">
+                    {draft.shots.map((shot, index) => (
+                      <li
+                        key={shot.id}
+                        data-active={shot.id === selectedShotId}
+                      >
+                        <button
+                          type="button"
+                          aria-pressed={shot.id === selectedShotId}
+                          onClick={() => {
+                            setSelectedShotId(shot.id);
+                          }}
+                        >
+                          <span>{String(index + 1).padStart(2, "0")}</span>
+                          <strong>{shot.title || "未命名分镜"}</strong>
+                          {!!Object.values(shot.locks).some(Boolean) && (
+                            <LockOutlined aria-label="已锁定部分内容" />
+                          )}
+                          <small>{prettySeconds(shot.durationMs)}</small>
+                        </button>
+                        <div className="director-order">
+                          <Button
+                            size="small"
+                            type="text"
+                            aria-label={`上移分镜 ${index + 1}`}
+                            disabled={
+                              !!busy ||
+                              !draft.shots[index - 1] ||
+                              shot.locks.all ||
+                              draft.shots[index - 1].locks.all
+                            }
+                            onClick={() => moveShot(index, -1)}
+                          >
+                            ↑
+                          </Button>
+                          <Button
+                            size="small"
+                            type="text"
+                            aria-label={`下移分镜 ${index + 1}`}
+                            disabled={
+                              !!busy ||
+                              !draft.shots[index + 1] ||
+                              shot.locks.all ||
+                              draft.shots[index + 1].locks.all
+                            }
+                            onClick={() => moveShot(index, 1)}
+                          >
+                            ↓
+                          </Button>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </>
+              ) : (
                 <p className="director-muted">
-                  拆解本机参考片时，工作台会上传所抽样的关键帧以供分析。
+                  手工编排可从一张空白分镜开始。也可以填好创作要求，让 AI 起草。
+                </p>
+              )}
+
+              {draft.shots.length > 0 && (
+                <Button
+                  className="director-next-step"
+                  onClick={() => showStep("delivery")}
+                >
+                  去交付导出 <ArrowRightOutlined aria-hidden />
+                </Button>
+              )}
+            </section>
+            {selectedShot && (
+              <section
+                className="director-panel director-inspector"
+                aria-label="分镜编辑"
+              >
+                <div className="director-section-heading">
+                  <h2>镜头编辑</h2>
+                  <span>
+                    第{" "}
+                    {draft.shots.findIndex(
+                      (shot) => shot.id === selectedShotId,
+                    ) + 1}{" "}
+                    镜
+                  </span>
+                </div>
+                <ShotEditor
+                  shot={selectedShot}
+                  assets={draft.assets}
+                  disabled={!!busy}
+                  templates={connection.local.data?.templates || []}
+                  onChange={(change) => updateShot(selectedShot.id, change)}
+                  remove={() => {
+                    const next = draft.shots.filter(
+                      (shot) => shot.id !== selectedShot.id,
+                    );
+                    updateDraft("shots", next);
+                    setSelectedShotId(next[0]?.id || "");
+                  }}
+                  regenerate={() =>
+                    void run("正在局部重编…", () =>
+                      generate(draft, selectedShot.id),
+                    )
+                  }
+                  propose={() => requestAlternatives(selectedShot.id)}
+                  preview={() =>
+                    void run("正在准备单镜试剪…", async () =>
+                      launch(await save(), selectedShot.id),
+                    )
+                  }
+                  canPreview={connection.canRender}
+                />
+              </section>
+            )}
+            <section
+              className="director-panel director-planning"
+              aria-label="编排与执行"
+            >
+              <div className="director-section-heading">
+                <h2>让 AI 编排分镜</h2>
+              </div>
+              <Field label="创作要求">
+                <Input.TextArea
+                  aria-label="创作要求"
+                  value={draft.brief}
+                  maxLength={8000}
+                  disabled={!!busy}
+                  autoSize={{ minRows: 2, maxRows: 5 }}
+                  onChange={(event) => updateDraft("brief", event.target.value)}
+                  placeholder="输入商品卖点、目标观众、节奏或口播要求"
+                />
+              </Field>
+              {draft.shots.length > 0 && (
+                <Field label="本次调整指令">
+                  <Input.TextArea
+                    aria-label="本次调整指令"
+                    value={instruction}
+                    maxLength={4000}
+                    disabled={!!busy}
+                    autoSize={{ minRows: 1, maxRows: 4 }}
+                    onChange={(event) => setInstruction(event.target.value)}
+                    placeholder="例如：只改这一镜的开场文案，保留当前选片"
+                  />
+                </Field>
+              )}
+              {draft.mode === "smart" && (
+                <Checkbox
+                  checked={review}
+                  disabled={!!busy}
+                  onChange={(event) => setReview(event.target.checked)}
+                >
+                  剪辑前让我检查分镜
+                </Checkbox>
+              )}
+              {localReferencesPending && (
+                <p className="director-muted">
+                  有本机参考片待分析。需要用于本次编排时，请先在素材区授权上传截帧并拆解。
                 </p>
               )}
               <Space wrap>
-                {asset.role === "reference" && (
-                  <Button
-                    size="small"
-                    disabled={!!busy}
-                    onClick={() => analyzeReference(asset)}
-                  >
-                    {asset.source === "local"
-                      ? "授权上传截帧并拆解"
-                      : analyses.some((item) => item.assetId === asset.id)
-                        ? "重新拆解参考片"
-                        : "拆解参考片"}
-                  </Button>
-                )}
                 <Button
-                  type="text"
-                  danger
-                  size="small"
+                  type={draft.shots.length ? "default" : "primary"}
                   disabled={!!busy}
-                  onClick={() => removeAsset(asset.id)}
-                >
-                  移出项目
-                </Button>
-              </Space>
-            </div>
-          )}
-        </section>
-        <section
-          className="director-panel director-edit"
-          aria-label="预览与分镜"
-        >
-          <div className="director-section-heading">
-            <h2>素材预览</h2>
-            {previewAsset && <span>{previewAsset.name}</span>}
-          </div>
-          <div className="director-preview">
-            <MediaPreview
-              asset={previewAsset}
-              projectId={draft.id}
-              canOpenLocal={
-                connection.paired &&
-                previewAsset?.deviceId === connection.local.data?.deviceId
-              }
-              onOpen={(id) =>
-                void run("正在打开本机素材…", async () => {
-                  await localDirectorRequest("preview", {
-                    projectId: draft.id,
-                    assetId: id,
-                  });
-                })
-              }
-            />
-          </div>
-          <div className="director-section-heading">
-            <div>
-              <h2>分镜时间线</h2>
-              <span>
-                {draft.shots.length} 镜 · {prettySeconds(totalDuration)}
-              </span>
-            </div>
-            <Button
-              icon={<PlusOutlined />}
-              disabled={!!busy || draft.shots.length >= 100}
-              onClick={addBlank}
-            >
-              新增空白分镜
-            </Button>
-          </div>
-          {draft.shots.length ? (
-            <ol className="director-timeline">
-              {draft.shots.map((shot, index) => (
-                <li key={shot.id} data-active={shot.id === selectedShotId}>
-                  <button
-                    type="button"
-                    aria-pressed={shot.id === selectedShotId}
-                    onClick={() => {
-                      setSelectedShotId(shot.id);
-                      setAssetId("");
-                    }}
-                  >
-                    <span>{String(index + 1).padStart(2, "0")}</span>
-                    <strong>{shot.title || "未命名分镜"}</strong>
-                    {!!Object.values(shot.locks).some(Boolean) && (
-                      <LockOutlined aria-label="已锁定部分内容" />
-                    )}
-                    <small>{prettySeconds(shot.durationMs)}</small>
-                  </button>
-                  <div className="director-order">
-                    <Button
-                      size="small"
-                      type="text"
-                      aria-label={`上移分镜 ${index + 1}`}
-                      disabled={
-                        !!busy ||
-                        !draft.shots[index - 1] ||
-                        shot.locks.all ||
-                        draft.shots[index - 1].locks.all
-                      }
-                      onClick={() => moveShot(index, -1)}
-                    >
-                      ↑
-                    </Button>
-                    <Button
-                      size="small"
-                      type="text"
-                      aria-label={`下移分镜 ${index + 1}`}
-                      disabled={
-                        !!busy ||
-                        !draft.shots[index + 1] ||
-                        shot.locks.all ||
-                        draft.shots[index + 1].locks.all
-                      }
-                      onClick={() => moveShot(index, 1)}
-                    >
-                      ↓
-                    </Button>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="director-muted">
-              可以从空白开始手工编排，也可以请 AI 初排。
-            </p>
-          )}
-        </section>
-        <section
-          className="director-panel director-inspector"
-          aria-label="分镜编辑"
-        >
-          <div className="director-section-heading">
-            <h2>镜头编辑</h2>
-          </div>
-          {selectedShot ? (
-            <ShotEditor
-              shot={selectedShot}
-              assets={draft.assets}
-              disabled={!!busy}
-              templates={connection.local.data?.templates || []}
-              onChange={(change) => updateShot(selectedShot.id, change)}
-              remove={() => {
-                const next = draft.shots.filter(
-                  (shot) => shot.id !== selectedShot.id,
-                );
-                updateDraft("shots", next);
-                setSelectedShotId(next[0]?.id || "");
-              }}
-              regenerate={() =>
-                void run("正在局部重编…", () =>
-                  generate(draft, selectedShot.id),
-                )
-              }
-              propose={() => requestAlternatives(selectedShot.id)}
-              preview={() =>
-                void run("正在准备单镜试剪…", async () =>
-                  launch(await save(), selectedShot.id),
-                )
-              }
-              canPreview={connection.canRender}
-            />
-          ) : (
-            <p className="director-muted">
-              选择时间线上的镜头来编辑文案、画面和效果。
-            </p>
-          )}
-        </section>
-      </div>
-      <div className="director-lower">
-        <section
-          className="director-panel director-planning"
-          aria-label="编排与执行"
-        >
-          <div className="director-section-heading">
-            <h2>编排与执行</h2>
-          </div>
-          <Field label="创作要求">
-            <Input.TextArea
-              aria-label="创作要求"
-              value={draft.brief}
-              maxLength={8000}
-              disabled={!!busy}
-              autoSize={{ minRows: 2, maxRows: 5 }}
-              onChange={(event) => updateDraft("brief", event.target.value)}
-              placeholder="输入商品卖点、目标观众、节奏或口播要求"
-            />
-          </Field>
-          <Field label="本次调整指令">
-            <Input.TextArea
-              aria-label="本次调整指令"
-              value={instruction}
-              maxLength={4000}
-              disabled={!!busy}
-              autoSize={{ minRows: 1, maxRows: 4 }}
-              onChange={(event) => setInstruction(event.target.value)}
-              placeholder="例如：只改这一镜的开场文案，保留当前选片"
-            />
-          </Field>
-          {draft.mode === "smart" && (
-            <Checkbox
-              checked={review}
-              disabled={!!busy}
-              onChange={(event) => setReview(event.target.checked)}
-            >
-              剪辑前让我检查分镜
-            </Checkbox>
-          )}
-          {localReferencesPending && (
-            <p className="director-muted">
-              有本机参考片待分析。需要用于本次编排时，请先在素材区授权上传截帧并拆解。
-            </p>
-          )}
-          <Space wrap>
-            <Button
-              disabled={!!busy}
-              onClick={() =>
-                void run(
-                  "正在智能编排…",
-                  (isCurrent) =>
-                    generate(
-                      draft,
-                      undefined,
-                      draft.mode === "smart" && !review,
-                      isCurrent,
-                    ),
-                  true,
-                )
-              }
-            >
-              {draft.mode === "smart" &&
-              !review &&
-              draft.output === "video" &&
-              connection.canRender
-                ? "智能编排并剪辑"
-                : "AI 编排分镜"}
-            </Button>
-            <Button
-              type={draft.output === "script" ? "primary" : "default"}
-              disabled={!!busy || !draft.shots.length}
-              onClick={exportScript}
-            >
-              导出分镜脚本
-            </Button>
-            {draft.output === "video" && (
-              <Button
-                type="primary"
-                icon={<PlayCircleOutlined aria-hidden />}
-                disabled={renderBlocked}
-                onClick={() =>
-                  void run(
-                    "正在准备后台剪辑…",
-                    async (isCurrent) =>
-                      launch(
-                        await save(draft, isCurrent),
-                        undefined,
-                        undefined,
-                        isCurrent,
-                      ),
-                    true,
-                  )
-                }
-              >
-                {longChoice}
-              </Button>
-            )}
-          </Space>
-          {analyses.map((analysis) => (
-            <details key={analysis.assetId} className="director-analysis">
-              <summary>
-                参考片拆解 ·{" "}
-                {draft.assets.find((item) => item.id === analysis.assetId)
-                  ?.name || "参考素材"}
-              </summary>
-              <p>{analysis.summary}</p>
-              <ol>
-                {analysis.beats.map((beat, index) => (
-                  <li key={`${beat.timeMs}-${index}`}>
-                    {prettySeconds(beat.timeMs)} · {beat.description}
-                  </li>
-                ))}
-              </ol>
-            </details>
-          ))}
-        </section>
-        <section
-          className="director-panel director-outputs"
-          aria-label="后台进度与交付"
-        >
-          <div className="director-section-heading">
-            <h2>后台进度与交付</h2>
-          </div>
-          {render ? (
-            <>
-              <Field label="导出版本">
-                <Select
-                  aria-label="导出版本"
-                  value={render.id}
-                  options={renders.map((item) => ({
-                    value: item.id,
-                    label: `版本 ${item.version} · ${item.shotId ? "单镜试剪" : "整片"}`,
-                  }))}
-                  onChange={(value) => {
-                    setSelectedRenderId(value);
-                    setVersionProject(undefined);
-                  }}
-                />
-              </Field>
-              <div className="director-render-status">
-                <Tag
-                  color={
-                    render.status === "done"
-                      ? "success"
-                      : render.status === "failed"
-                        ? "error"
-                        : "processing"
+                  onClick={() =>
+                    void run(
+                      "正在智能编排…",
+                      (isCurrent) =>
+                        generate(
+                          draft,
+                          undefined,
+                          draft.mode === "smart" && !review,
+                          isCurrent,
+                        ),
+                      true,
+                    )
                   }
                 >
-                  {renderStatuses[render.status]}
-                </Tag>
-                <span>{render.stage}</span>
-              </div>
-              <Progress
-                percent={render.progress}
-                status={render.status === "failed" ? "exception" : undefined}
-              />
-              {renderDetail && renderDetail.totalShots > 0 && (
-                <p className="director-muted">
-                  已完成 {renderDetail.completedShots} /{" "}
-                  {renderDetail.totalShots} 镜 · 复用 {renderDetail.reusedShots}{" "}
-                  镜
-                </p>
-              )}
-              {sameDevice && connection.paired && (
-                <Space wrap>
-                  {render.status === "running" && (
-                    <Button
-                      size="small"
-                      disabled={!!busy}
-                      onClick={() => controlRender("pause", render)}
-                    >
-                      暂停
-                    </Button>
-                  )}
-                  {(render.status === "paused" ||
-                    render.status === "queued" ||
-                    render.status === "failed") && (
-                    <Button
-                      size="small"
-                      disabled={!!busy}
-                      onClick={() => controlRender("resume", render)}
-                    >
-                      {render.status === "failed" ? "重试此版本" : "继续"}
-                    </Button>
-                  )}
-                </Space>
-              )}
-              {refreshLocalJob.isError && (
-                <p className="director-muted">
-                  {messageOf(refreshLocalJob.error)}
-                </p>
-              )}
-              {render.status === "done" && (
-                <div className="director-artifacts">
-                  {render.outputs.map((output) => (
-                    <Button
-                      key={output}
-                      icon={
-                        output === "video" ? (
-                          <PlayCircleOutlined aria-hidden />
-                        ) : undefined
-                      }
-                      disabled={!sameDevice || !connection.paired || !!busy}
-                      onClick={() =>
-                        void run("正在打开交付文件…", async () => {
-                          await localDirectorRequest("open", {
-                            projectId: render.projectId,
-                            version: render.version,
-                            artifact: artwork[output],
-                          });
-                        })
-                      }
-                    >
-                      {artifactNames[output]}
-                    </Button>
-                  ))}
-                  {(!sameDevice || !connection.paired) && (
-                    <p className="director-muted">
-                      交付文件需要回到生成此版本的 Windows 电脑打开。
-                    </p>
-                  )}
-                  {sameDevice && connection.paired && (
-                    <Button
-                      type="link"
-                      disabled={!!busy}
-                      onClick={() =>
-                        void run("正在打开交付目录…", async () => {
-                          await localDirectorRequest("open", {
-                            projectId: render.projectId,
-                            version: render.version,
-                            artifact: "folder",
-                          });
-                        })
-                      }
-                    >
-                      打开交付目录
-                    </Button>
-                  )}
-                </div>
-              )}
-              <Button
-                size="small"
-                type="text"
-                disabled={!!busy}
-                onClick={() =>
-                  void run("正在读取版本分镜…", async () => {
-                    const value = await directorApi<{
-                      project: DirectorSnapshot;
-                    }>(`${projectPath(render.projectId)}/renders/${render.id}`);
-                    setVersionProject(value.project);
-                  })
-                }
-              >
-                查看此版本分镜
-              </Button>
-              {versionProject && (
-                <details className="director-analysis" open>
-                  <summary>项目版本 {versionProject.revision} 的分镜</summary>
+                  {draft.mode === "smart" &&
+                  !review &&
+                  draft.output === "video" &&
+                  connection.canRender
+                    ? "智能编排并剪辑"
+                    : "AI 编排分镜"}
+                </Button>
+              </Space>
+              {analyses.map((analysis) => (
+                <details key={analysis.assetId} className="director-analysis">
+                  <summary>
+                    参考片拆解 ·{" "}
+                    {draft.assets.find((item) => item.id === analysis.assetId)
+                      ?.name || "参考素材"}
+                  </summary>
+                  <p>{analysis.summary}</p>
                   <ol>
-                    {versionProject.shots.map((shot) => (
-                      <li key={shot.id}>
-                        {shot.title || "未命名分镜"} ·{" "}
-                        {prettySeconds(shot.durationMs)}
-                        {shot.script && <p>{shot.script}</p>}
+                    {analysis.beats.map((beat, index) => (
+                      <li key={`${beat.timeMs}-${index}`}>
+                        {prettySeconds(beat.timeMs)} · {beat.description}
                       </li>
                     ))}
                   </ol>
                 </details>
+              ))}
+            </section>
+          </>
+        )}
+        {step === "delivery" && (
+          <>
+            <section
+              className="director-panel director-export"
+              aria-label="导出当前项目"
+            >
+              <div className="director-section-heading">
+                <h2>导出当前项目</h2>
+              </div>
+              <div className="director-export-summary">
+                <span className="director-export-icon" aria-hidden>
+                  {draft.output === "script" ? (
+                    <FileTextOutlined />
+                  ) : (
+                    <VideoCameraOutlined />
+                  )}
+                </span>
+                <div>
+                  <strong>{draft.title || "未命名项目"}</strong>
+                  <p>
+                    {draft.shots.length} 镜 · {prettySeconds(totalDuration)} ·{" "}
+                    {draft.aspect}
+                  </p>
+                </div>
+              </div>
+              {!draft.shots.length && (
+                <p className="director-muted">
+                  先添加一个分镜，就可以导出脚本。
+                </p>
               )}
-            </>
-          ) : (
-            <p className="director-muted">
-              {draft.output === "script"
-                ? "项目当前交付脚本，可在编排区导出分镜稿。"
-                : "启动剪辑后，进度和交付文件会显示在这里。"}
-            </p>
-          )}
-        </section>
+              {draft.output === "video" && (
+                <div className="director-status" role="status">
+                  <Tag color={connection.canRender ? "success" : "default"}>
+                    {connection.canRender ? "本机可剪辑" : "剪辑能力"}
+                  </Tag>
+                  <span>{desktopAvailability}</span>
+                  {connection.supported && !connection.canRender && (
+                    <Button
+                      size="small"
+                      onClick={() => void connection.local.refetch()}
+                    >
+                      重新检查
+                    </Button>
+                  )}
+                </div>
+              )}
+              <Space wrap>
+                <Button
+                  type={draft.output === "script" ? "primary" : "default"}
+                  disabled={!!busy || !draft.shots.length}
+                  onClick={exportScript}
+                >
+                  导出分镜脚本
+                </Button>
+                {draft.output === "video" && (
+                  <Button
+                    type="primary"
+                    icon={<PlayCircleOutlined aria-hidden />}
+                    disabled={renderBlocked}
+                    onClick={() =>
+                      void run(
+                        "正在准备后台剪辑…",
+                        async (isCurrent) =>
+                          launch(
+                            await save(draft, isCurrent),
+                            undefined,
+                            undefined,
+                            isCurrent,
+                          ),
+                        true,
+                      )
+                    }
+                  >
+                    {longChoice}
+                  </Button>
+                )}
+              </Space>
+
+              <Button type="link" onClick={() => showStep("storyboard")}>
+                返回编排分镜
+              </Button>
+            </section>
+            <section
+              className="director-panel director-outputs"
+              aria-label="后台进度与交付"
+            >
+              <div className="director-section-heading">
+                <h2>后台进度与交付</h2>
+              </div>
+              {render ? (
+                <>
+                  <Field label="导出版本">
+                    <Select
+                      aria-label="导出版本"
+                      value={render.id}
+                      options={renders.map((item) => ({
+                        value: item.id,
+                        label: `版本 ${item.version} · ${item.shotId ? "单镜试剪" : "整片"}`,
+                      }))}
+                      onChange={(value) => {
+                        setSelectedRenderId(value);
+                        setVersionProject(undefined);
+                      }}
+                    />
+                  </Field>
+                  <div className="director-render-status">
+                    <Tag
+                      color={
+                        render.status === "done"
+                          ? "success"
+                          : render.status === "failed"
+                            ? "error"
+                            : "processing"
+                      }
+                    >
+                      {renderStatuses[render.status]}
+                    </Tag>
+                    <span>{render.stage}</span>
+                  </div>
+                  <Progress
+                    percent={render.progress}
+                    status={
+                      render.status === "failed" ? "exception" : undefined
+                    }
+                  />
+                  {renderDetail && renderDetail.totalShots > 0 && (
+                    <p className="director-muted">
+                      已完成 {renderDetail.completedShots} /{" "}
+                      {renderDetail.totalShots} 镜 · 复用{" "}
+                      {renderDetail.reusedShots} 镜
+                    </p>
+                  )}
+                  {sameDevice && connection.paired && (
+                    <Space wrap>
+                      {render.status === "running" && (
+                        <Button
+                          size="small"
+                          disabled={!!busy}
+                          onClick={() => controlRender("pause", render)}
+                        >
+                          暂停
+                        </Button>
+                      )}
+                      {(render.status === "paused" ||
+                        render.status === "queued" ||
+                        render.status === "failed") && (
+                        <Button
+                          size="small"
+                          disabled={!!busy}
+                          onClick={() => controlRender("resume", render)}
+                        >
+                          {render.status === "failed" ? "重试此版本" : "继续"}
+                        </Button>
+                      )}
+                    </Space>
+                  )}
+                  {refreshLocalJob.isError && (
+                    <p className="director-muted">
+                      {messageOf(refreshLocalJob.error)}
+                    </p>
+                  )}
+                  {render.status === "done" && (
+                    <div className="director-artifacts">
+                      {render.outputs.map((output) => (
+                        <Button
+                          key={output}
+                          icon={
+                            output === "video" ? (
+                              <PlayCircleOutlined aria-hidden />
+                            ) : undefined
+                          }
+                          disabled={!sameDevice || !connection.paired || !!busy}
+                          onClick={() =>
+                            void run("正在打开交付文件…", async () => {
+                              await localDirectorRequest("open", {
+                                projectId: render.projectId,
+                                version: render.version,
+                                artifact: artwork[output],
+                              });
+                            })
+                          }
+                        >
+                          {artifactNames[output]}
+                        </Button>
+                      ))}
+                      {(!sameDevice || !connection.paired) && (
+                        <p className="director-muted">
+                          交付文件需要回到生成此版本的 Windows 电脑打开。
+                        </p>
+                      )}
+                      {sameDevice && connection.paired && (
+                        <Button
+                          type="link"
+                          disabled={!!busy}
+                          onClick={() =>
+                            void run("正在打开交付目录…", async () => {
+                              await localDirectorRequest("open", {
+                                projectId: render.projectId,
+                                version: render.version,
+                                artifact: "folder",
+                              });
+                            })
+                          }
+                        >
+                          打开交付目录
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  <Button
+                    size="small"
+                    type="text"
+                    disabled={!!busy}
+                    onClick={() =>
+                      void run("正在读取版本分镜…", async () => {
+                        const value = await directorApi<{
+                          project: DirectorSnapshot;
+                        }>(
+                          `${projectPath(render.projectId)}/renders/${render.id}`,
+                        );
+                        setVersionProject(value.project);
+                      })
+                    }
+                  >
+                    查看此版本分镜
+                  </Button>
+                  {versionProject && (
+                    <details className="director-analysis" open>
+                      <summary>
+                        项目版本 {versionProject.revision} 的分镜
+                      </summary>
+                      <ol>
+                        {versionProject.shots.map((shot) => (
+                          <li key={shot.id}>
+                            {shot.title || "未命名分镜"} ·{" "}
+                            {prettySeconds(shot.durationMs)}
+                            {shot.script && <p>{shot.script}</p>}
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  )}
+                </>
+              ) : (
+                <p className="director-muted">
+                  {draft.output === "script"
+                    ? "脚本可直接下载。完成视频剪辑后，这里会列出导出版本。"
+                    : "启动剪辑后，进度和交付文件会显示在这里。"}
+                </p>
+              )}
+            </section>
+          </>
+        )}
       </div>
       <Modal
         title="从工作台文件选择"
@@ -1936,7 +2209,8 @@ function DirectorEditor({
                 disabled={
                   draft.assets.some((asset) => asset.fileId === item.id) ||
                   (!librarySelected.includes(item.id) &&
-                    draft.assets.length + librarySelected.length >= directorAssetLimit)
+                    draft.assets.length + librarySelected.length >=
+                      directorAssetLimit)
                 }
               >
                 {item.name}
