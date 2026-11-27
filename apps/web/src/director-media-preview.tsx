@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Button, Spin } from "antd";
 import {
   AudioOutlined,
@@ -10,6 +10,7 @@ import {
 import type { DirectorAsset } from "../../../packages/contracts/src/director";
 import { localDirectorRequest } from "./director-native";
 import { directorFileUrl, isVisual } from "./director-project";
+import { getBrowserFile, reconnectBrowserFile, subscribeBrowserFiles } from "./director-browser-files";
 import "./director-media-preview.css";
 
 type PreviewProps = {
@@ -134,27 +135,18 @@ function FramePreview({
   );
 }
 
-function LibraryPreview({
+function MediaFilePreview({
   asset,
   atMs,
+  url,
+  openFile,
 }: {
   asset: DirectorAsset;
   atMs: number;
+  url: string;
+  openFile?: ReactNode;
 }) {
   const [failed, setFailed] = useState(false);
-  if (!asset.fileId)
-    return (
-      <PreviewMessage
-        icon={<FileTextOutlined />}
-        label="此素材缺少工作台文件，请重新选择。"
-      />
-    );
-  const url = directorFileUrl(asset.fileId);
-  const openFile = (
-    <a href={url} target="_blank" rel="noreferrer">
-      打开 {asset.name}
-    </a>
-  );
   if (failed)
     return (
       <PreviewMessage
@@ -202,6 +194,76 @@ function LibraryPreview({
   );
 }
 
+function ReconnectFile({ projectId, asset }: {
+  projectId: string;
+  asset: DirectorAsset;
+}) {
+  const [error, setError] = useState("");
+  const picker = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <Button size="small" onClick={() => picker.current?.click()}>重新关联原文件</Button>
+      <input ref={picker} type="file" hidden aria-label="选择要重新关联的原文件"
+        onChange={(event) => {
+          const selected = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (!selected) return;
+          setError("");
+          void reconnectBrowserFile(projectId, asset, selected)
+            .catch(cause => setError(cause instanceof Error ? cause.message : "无法读取本机文件。"));
+        }}
+      />
+      {error && <span role="alert">{error}</span>}
+    </>
+  );
+}
+
+function BrowserFilePreview({ projectId, asset, atMs }: {
+  projectId: string;
+  asset: DirectorAsset;
+  atMs: number;
+}) {
+  const file = useSyncExternalStore(subscribeBrowserFiles, () => getBrowserFile(projectId, asset.id));
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState("");
+  const [excerpt, setExcerpt] = useState("");
+  const media = isVisual(asset.mime) || asset.mime.startsWith("audio/");
+  useEffect(() => {
+    setUrl("");
+    setExcerpt("");
+    setError("");
+    if (!file) return;
+    if (media) {
+      const next = URL.createObjectURL(file);
+      setUrl(next);
+      return () => URL.revokeObjectURL(next);
+    }
+    if (asset.mime.startsWith("text/") || asset.mime === "application/json") {
+      let active = true;
+      void file.slice(0, 8192).text().then(text => {
+        if (active) setExcerpt(text);
+      }).catch(() => { if (active) setError("读取本机文档失败，请重新选择原件。"); });
+      return () => { active = false; };
+    }
+  }, [file, media, asset.mime]);
+  const reconnect = <ReconnectFile projectId={projectId} asset={asset} />;
+  if (file && media && url)
+    return <MediaFilePreview key={url} asset={asset} atMs={atMs} url={url} openFile={reconnect} />;
+  if (file && !media)
+    return (
+      <PreviewMessage icon={<FileTextOutlined />} label={excerpt ? "本机文档预览" : error || "本机文档已关联"}>
+        {error && reconnect}
+        {excerpt && <pre style={{ maxHeight: 180, maxWidth: "100%", overflow: "auto", whiteSpace: "pre-wrap", textAlign: "start" }}>{excerpt}</pre>}
+      </PreviewMessage>
+    );
+  if (file) return <Spin size="small" />;
+  return (
+    <PreviewMessage icon={<FolderOpenOutlined />} label="重新选择导入时的原文件，即可在当前页面预览。">
+      {reconnect}
+    </PreviewMessage>
+  );
+}
+
 export function MediaPreview({
   asset,
   projectId,
@@ -225,19 +287,32 @@ export function MediaPreview({
         Math.min(Math.round(atMs), (asset.durationMs ?? Infinity) - 1),
       )
     : 0;
-  if (asset.source === "library")
+  if (asset.source === "browser")
+    return <BrowserFilePreview key={`${asset.id}/${frameMs}`} projectId={projectId} asset={asset} atMs={frameMs} />;
+  if (asset.source === "link")
     return (
-      <LibraryPreview
+      <PreviewMessage icon={<VideoCameraOutlined />} label="作品链接参考片">
+        {asset.url && /^https?:\/\//i.test(asset.url) && <a href={asset.url} target="_blank" rel="noreferrer">查看原作品</a>}
+      </PreviewMessage>
+    );
+  if (asset.source === "library") {
+    if (!asset.fileId) return <PreviewMessage icon={<FileTextOutlined />} label="此素材缺少工作台文件，请重新选择。" />;
+    const url = directorFileUrl(asset.fileId);
+    return (
+      <MediaFilePreview
         key={`${asset.fileId}/${frameMs}`}
         asset={asset}
         atMs={frameMs}
+        url={url}
+        openFile={<a href={url} target="_blank" rel="noreferrer">打开 {asset.name}</a>}
       />
     );
+  }
   if (!video && !asset.mime.startsWith("image/") && !asset.mime.startsWith("audio/"))
     return (
       <PreviewMessage
         icon={<FileTextOutlined />}
-        label="这份文档已登记在本机。若要让 AI 读取正文，请将文件上传到工作台并加入项目。"
+        label="这份文档已登记在本机。可在项目的创作要求中填写需要采用的商品事实或文案。"
       />
     );
   if (!canOpenLocal)

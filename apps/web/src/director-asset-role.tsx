@@ -62,15 +62,13 @@ export function DirectorAssetRoleFilters({
   value,
   onChange,
   onImport,
-  canImport,
-  local,
+  disabled,
 }: {
   assets: DirectorAsset[];
   value: DirectorAssetFilter;
   onChange: (role: DirectorAssetFilter) => void;
   onImport: (role: AssetRole) => void;
-  canImport: (role: AssetRole) => boolean;
-  local: boolean;
+  disabled: boolean;
 }) {
   const counts = new Map<AssetRole, number>();
   for (const asset of assets)
@@ -106,8 +104,8 @@ export function DirectorAssetRoleFilters({
                 type="button"
                 className="director-role-add"
                 aria-label={`导入${roleNames[role]}`}
-                title={local && role !== "document" ? `从本机导入${roleNames[role]}` : `上传${roleNames[role]}到工作台`}
-                disabled={!canImport(role)}
+                title={`从本机导入${roleNames[role]}`}
+                disabled={disabled}
                 onClick={() => onImport(role)}
               >
                 <PlusOutlined aria-hidden />

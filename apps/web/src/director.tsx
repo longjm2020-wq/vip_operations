@@ -17,7 +17,8 @@ import {
 import {
   ArrowRightOutlined,
   CheckOutlined,
-  CloudUploadOutlined,
+  DownOutlined,
+  FileAddOutlined,
   DownloadOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
@@ -44,9 +45,15 @@ import {
   type DirectorSnapshot,
 } from "../../../packages/contracts/src/director";
 import { DirectorLibraryPicker } from "./director-library-picker";
-import type { AgentFile } from "../../../packages/contracts/src/assistant-agent";
+import {
+  browserFileAccept,
+  browserReferenceFrames,
+  importBrowserFiles,
+  releaseBrowserFile,
+  releaseBrowserFiles,
+} from "./director-browser-files";
 import { DirectorImportTemplate } from "./director-import-template";
-import { acceptsDirectorFolderRole, directorFolderRole } from "../../../packages/contracts/src/director-import-roles";
+import { acceptsDirectorFolderRole } from "../../../packages/contracts/src/director-import-roles";
 import { uniqueDirectorKinds } from "../../../packages/contracts/src/director-intent";
 import { api } from "./api";
 import { desktopClientRequest } from "./desktop-client";
@@ -62,13 +69,11 @@ import {
   directorPath,
   getDirectorCapabilities,
   isVisual,
-  libraryDirectorAsset,
   localDirectorAsset,
   nativeDirectorPlan,
   projectDirectorFields,
   renderReceipt,
   roleNames,
-  uploadDirectorFile,
 } from "./director-project";
 import { useUser } from "./shared";
 import { Field, MediaPreview, Seconds, ShotEditor } from "./director-editing";
@@ -80,20 +85,8 @@ import {
 } from "./director-asset-role";
 import "./director.css";
 
-const imageFiles = ".jpg,.jpeg,.png,.webp";
-const videoFiles = ".mp4,.mov,.webm";
-const audioFiles = ".mp3,.wav,.m4a";
-const documentFiles = ".pdf,.docx,.txt,.md,.srt,.pptx,.xlsx,.csv,.json";
-const uploadTypes = [imageFiles, videoFiles, audioFiles, documentFiles].join(",");
 type AssetRole = DirectorAsset["role"];
-const roleFileTypes: Record<AssetRole, string> = {
-  product: [imageFiles, videoFiles].join(","),
-  portrait: imageFiles,
-  voiceSample: [audioFiles, videoFiles].join(","),
-  narration: [audioFiles, videoFiles].join(","),
-  reference: videoFiles,
-  document: documentFiles,
-};
+const assetSources = { local: "本机", browser: "浏览器本机", link: "作品链接", library: "工作台" };
 const prettySeconds = (milliseconds: number) =>
   `${Number((milliseconds / 1000).toFixed(2))} 秒`;
 
@@ -420,6 +413,7 @@ function DirectorEditor({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [templateOpen, setTemplateOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [shareText, setShareText] = useState("");
   const [linkError, setLinkError] = useState("");
@@ -430,10 +424,18 @@ function DirectorEditor({
   const [versionProject, setVersionProject] = useState<DirectorSnapshot>();
   const filesRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
-  const uploadRole = useRef<AssetRole | undefined>(undefined);
+  const browserImportRole = useRef<AssetRole | undefined>(undefined);
   const busyRef = useRef(false);
   const picker = useRef<AbortController | null>(null);
-  useEffect(() => () => picker.current?.abort(), []);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      picker.current?.abort();
+      releaseBrowserFiles(initial.id);
+    };
+  }, [initial.id]);
   const operationEpoch = useRef(0);
   const startedAuto = useRef(false);
   const receiptKey = useRef("");
@@ -472,7 +474,7 @@ function DirectorEditor({
   const selectedAnalysis = analyses.find((analysis) => analysis.assetId === asset?.id);
   const localReferencesPending = references.some(
     (item) =>
-      item.source === "local" &&
+      (item.source === "local" || item.source === "browser") &&
       !analyses.some((analysis) => analysis.assetId === item.id),
   );
   const renders = [...draft.renders].sort((a, b) => b.version - a.version);
@@ -563,7 +565,7 @@ function DirectorEditor({
   ) {
     if (busyRef.current) return;
     const epoch = ++operationEpoch.current;
-    const isCurrent = () => epoch === operationEpoch.current;
+    const isCurrent = () => mounted.current && epoch === operationEpoch.current;
     busyRef.current = true;
     setBusy(label);
     setCanInterruptSmartWork(interruptible && draft.mode === "smart");
@@ -757,7 +759,7 @@ function DirectorEditor({
       const pending = current.assets.filter(
         (item) =>
           item.role === "reference" &&
-          item.source === "library" &&
+          (item.source === "library" || item.source === "link") &&
           !analyzed.has(item.id),
       );
       for (const reference of pending) {
@@ -942,7 +944,10 @@ function DirectorEditor({
   }, [autostart, connection.canRender, connection.local.isLoading, draft.id]);
 
   function appendAssets(items: DirectorAsset[], filter: DirectorAssetFilter = "all") {
-    const sourceKey = (item: DirectorAsset) => item.fileId || `${item.deviceId}/${item.localId}`;
+    const sourceKey = (item: DirectorAsset) => {
+      if (item.source === "local") return `${item.deviceId}/${item.localId}`;
+      return item.fileId ?? item.browserKey ?? item.url ?? item.id;
+    };
     const known = new Set(draft.assets.map(sourceKey));
     const unique = items.filter((item) => {
       const key = sourceKey(item);
@@ -957,16 +962,22 @@ function DirectorEditor({
     setAssetId(unique[0].id);
   }
 
-  function chooseUpload(role?: AssetRole) {
+  function chooseFiles(role?: AssetRole) {
+    if (connection.supported && (role !== "document" || connection.local.data?.folderRoleImport)) {
+      pickNative("files", role);
+      return;
+    }
     const input = filesRef.current;
     if (!input) return;
-    uploadRole.current = role;
-    input.accept = role ? roleFileTypes[role] : uploadTypes;
+    browserImportRole.current = role;
+    input.accept = browserFileAccept(role);
     input.click();
   }
 
   function pickNative(kind: "files" | "folder", role?: AssetRole) {
-    void run("正在导入本机素材…", async (isCurrent) => {
+    // A native chooser can stay open until the user picks or cancels. Only the
+    // client can tell us when a selection exists and indexing has begun.
+    void run("", async (isCurrent) => {
       const deviceId = connection.local.data?.deviceId;
       if (!deviceId || !connection.paired)
         throw Error("请先在「我的电脑」连接并授权这台电脑。");
@@ -979,7 +990,9 @@ function DirectorEditor({
         ...(role && connection.local.data?.folderRoleImport ? { role } : {}),
         ...(connection.local.data?.localReferenceImport ? { remaining, knownIds } : {}),
       }, controller.signal, (processed) => {
-        if (isCurrent()) setBusy(`正在导入本机素材，已检查 ${processed} 个文件…`);
+        if (isCurrent()) setBusy(processed > 0
+          ? `正在导入本机素材，已检查 ${processed} 个文件…`
+          : "正在登记所选素材…");
       }).catch((cause: unknown) => {
         const detail = messageOf(cause);
         if (!connection.local.data?.localReferenceImport && /512\s*MiB|最多导入\s*80\s*份/i.test(detail))
@@ -1031,49 +1044,23 @@ function DirectorEditor({
     });
   }
 
-  async function upload(event: ChangeEvent<HTMLInputElement>, folder = false) {
-    const chosen = Array.from(event.target.files || []);
-    const manualRole = folder ? undefined : uploadRole.current;
-    uploadRole.current = undefined;
-    event.target.value = "";
-    if (!chosen.length) return;
-    await run("正在上传项目素材…", async () => {
-      const remaining = directorAssetLimit - draft.assets.length;
-      if (!remaining) throw Error(assetLimitMessage);
-      const failed: string[] = [];
-      const files = chosen.flatMap((file) => {
-        const role = manualRole ?? (folder ? directorFolderRole(file.webkitRelativePath) : undefined);
-        const extension = file.name.match(/\.[^.]+$/)?.[0].toLowerCase();
-        const allowedTypes = role ? roleFileTypes[role] : uploadTypes;
-        if (!extension || !allowedTypes.split(",").includes(extension)) {
-          failed.push(`${file.webkitRelativePath || file.name}：${role ? `类型不适用于「${roleNames[role]}」` : "不支持此文件类型"}`);
-          return [];
-        }
-        return [{ file, role }];
-      });
-      const uniqueKinds = uniqueDirectorKinds([
-        ...draft.assets.map((a) => a.mime),
-        ...files.map(({ file }) => file.type),
-      ]);
-      const uploaded: DirectorAsset[] = [];
-      let processed = 0;
-      for (const { file, role } of files) {
-        if (uploaded.length >= remaining) break;
-        setBusy(`正在上传素材 ${++processed} / ${files.length}…`);
-        try {
-          const result = await uploadDirectorFile(file);
-          if (role && !acceptsDirectorFolderRole(role, result.mime))
-            throw Error(`文件类型不适用于「${roleNames[role]}」`);
-          const asset = libraryDirectorAsset(result, draft.brief, uniqueKinds.has(file.type.split("/")[0]));
-          uploaded.push(role ? { ...asset, role } : asset);
-        } catch (caught) {
-          failed.push(`${file.name}：${messageOf(caught)}`);
-        }
-      }
-      if (uploaded.length) appendAssets(uploaded, manualRole);
-      if (failed.length) setError(`已跳过 ${failed.length} 个文件。\n${failed.slice(0, 5).join("；")}${failed.length > 5 ? " 等。" : ""}`);
-      if (uploaded.length) setNotice(`已加入 ${uploaded.length} 份${manualRole ? roleNames[manualRole] : "素材"}。${processed < files.length ? assetLimitMessage : ""}`);
-      void cache.invalidateQueries({ queryKey: ["director-library", userId] });
+  async function importSelection(event: ChangeEvent<HTMLInputElement>, folder = false) {
+    const files = Array.from(event.currentTarget.files ?? []);
+    const role = folder ? undefined : browserImportRole.current;
+    browserImportRole.current = undefined;
+    event.currentTarget.value = "";
+    if (!files.length) return;
+    await run("正在登记本机素材…", async (isCurrent) => {
+      const result = await importBrowserFiles({ projectId: draft.id, assets: draft.assets, files, brief: draft.brief, role });
+      if (!isCurrent()) return;
+      appendAssets(result.added, role);
+      const parts: string[] = [];
+      if (result.added.length) parts.push(`已加入 ${result.added.length} 份本机素材。`);
+      if (result.reconnected) parts.push(`已重新关联 ${result.reconnected} 份素材。`);
+      if (result.duplicates) parts.push(`${result.duplicates} 份已在项目中。`);
+      if (result.overLimit) parts.push(assetLimitMessage);
+      if (result.skipped) setError(`已跳过 ${result.skipped} 个文件。${result.problems.join("；")}`);
+      setNotice(parts.join(" "));
     });
   }
 
@@ -1108,6 +1095,7 @@ function DirectorEditor({
       ...current,
       assets: current.assets.filter((item) => item.id !== id),
     }));
+    releaseBrowserFile(draft.id, id);
     if (asset?.id === id) {
       setAssetId(filteredAssets[assetIndex + 1]?.id ?? filteredAssets[assetIndex - 1]?.id ?? "");
     }
@@ -1142,13 +1130,16 @@ function DirectorEditor({
   }
 
   function analyzeReference(reference: DirectorAsset) {
-    void run("正在拆解参考片…", async () => {
-      await analyzeProjectReference(await save(), reference);
+    void run("正在拆解参考片…", async (isCurrent) => {
+      const project = await save(draft, isCurrent);
+      if (isCurrent()) await analyzeProjectReference(project, reference, isCurrent);
     });
   }
 
-  async function analyzeProjectReference(project: DirectorProject, reference: DirectorAsset) {
-    const frames: { fileId: string; timeMs: number }[] = [];
+  async function analyzeProjectReference(project: DirectorProject, reference: DirectorAsset, isCurrent: () => boolean) {
+    const inlineFrames = reference.source === "browser"
+      ? await browserReferenceFrames(project.id, reference)
+      : [];
     if (reference.source === "local") {
       if (
         !reference.localId ||
@@ -1167,29 +1158,26 @@ function DirectorEditor({
             ]
           : [0];
       for (const timeMs of times) {
+        if (!isCurrent()) return;
         const frame = await localDirectorRequest("read-frame", {
           projectId: project.id,
           assetId: reference.localId,
           atMs: timeMs,
         });
-        const bytes = Uint8Array.from(atob(frame.base64), (char) =>
-          char.charCodeAt(0),
-        );
-        const file = await uploadDirectorFile(
-          new File([bytes], `参考帧-${timeMs}.jpg`, { type: frame.mime }),
-        );
-        frames.push({ fileId: file.id, timeMs });
+        inlineFrames.push({ jpeg: frame.base64, timeMs });
       }
     }
+    if (!isCurrent()) return;
     const analyzed = await directorApi<DirectorProject>(
       `${projectPath(project.id)}/reference`,
       "POST",
       {
         revision: project.revision,
         assetId: reference.id,
-        ...(frames.length ? { frames } : {}),
+        ...(inlineFrames.length ? { inlineFrames } : {}),
       },
     );
+    if (!isCurrent()) return;
     apply(analyzed);
     setNotice("参考拆解已保存，可用于后续编排。");
   }
@@ -1198,27 +1186,24 @@ function DirectorEditor({
     const text = shareText.trim();
     if (!text) return;
     setLinkError("");
-    void run("正在解析作品链接…", async () => {
-      if (draft.assets.length >= directorAssetLimit) throw Error(assetLimitMessage);
-      let file: AgentFile;
+    void run("正在解析并拆解作品…", async (isCurrent) => {
+      let result: { project: DirectorProject; assetId: string; analysisError?: string };
       try {
-        file = await directorApi<AgentFile>(`${projectPath(draft.id)}/reference-link`, "POST", { text });
+        const project = await save(draft, isCurrent);
+        if (!isCurrent()) return;
+        result = await directorApi(`${projectPath(project.id)}/reference-link`, "POST", { text, revision: project.revision });
       } catch (cause) {
-        setLinkError(messageOf(cause));
+        if (isCurrent()) setLinkError(messageOf(cause));
         return;
       }
-      const reference: DirectorAsset = { ...libraryDirectorAsset(file), role: "reference" };
-      const next = { ...draft, assets: [...draft.assets, reference] };
-      setDraft(next);
+      if (!isCurrent()) return;
+      apply(result.project);
       setAssetFilter("reference");
-      setAssetId(reference.id);
+      setAssetId(result.assetId);
       setLinkOpen(false);
       setShareText("");
-      void cache.invalidateQueries({ queryKey: ["director-library", userId] });
-      const savedProject = await save(next);
-      setBusy("参考片已保存，正在拆解画面…");
-      setNotice("参考片已保存。如拆解中断，可选中该素材再次拆解。");
-      await analyzeProjectReference(savedProject, reference);
+      if (result.analysisError) setError(`作品链接已保存，可再次拆解。${result.analysisError}`);
+      else setNotice("参考拆解已保存，可用于后续编排。");
     });
   }
 
@@ -1293,6 +1278,12 @@ function DirectorEditor({
             ? connection.local.data?.installation ||
               "这台电脑尚未检测到 FFmpeg，请安装后重试。"
             : "Windows 本机剪辑已就绪";
+  const projectFull = draft.assets.length >= directorAssetLimit;
+  const localImportDisabled = connection.supported && (!connection.paired || projectFull);
+  const importHint = !connection.supported ? "素材保留在本机，刷新后可重新关联原文件。"
+    : !connection.paired ? desktopAvailability
+    : connection.local.data?.localReferenceImport ? "本机素材引用原文件，剪辑期间请保留原位置。"
+    : "当前版本在本机复制素材，单份上限 512 MiB。";
 
   return (
     <>
@@ -1483,107 +1474,43 @@ function DirectorEditor({
               </span>
             </div>
             <div className="director-imports">
-              <Button
-                type={draft.assets.length ? "default" : "primary"}
-                size="small"
-                icon={<CloudUploadOutlined aria-hidden />}
-                disabled={
-                  !!busy ||
-                  draft.assets.length >= directorAssetLimit ||
-                  (connection.supported && !connection.paired)
-                }
-                onClick={() =>
-                  connection.supported
-                    ? pickNative("files")
-                    : chooseUpload()
-                }
+              <Dropdown
+                trigger={["click"]}
+                autoFocus
+                placement="bottomLeft"
+                menu={{
+                  items: [
+                    { key: "files", label: "导入本机文件", icon: <FileAddOutlined aria-hidden />, disabled: localImportDisabled },
+                    { key: "folder", label: "导入本机文件夹", icon: <FolderOpenOutlined aria-hidden />, disabled: localImportDisabled },
+                    { key: "library", label: "从工作台文件选择", icon: <FileTextOutlined aria-hidden />, disabled: projectFull },
+                    { key: "link", label: "粘贴作品链接", icon: <LinkOutlined aria-hidden />, disabled: projectFull },
+                    { type: "divider" },
+                    { key: "template", label: "文件夹模板", icon: <DownloadOutlined aria-hidden /> },
+                  ],
+                  onClick: ({ key }) => {
+                    switch (key) {
+                      case "files": chooseFiles(); break;
+                      case "folder":
+                        if (connection.supported) pickNative("folder");
+                        else folderRef.current?.click();
+                        break;
+                      case "library": setLibraryOpen(true); break;
+                      case "link": setLinkError(""); setLinkOpen(true); break;
+                      case "template": setTemplateOpen(true); break;
+                    }
+                  },
+                }}
               >
-                {connection.supported ? "导入本机文件" : "上传文件"}
-              </Button>
-              <Button
-                icon={<FolderOpenOutlined aria-hidden />}
-                size="small"
-                type="text"
-                disabled={
-                  !!busy ||
-                  draft.assets.length >= directorAssetLimit ||
-                  (connection.supported && !connection.paired)
-                }
-                onClick={() =>
-                  connection.supported
-                    ? pickNative("folder")
-                    : folderRef.current?.click()
-                }
-              >
-                {connection.supported ? "导入本机文件夹" : "上传文件夹"}
-              </Button>
-              {connection.supported ? (
-                <Dropdown
-                  trigger={["click"]}
-                  disabled={!!busy || draft.assets.length >= directorAssetLimit}
-                  menu={{
-                    items: [
-                      { key: "choose", label: "从工作台文件选择" },
-                      { key: "upload", label: "上传到工作台" },
-                      { key: "folder", label: "按模板上传文件夹" },
-                    ],
-                    onClick: ({ key }) => {
-                      if (key === "choose") setLibraryOpen(true);
-                      else if (key === "folder") folderRef.current?.click();
-                      else chooseUpload();
-                    },
-                  }}
-                >
-                  <Button size="small" type="text" disabled={!!busy || draft.assets.length >= directorAssetLimit}>更多导入 ▾</Button>
-                </Dropdown>
-              ) : (
-                <Button
-                  size="small"
-                  type="text"
-                  disabled={!!busy || draft.assets.length >= directorAssetLimit}
-                  onClick={() => setLibraryOpen(true)}
-                >
-                  从工作台文件选择
+                <Button type="primary" size="small" disabled={!!busy} aria-haspopup="menu">
+                  导入素材 <DownOutlined aria-hidden />
                 </Button>
-              )}
-              <DirectorImportTemplate local={connection.supported} nativeTemplate={!!connection.local.data?.folderRoleImport} />
-              <Button size="small" type="text" icon={<LinkOutlined aria-hidden />}
-                disabled={!!busy || draft.assets.length >= directorAssetLimit}
-                onClick={() => { setLinkError(""); setLinkOpen(true); }}
-              >
-                粘贴作品链接
-              </Button>
-              <input
-                className="director-file-input"
-                ref={filesRef}
-                type="file"
-                multiple
-                tabIndex={-1}
-                accept={uploadTypes}
-                onChange={(event) => void upload(event)}
-                aria-label="上传项目文件"
-              />
-              <input
-                className="director-file-input"
-                ref={folderRef}
-                type="file"
-                multiple
-                tabIndex={-1}
-                {...{ webkitdirectory: "" }}
-                accept={uploadTypes}
-                onChange={(event) => void upload(event, true)}
-                aria-label="上传项目文件夹"
-              />
+              </Dropdown>
+              <span className="director-muted director-import-hint">{importHint}</span>
+              <input hidden ref={filesRef} type="file" multiple accept={browserFileAccept()}
+                onChange={(event) => void importSelection(event)} aria-label="选择本机文件" />
+              <input hidden ref={folderRef} type="file" multiple {...{ webkitdirectory: "" }}
+                onChange={(event) => void importSelection(event, true)} aria-label="选择本机文件夹" />
             </div>
-            <p className="director-muted director-import-hint">
-              {connection.supported && !connection.paired
-                ? desktopAvailability
-                : connection.local.data?.localReferenceImport
-                  ? "本机素材引用原文件，剪辑期间请保留原位置。"
-                  : connection.supported && connection.paired
-                    ? "当前客户端复制本机素材，单份最多 512 MiB。大素材包请更新至 Windows 桌面端 1.3.1 或更新版本。"
-                    : "大素材包可在 Windows 桌面端按文件夹导入。"}
-            </p>
             {connection.supported &&
               (!connection.paired || !connection.local.data?.ffmpeg) && (
                 <div className="director-status">
@@ -1602,12 +1529,8 @@ function DirectorEditor({
             <DirectorAssetRoleFilters
               assets={draft.assets}
               value={assetFilter}
-              local={connection.supported}
-              canImport={(role) => !busy && draft.assets.length < directorAssetLimit && (role === "document" || !connection.supported || connection.paired)}
-              onImport={(role) => {
-                if (connection.supported && role !== "document") pickNative("files", role);
-                else chooseUpload(role);
-              }}
+              disabled={!!busy || localImportDisabled}
+              onImport={chooseFiles}
               onChange={(value) => {
                 if (assetFilter !== value) {
                   setAssetFilter(value);
@@ -1625,7 +1548,7 @@ function DirectorEditor({
                   >
                     <span className="director-asset-name">
                       <strong title={item.name}>{item.name}</strong>
-                      <small>{directorMediaTypeLabel(item.mime)} · {item.source === "local" ? "本机" : "工作台"}</small>
+                      <small>{directorMediaTypeLabel(item.mime)} · {assetSources[item.source]}</small>
                     </span>
                     <span className="director-asset-labels">
                       <DirectorAssetRoleBadge role={item.role} />
@@ -1653,7 +1576,7 @@ function DirectorEditor({
                   <Select
                     aria-label="素材角色"
                     virtual={false}
-                    disabled={!!busy}
+                    disabled={!!busy || asset.source === "link"}
                     value={asset.role}
                     options={directorRoles.map((value) => ({
                       value,
@@ -1716,9 +1639,9 @@ function DirectorEditor({
                     />
                   </Field>
                 )}
-                {asset.role === "reference" && asset.source === "local" && (
+                {asset.role === "reference" && (asset.source === "local" || asset.source === "browser") && (
                   <p className="director-muted">
-                    拆解本机参考片时，工作台会上传所抽样的关键帧以供分析。
+                    拆解时仅发送抽样画面给模型，原视频留在本机。
                   </p>
                 )}
                 <Space wrap>
@@ -1728,8 +1651,8 @@ function DirectorEditor({
                       disabled={!!busy}
                       onClick={() => analyzeReference(asset)}
                     >
-                      {asset.source === "local"
-                        ? "授权上传截帧并拆解"
+                      {asset.source === "local" || asset.source === "browser"
+                        ? "发送关键帧并拆解"
                         : analyses.some((item) => item.assetId === asset.id)
                           ? "重新拆解参考片"
                           : "拆解参考片"}
@@ -1993,7 +1916,7 @@ function DirectorEditor({
               )}
               {localReferencesPending && (
                 <p className="director-muted">
-                  有本机参考片待分析。需要用于本次编排时，请先在素材区授权上传截帧并拆解。
+                  有本机参考片待分析。需要用于本次编排时，请先在素材区点「发送关键帧并拆解」。
                 </p>
               )}
               <Space wrap>
@@ -2292,6 +2215,12 @@ function DirectorEditor({
           onClose={() => setLibraryOpen(false)}
         />
       )}
+      {templateOpen && (
+        <DirectorImportTemplate
+          legacyDesktop={connection.supported && !connection.local.data?.folderRoleImport}
+          onClose={() => setTemplateOpen(false)}
+        />
+      )}
       <Modal
         title="从作品链接拆解参考片"
         open={linkOpen}
@@ -2313,7 +2242,7 @@ function DirectorEditor({
             disabled={!!busy}
             onChange={(event) => { setShareText(event.target.value); setLinkError(""); }}
           />
-          <p className="director-muted">取得视频后会保存到工作台，并按实际画面拆解节奏和构图。需要登录或仅分享图文时，可改为导入原视频。</p>
+          <p className="director-muted">临时读取公开视频并分析画面，项目保存作品链接和拆解结果。需要登录时，可改为导入本机视频。</p>
           {linkError && <Alert type="error" showIcon title={linkError} />}
         </div>
       </Modal>

@@ -21,6 +21,9 @@ sealed class DirectorStudio {
     readonly Dictionary<string,CancellationTokenSource> active=new Dictionary<string,CancellationTokenSource>();
     string lastGrant;
     DateTime grantUntil;
+    bool picking;
+    int authorizationEpoch;
+    internal int AuthorizationEpoch { get { return authorizationEpoch; } }
     static readonly string[] Actions={"capabilities","pick","import","preview","read-frame","start","status","pause","resume","open"};
     internal DirectorStudio(string isolatedRoot=null) {
         root=isolatedRoot??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"XutiDesktop","director");
@@ -125,7 +128,7 @@ sealed class DirectorStudio {
     internal DirectorReceipt Pause(string output) {
         lock(gate){CancellationTokenSource c;if(active.TryGetValue(output,out c))c.Cancel();return Status(output);}
     }
-    internal void PauseAll() {lock(gate){lastGrant=null;foreach(var cancel in active.Values)cancel.Cancel();}}
+    internal void PauseAll() {lock(gate){authorizationEpoch++;lastGrant=null;foreach(var cancel in active.Values)cancel.Cancel();}}
     internal static bool Granted(string json,string project,string device) {
         var wrapper=DirectorMedia.Json().Deserialize<Dictionary<string,object>>(json);
         var data=Value(wrapper,"data") as Dictionary<string,object>;
@@ -137,9 +140,10 @@ sealed class DirectorStudio {
         if(cookie==null)throw DirectorMedia.Error("请登录工作台后再使用本机素材。");
         return cookie.Value;
     }
-    internal async Task<string> Grant(CoreWebView2 core,string device,Dictionary<string,object> p,Func<bool> authorized,bool polling) {
+    internal async Task<string> Grant(CoreWebView2 core,string device,Dictionary<string,object> p,Func<bool> authorized,bool polling,string expectedSession=null) {
         if(!authorized())throw DirectorMedia.Error("请先在「我的电脑」配对并授权当前设备。");
         string id=DirectorMedia.Uuid(Value(p,"projectId")),account=await Session(core);
+        if(expectedSession!=null && account!=expectedSession)throw DirectorMedia.Error("工作台账号已变化，请重新选择本机素材。");
         var number=Value(p,"version");
         if(number!=null && (!(number is int)||(int)number<=0))throw DirectorMedia.Error("版本编号无效。");
         string address=ShellPolicy.Origin+"/api/v1/my-workspace/director/projects/"+id+"/native-access?deviceId="+DirectorMedia.Uuid(device)+(number==null?"":"&version="+number);
@@ -239,7 +243,31 @@ sealed class DirectorStudio {
         }
         return result;
     }
-    async Task<object> Pick(Form owner,string project,Dictionary<string,object> p,Func<bool> stillAuthorized,Action<int> progress) {
+    internal sealed class PickPaths {
+        internal string[] files=new string[0];
+        internal string folder;
+    }
+    internal static PickPaths Choose(Form owner,string kind,string role) {
+        if(kind=="folder") {
+            using(var picker=new FolderBrowserDialog{Description="导入所选文件夹中的图片、音视频和文档，按用途目录归类",ShowNewFolderButton=false})
+                return picker.ShowDialog(owner)==DialogResult.OK?new PickPaths{folder=picker.SelectedPath}:null;
+        }
+        var extensions=DirectorMedia.Inputs.Concat(DirectorMedia.Documents).Where(ext=>FitsRole(role,DirectorMedia.Kind(ext)));
+        using(var picker=new OpenFileDialog{Multiselect=true,CheckFileExists=true,Title="导入导演项目素材",Filter="可用素材|"+String.Join(";",extensions.Select(s=>"*"+s))})
+            return picker.ShowDialog(owner)==DialogResult.OK?new PickPaths{files=picker.FileNames}:null;
+    }
+    internal async Task<PickResult> Pick(string device,Dictionary<string,object> p,Func<bool> stillAuthorized,
+        Func<Task<string>> session,Func<string,string,PickPaths> choose,Func<string,Task> grant,Action<int> progress) {
+        if(picking)throw DirectorMedia.Error("已有本机素材选择或登记正在进行，请先完成当前选择。");
+        picking=true;
+        try {
+            return await PickAndRegister(device,p,stillAuthorized,session,choose,grant,progress);
+        } finally {picking=false;}
+    }
+    async Task<PickResult> PickAndRegister(string device,Dictionary<string,object> p,Func<bool> stillAuthorized,
+        Func<Task<string>> session,Func<string,string,PickPaths> choose,Func<string,Task> grant,Action<int> progress) {
+        DirectorMedia.Uuid(device);
+        if(!stillAuthorized())throw DirectorMedia.Error("请先在「我的电脑」配对并授权当前设备。");
         object slots=Value(p,"remaining");
         if(slots!=null && (!(slots is int)||(int)slots<1||(int)slots>MaxLocalAssets))throw DirectorMedia.Error("项目的剩余素材数量无效。");
         var ids=Value(p,"knownIds") as object[];
@@ -248,23 +276,22 @@ sealed class DirectorStudio {
         // Web clients predating the remaining-slot field accept at most 80 assets.
         int remaining=Math.Min(slots==null?80:(int)slots,MaxLocalAssets-known.Count);
         string kind=Value(p,"kind") as string;
+        if(kind!="files" && kind!="folder")throw DirectorMedia.Error("未知的素材选择方式。");
         string selectedRole=Value(p,"role") as string;
         if(p.ContainsKey("role") && (selectedRole==null || !FolderRoles.ContainsValue(selectedRole) || kind!="files"))
             throw DirectorMedia.Error("请选择有效的素材用途。");
-        string[] selection=new string[0];string folder=null;
-        if(kind=="files") {
-            var extensions=DirectorMedia.Inputs.Concat(DirectorMedia.Documents).Where(ext=>FitsRole(selectedRole,DirectorMedia.Kind(ext)));
-            using(var picker=new OpenFileDialog{Multiselect=true,CheckFileExists=true,Title="导入导演项目素材",Filter="可用素材|"+String.Join(";",extensions.Select(s=>"*"+s))}) {
-                if(picker.ShowDialog(owner)!=DialogResult.OK)return new PickResult{cancelled=true};
-                selection=picker.FileNames;
-            }
-        } else if(kind=="folder"){
-            using(var picker=new FolderBrowserDialog{Description="导入所选文件夹中的图片、音视频和文档，按用途目录归类",ShowNewFolderButton=false}) {
-                if(picker.ShowDialog(owner)!=DialogResult.OK)return new PickResult{cancelled=true};
-                folder=picker.SelectedPath;
-            }
-        } else throw DirectorMedia.Error("未知的素材选择方式。");
+        // Snapshot the local WebView session, then post to its WinForms UI loop
+        // so a modal dialog never runs inside a WebView2 event callback.
+        string originalAccount=await session();
+        await Task.Yield();
+        if(!stillAuthorized())throw DirectorMedia.Error("工作台或本机授权已变化，请重新选择本机素材。");
+        var selected=choose(kind,selectedRole);
+        if(selected==null)return new PickResult{cancelled=true};
         if(!stillAuthorized())throw DirectorMedia.Error("本机授权已变化，请返回导演台重试。");
+        if(progress!=null)progress(0);
+        await grant(originalAccount);
+        if(!stillAuthorized())throw DirectorMedia.Error("本机授权已变化，请返回导演台重试。");
+        string project=Project(device,Value(p,"projectId"));
         int processed=0,reported=0;
         // The WebView authorization callback may only run on its owning UI thread.
         using(var stop=new CancellationTokenSource())
@@ -276,7 +303,7 @@ sealed class DirectorStudio {
             };
             timer.Start();
             try {
-                return await Task.Run(()=>ImportSelection(project,selection,folder,remaining,known,
+                return await Task.Run(()=>ImportSelection(project,selected.files,selected.folder,remaining,known,
                     DirectorMedia.Ffmpeg(),stop.Token,()=>Interlocked.Increment(ref processed),selectedRole));
             } catch(OperationCanceledException){throw DirectorMedia.Error("本机授权已变化，已停止导入。");}
         }
@@ -317,17 +344,16 @@ sealed class DirectorStudio {
             return new{mime="image/jpeg",base64=Convert.ToBase64String(File.ReadAllBytes(file))};
         } finally {if(File.Exists(file))File.Delete(file);}
     }
-    internal async Task<object> Handle(Form owner,string account,string device,string action,Dictionary<string,object> p,Func<bool> authorized,Action<int> importProgress=null) {
+    internal async Task<object> Handle(string account,string device,string action,Dictionary<string,object> p,Func<bool> authorized) {
         string ffmpeg=DirectorMedia.Ffmpeg();
         if(action=="capabilities")return await Task.Run(()=>DirectorRender.Capabilities(ffmpeg));
         if(!authorized())throw DirectorMedia.Error("请在「我的电脑」配对此设备并授权，再打开本机导演台。");
         string project=Project(device,Value(p,"projectId"));
-        if(action=="pick")return await Pick(owner,project,p,authorized,importProgress);
         if(action=="import")return await Import(account,project,DirectorMedia.Uuid(Value(p,"fileId")),Value(p,"name") as string,authorized);
         if(action=="preview"||action=="read-frame") {
             string id=DirectorMedia.Uuid(Value(p,"assetId"));var asset=DirectorMedia.Asset(project,id);
             if(action=="preview"){
-                if(asset.kind=="document")throw DirectorMedia.Error("本机文档仅登记素材信息，需要正文时请上传到工作台。");
+                if(asset.kind=="document")throw DirectorMedia.Error("本机文档已登记，请在项目的创作要求中填写需要使用的文案。");
                 using(DirectorMedia.PinLocal(project,asset))Open(DirectorMedia.PathFor(project,asset));
                 return new{opened=true};
             }

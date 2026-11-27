@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { FolderOpenOutlined } from "@ant-design/icons";
-import { Alert, Button, Modal } from "antd";
+import { Alert, Modal } from "antd";
 import { directorRoles } from "../../../packages/contracts/src/director";
 import { roleNames } from "./director-project";
 import { releaseSheetDownload, triggerSheetDownload } from "./download-sheet";
@@ -22,20 +21,14 @@ async function downloadDirectorImportTemplate() {
 }
 
 export function DirectorImportTemplate({
-  local,
-  nativeTemplate = false,
+  legacyDesktop,
+  onClose,
 }: {
-  local: boolean;
-  nativeTemplate?: boolean;
+  legacyDesktop: boolean;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const folderAction = local
-    ? nativeTemplate
-      ? "导入本机文件夹"
-      : "按模板上传文件夹"
-    : "上传文件夹";
   async function download() {
     setError("");
     setLoading(true);
@@ -48,44 +41,28 @@ export function DirectorImportTemplate({
     }
   }
   return (
-    <>
-      <Button
-        size="small"
-        type="text"
-        icon={<FolderOpenOutlined aria-hidden />}
-        onClick={() => {
-          setError("");
-          setOpen(true);
-        }}
-      >
-        文件夹模板
-      </Button>
-      <Modal
-        title="素材文件夹模板"
-        width={460}
-        open={open}
-        onCancel={() => setOpen(false)}
-        onOk={() => void download()}
-        confirmLoading={loading}
-        cancelText="关闭"
-        okText="下载模板"
-      >
-        <ol>
-          <li>下载 ZIP 并解压到一个文件夹。</li>
-          <li>
-            按用途放入素材，可只使用需要的子文件夹。模板内含
-            {directorRoles.map((role) => roleNames[role]).join("、")}。
-          </li>
-          <li>
-            回到「整理素材」，点「{folderAction}
-            」，选择包含这些子文件夹的根目录。
-          </li>
-        </ol>
-        <p className="director-muted">
-          只有一种用途时，也可以直接点该用途旁的加号选文件。肖像和音色导入后仍需确认使用授权。
-        </p>
-        {error && <Alert type="error" showIcon title={error} />}
-      </Modal>
-    </>
+    <Modal
+      title="素材文件夹模板"
+      width={460}
+      open
+      onCancel={onClose}
+      onOk={() => void download()}
+      confirmLoading={loading}
+      cancelText="关闭"
+      okText="下载模板"
+    >
+      <ol>
+        <li>下载 ZIP 并解压到一个文件夹。</li>
+        <li>
+          按用途放入素材，可只使用需要的子文件夹。模板内含
+          {directorRoles.map((role) => roleNames[role]).join("、")}。
+        </li>
+        <li>
+          点「导入素材」→「导入本机文件夹」，选择包含这些子文件夹的根目录。
+        </li>
+      </ol>
+      {legacyDesktop && <p className="director-muted">桌面端按目录名归类需要 Windows 1.3.2 或更新版本，也可在网页端使用模板。</p>}
+      {error && <Alert type="error" showIcon title={error} />}
+    </Modal>
   );
 }

@@ -21,6 +21,66 @@ static class DirectorTest {
         }
         throw new Exception("Director fixture exceeded timeout.");
     }
+    // Exercise the production pick pipeline on an actual STA message loop. The
+    // test supplies the dialog result and the server grant without touching the user's UI.
+    static void TestPicker(string temp) {
+        Exception failure=null;
+        using(var context=new System.Windows.Forms.ApplicationContext())
+        using(var dispatcher=new System.Windows.Forms.Control()) {
+            var handle=dispatcher.Handle;
+            dispatcher.BeginInvoke(new Action(async ()=>{
+                try {await CheckPicker(temp);}catch(Exception e){failure=e;}
+                finally {context.ExitThread();}
+            }));
+            System.Windows.Forms.Application.Run(context);
+        }
+        if(failure!=null)throw failure;
+    }
+    static async Task CheckPicker(string temp) {
+        var studio=new DirectorStudio(Path.Combine(temp,"picker-root"));
+        string device=Guid.NewGuid().ToString(),id=Guid.NewGuid().ToString();
+        string project=studio.Project(device,id),document=Path.Combine(temp,"pick-source.txt");
+        var p=new Dictionary<string,object>{{"projectId",id},{"kind","files"},{"role","document"}};
+        string activeSession="initial";
+        Func<Task<string>> session=()=>Task.FromResult(activeSession);
+        Func<bool> allowed=()=>true;
+        var deniedGrant=new Func<string,Task>(original=>{throw new Exception("Unexpected server request");});
+        var cancelled=await studio.Pick(device,p,allowed,session,(kind,role)=>null,deniedGrant,null);
+        Check(cancelled.cancelled && !Directory.Exists(project),"Cancel should not request a grant or create local state");
+        bool opened=false,denied=false;
+        try {await studio.Pick(device,p,()=>false,session,(kind,role)=>{opened=true;return null;},deniedGrant,null);}
+        catch(InvalidOperationException){denied=true;}
+        Check(denied && !opened,"Local authorization must be checked before opening the picker");
+        var selected=new DirectorStudio.PickPaths{files=new[]{document}};
+        bool current=true;
+        denied=false;
+        try {await studio.Pick(device,p,()=>current,session,(kind,role)=>{current=false;return selected;},deniedGrant,null);}
+        catch(InvalidOperationException){denied=true;}
+        Check(denied && !Directory.Exists(project),"Changing project or local grant while choosing should discard the selection");
+        denied=false;
+        try {
+            await studio.Pick(device,p,allowed,session,(kind,role)=>{activeSession="another";return selected;},
+                original=>{Check(original=="initial","Picking did not pin the initial local account");throw DirectorMedia.Error("Grant denied");},null);
+        } catch(InvalidOperationException){denied=true;}
+        Check(denied && !Directory.Exists(project),"Denied server grant wrote the local index");
+        var pendingGrant=new TaskCompletionSource<bool>();var requested=new TaskCompletionSource<bool>();
+        int stage=0;bool duplicate=false;
+        var first=studio.Pick(device,p,allowed,session,(kind,role)=>{
+            Check(kind=="files" && role=="document" && stage==0,"Picker ordering or role mismatch");stage=1;return selected;
+        },original=>{
+            Check(original=="another" && stage==2 && !Directory.Exists(project),"Project access must follow selection");
+            requested.SetResult(true);return pendingGrant.Task;
+        },processed=>{if(processed==0){Check(stage==1,"Selection acknowledgement out of order");stage=2;}});
+        await requested.Task;
+        try {await studio.Pick(device,p,allowed,session,(kind,role)=>{throw new Exception("Second dialog opened");},deniedGrant,null);}
+        catch(InvalidOperationException){duplicate=true;}
+        Check(duplicate && !File.Exists(document) && !Directory.Exists(project),"A second picker or registration ran while waiting for a grant");
+        File.WriteAllText(document,"Director picker fixture");
+        pendingGrant.SetResult(true);
+        var saved=await first;
+        Check(saved.assets.Count==1 && Directory.Exists(project),"Confirmed source did not register after authorization");
+        Console.WriteLine("Verified picker ordering, cancel, stale navigation, single active selection, pinned session and deferred file registration.");
+    }
     public static void Policy() {
         var id=Guid.NewGuid().ToString();
         var json=DirectorMedia.Json();var origin=ShellPolicy.Origin;
@@ -206,6 +266,7 @@ static class DirectorTest {
         string temp=Directory.CreateDirectory(Path.Combine(Path.GetTempPath(),"xuti-"+Path.GetRandomFileName())).FullName;
         try {
             Policy();
+            TestPicker(temp);
             ProcessTree(temp);
             string ff=DirectorMedia.Ffmpeg();
             Check(ff!=null,"Set XUTI_DIRECTOR_FFMPEG to an installed Windows FFmpeg for this real-media test.");

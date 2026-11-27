@@ -17,12 +17,12 @@ export const aiFeatures = [
   {
     id: "director_storyboard", name: "导演创作与分镜", group: "AI 导演台",
     href: "/my-workspace/director", kind: "structured",
-    boundary: "在「编排分镜」按创作要求、素材目录和参考片分析起草或重编分镜。素材较多时按数量缩短备注和文档摘录。模型实际调用时计量；从商品画面手工建镜和本机剪辑均独立运行。",
+    boundary: "在「编排分镜」按创作要求、素材目录和参考片分析起草或重编分镜。本机素材提供目录信息，素材较多时按数量缩短备注和工作台文档摘录。仅实际模型调用计量。",
   },
   {
     id: "director_reference", name: "导演参考片拆解", group: "AI 导演台",
     href: "/my-workspace/director", kind: "vision_structured",
-    boundary: "「整理素材」支持从文件或公开作品链接拆解参考片。取得源视频后，使用识图模型分析抽样画面、时间点、节奏和构图。智能导演也可拆解工作台参考片。链接解析与本机预览取帧独立执行，仅实际模型请求计量。",
+    boundary: "「整理素材」可拆解已有工作台视频、公开作品链接或用户选定的本机参考片。链接视频临时取帧，本机参考片仅发送抽样画面。识图模型分析时间点、节奏和构图，按实际模型请求计量。",
   },
   {
     id: "assistant_chat",

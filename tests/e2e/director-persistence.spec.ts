@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
-test("未启用 AIGC 时真实登录、创建、上传、编辑、刷新并下载分镜", async ({
+test("真实项目引用本机图片，刷新后重选原文件并保留原分镜绑定", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.goto("/");
   await page.getByLabel("用户名", { exact: true }).fill("admin");
   await page
@@ -20,17 +21,25 @@ test("未启用 AIGC 时真实登录、创建、上传、编辑、刷新并下�
   await page.getByLabel("项目名称", { exact: true }).fill("真实保存分镜测试");
   await page.getByRole("button", { name: "创建", exact: true }).click();
   await expect(page).toHaveURL(/project=[0-9a-f-]{36}/);
-  await page.getByLabel("上传项目文件", { exact: true }).setInputFiles({
-    name: "产品说明.txt",
-    mimeType: "text/plain",
-    buffer: Buffer.from("测试商品为棉布收纳袋。", "utf8"),
+  const attachmentsUrl = "/api/v1/my-workspace/assistant/files";
+  const existing = await (await page.request.get(attachmentsUrl)).json();
+  const uploads: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === attachmentsUrl)
+      uploads.push(request.url());
   });
-  await expect(
-    page.getByRole("button", { name: /产品说明.txt/ }),
-  ).toBeVisible();
+  const correct = testInfo.outputPath("款式图.png");
+  const wrongDir = testInfo.outputPath("同名文件");
+  await mkdir(wrongDir, { recursive: true });
+  const bytes = await readFile("tests/fixtures/selection-care-label.png");
+  await writeFile(correct, bytes);
+  const wrong = join(wrongDir, "款式图.png");
+  await writeFile(wrong, Buffer.from("不同图片"));
+  await page.getByLabel("选择本机文件", { exact: true }).setInputFiles(correct);
+  const preview = page.getByRole("img", { name: /款式图/ });
+  await expect(preview).toHaveAttribute("src", /^blob:/);
   const workflow = page.getByRole("navigation", { name: "导演台制作流程" });
-  await workflow.getByRole("button", { name: "编排分镜", exact: true }).click();
-  await page.getByRole("button", { name: "新增空白分镜" }).click();
+  await page.getByRole("button", { name: "用此素材创建分镜" }).click();
   await page.getByLabel("口播与分镜脚本").fill("从袋口的收边开始看。");
   const saved = page.waitForResponse(
     (r) =>
@@ -38,15 +47,29 @@ test("未启用 AIGC 时真实登录、创建、上传、编辑、刷新并下�
       r.request().method() === "PATCH",
   );
   await page.getByRole("button", { name: "保存项目" }).click();
-  expect((await saved).ok()).toBe(true);
+  const response = await saved;
+  expect(response.ok()).toBe(true);
+  const savedProject = (await response.json()).data;
+  const [asset] = savedProject.assets;
+  expect(asset).toMatchObject({ name: "款式图.png", source: "browser", browserKey: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  expect(asset.fileId).toBeUndefined();
+  expect(savedProject.shots[0].visualId).toBe(asset.id);
   await page.reload();
   await expect(page.getByLabel("口播与分镜脚本")).toHaveValue(
     "从袋口的收边开始看。",
   );
   await workflow.getByRole("button", { name: "整理素材", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: /产品说明.txt/ }),
-  ).toBeVisible();
+  const relink = page.getByRole("button", { name: "重新关联原文件" });
+  const chooseWrong = page.waitForEvent("filechooser");
+  await relink.click();
+  await (await chooseWrong).setFiles(wrong);
+  await expect(page.getByText(/所选文件与原素材不一致/)).toBeVisible();
+  const chooseOriginal = page.waitForEvent("filechooser");
+  await relink.click();
+  await (await chooseOriginal).setFiles(correct);
+  await expect(preview).toHaveAttribute("src", /^blob:/);
+  expect(uploads).toEqual([]);
+  expect((await (await page.request.get(attachmentsUrl)).json()).data).toEqual(existing.data);
   await workflow.getByRole("button", { name: "交付导出", exact: true }).click();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出分镜脚本" }).click();

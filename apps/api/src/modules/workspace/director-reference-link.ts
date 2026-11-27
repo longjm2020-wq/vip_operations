@@ -2,15 +2,13 @@ import { lookup } from "node:dns/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { basename } from "node:path";
-import { z } from "zod";
 import {
   browserPublicAddress,
   publicBrowserUrl,
 } from "../../../../../packages/contracts/src/public-network.js";
-import { directorAssetLimit } from "../../../../../packages/contracts/src/director.js";
-import { fail, parse, type Context } from "../../core.js";
-import { RAW_VIDEO_BYTES, storeUploadedAgentFile } from "./agent-files.js";
-import { readDirectorProject } from "./director.js";
+import { fail } from "../../core.js";
+import { RAW_VIDEO_BYTES } from "./agent-files.js";
+import { directorReferenceFrames, inspectVideo } from "./agent-media.js";
 import {
   referencePageMedia,
   shareTextUrl,
@@ -19,8 +17,7 @@ import {
 
 const pageLimit = 2 * 1024 * 1024;
 const unavailable =
-  "未能从链接取得公开视频。若作品需要登录、已失效或仅支持在线播放，请上传可用的视频原文件。";
-const shareBody = z.object({ text: z.string().trim().min(1).max(8192) });
+  "未能从链接取得公开视频。若作品需要登录、已失效或仅支持在线播放，请从本机导入原视频。";
 const redirects = new Set([301, 302, 303, 307, 308]);
 
 // Keep the URL host for TLS/SNI. Supply the checked IPs directly to the socket,
@@ -188,16 +185,8 @@ export async function downloadDirectorReference(
   };
 }
 
-export async function importDirectorReferenceLink(
-  c: Context,
-  id: string,
-  body: unknown,
-) {
-  const { text } = parse(shareBody, body);
-  const project = await readDirectorProject(c, id);
-  if (project.assets.length >= directorAssetLimit)
-    fail("DIRECTOR_ASSET_LIMIT", "项目素材已满，请移出素材或新建项目。", 409);
-  const incoming = await downloadDirectorReference(text).catch(
+export async function sampleDirectorLink(url: string, request: ReadUrl = requestPublicUrl) {
+  const { name, content } = await downloadDirectorReference(url, request).catch(
     (error: unknown) => {
       const msg =
         error instanceof Error &&
@@ -207,5 +196,12 @@ export async function importDirectorReferenceLink(
       return fail("DIRECTOR_REFERENCE_LINK", msg, 400);
     },
   );
-  return storeUploadedAgentFile(c, incoming, true);
+  try {
+    const { duration } = await inspectVideo(content, true);
+    const frames = await directorReferenceFrames(content, duration);
+    const mime = name.endsWith(".webm") ? "video/webm" : name.endsWith(".mov") ? "video/quicktime" : "video/mp4";
+    return { name, mime, durationMs: Math.round(duration * 1000), frames };
+  } catch {
+    return fail("DIRECTOR_KEYFRAMES", "请使用有可读取视频画面、时长不超过 30 分钟的作品。", 422);
+  }
 }

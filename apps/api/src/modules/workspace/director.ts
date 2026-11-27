@@ -23,6 +23,7 @@ import {
   type DirectorReferenceAnalysis,
 } from "../../../../../packages/contracts/src/director.js";
 import { fail, hash, parse, type Context } from "../../core.js";
+import { publicBrowserUrl } from "../../../../../packages/contracts/src/public-network.js";
 import { requireAssistant } from "./assistant-memory.js";
 
 const uuid = z.string().uuid();
@@ -174,10 +175,14 @@ async function bindAssets(
       );
   }
   return assets.map((a) => {
+    if (a.source === "link") {
+      try { publicBrowserUrl(a.url!); }
+      catch { fail("DIRECTOR_REFERENCE_LINK", "作品链接须为使用标准端口的公开 HTTP 或 HTTPS 地址。", 400); }
+    }
     const original = previous.find((f) => f.id === a.id);
     if (
       original &&
-      ["source", "deviceId", "localId", "fileId"].some(
+      ["source", "deviceId", "localId", "fileId", "url", "browserKey"].some(
         (k) =>
           original[k as keyof DirectorAsset] !== a[k as keyof DirectorAsset],
       )
@@ -577,6 +582,12 @@ export async function createDirectorRender(
         400,
       );
     const assets = p.assets.filter((a) => used.has(a.id));
+    if (assets.some((a) => a.source === "browser"))
+      fail(
+        "DIRECTOR_BROWSER_MEDIA",
+        "分镜使用了浏览器本机素材。请在剪辑用的 Windows 小序中重新导入原文件，并替换分镜里的素材。",
+        409,
+      );
     if (assets.some((a) => a.source === "local" && a.deviceId !== b.deviceId))
       fail(
         "DIRECTOR_DEVICE_MISMATCH",

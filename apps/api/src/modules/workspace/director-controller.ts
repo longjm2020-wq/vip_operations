@@ -28,9 +28,9 @@ import {
 import {
   analyzeDirectorReference,
   generateDirectorStoryboard,
+  importDirectorReferenceLink,
   suggestDirectorShot,
 } from "./director-model.js";
-import { importDirectorReferenceLink } from "./director-reference-link.js";
 
 @Controller("api/v1/my-workspace/director/projects")
 export class DirectorController {

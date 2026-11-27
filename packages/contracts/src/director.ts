@@ -52,11 +52,13 @@ const uniqueIds = (items: { id: string }[]) =>
 export const directorAssetSchema = z
   .object({
     id: uuid,
-    source: z.enum(["local", "library"]),
+    source: z.enum(["local", "library", "browser", "link"]),
     role: z.enum(directorRoles),
     fileId: uuid.optional(),
     localId: uuid.optional(),
     deviceId: uuid.optional(),
+    browserKey: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    url: z.string().max(8192).url().regex(/^https?:\/\//i).optional(),
     name: fileName,
     mime: text(128).min(1),
     durationMs: ms.optional(),
@@ -65,11 +67,15 @@ export const directorAssetSchema = z
   })
   .strict()
   .refine(
-    (a) =>
-      a.source === "local"
-        ? !!a.localId && !!a.deviceId && !a.fileId
-        : !!a.fileId && !a.localId && !a.deviceId,
-    "请绑定工作台文件或指定设备上的本机文件",
+    (a) => {
+      switch (a.source) {
+        case "local": return !!a.localId && !!a.deviceId && !a.fileId && !a.url && !a.browserKey;
+        case "library": return !!a.fileId && !a.localId && !a.deviceId && !a.url && !a.browserKey;
+        case "browser": return !!a.browserKey && !a.fileId && !a.localId && !a.deviceId && !a.url;
+        case "link": return !!a.url && a.role === "reference" && !a.fileId && !a.localId && !a.deviceId && !a.browserKey;
+      }
+    },
+    "请核对素材用途及来源",
   );
 export const directorShotSchema = z
   .object({
@@ -153,8 +159,12 @@ export const directorReferenceSchema = z
       .min(1)
       .max(8)
       .optional(),
+    inlineFrames: z.array(z.object({
+      timeMs: ms,
+      jpeg: z.string().min(4).max(1024 * 1024).base64(),
+    }).strict()).min(1).max(4).optional(),
   })
-  .strict();
+  .strict().refine(b => !b.frames || !b.inlineFrames, "请只选择一种关键帧来源");
 export const directorAnalysisSchema = z
   .object({
     frameSource: z.enum(["sampled", "provided"]).optional(),
@@ -221,4 +231,5 @@ export type DirectorProject = DirectorProjectSummary & {
   referenceAnalyses?: DirectorReferenceAnalysis[];
   renders: DirectorRender[];
 };
+export type DirectorLinkResult = { project: DirectorProject; assetId: string; analysisError?: string };
 export type DirectorSnapshot = Omit<DirectorProject, "renders">;

@@ -227,17 +227,11 @@
 }
 .director-imports {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 3px 5px;
 }
 .director-import-hint { font-size: 12px; }
-.director-file-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
 .director-muted {
   color: var(--app-secondary);
   margin: 0;

@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import sharp from "sharp";
 import type { Context } from "../../apps/api/src/core.js";
 import type { Tx } from "../../packages/database/src/index.js";
 import {
@@ -19,7 +20,8 @@ import {
   type DirectorAsset,
   type DirectorShot,
 } from "../../packages/contracts/src/director.js";
-const fx = vi.hoisted(() => ({ pg: null as PGlite | null, model: vi.fn() }));
+const fx = vi.hoisted(() => ({ pg: null as PGlite | null, model: vi.fn(), sampleLink: vi.fn() }));
+vi.mock("../../apps/api/src/modules/workspace/director-reference-link.js", () => ({ sampleDirectorLink: fx.sampleLink }));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const actual =
     await original<typeof import("../../packages/database/src/index.js")>();
@@ -72,6 +74,7 @@ import {
 import {
   analyzeDirectorReference,
   generateDirectorStoryboard,
+  importDirectorReferenceLink,
   suggestDirectorShot,
 } from "../../apps/api/src/modules/workspace/director-model.js";
 import { deleteAgentFile } from "../../apps/api/src/modules/workspace/agent-files.js";
@@ -149,6 +152,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   fx.model.mockReset();
+  fx.sampleLink.mockReset();
   await fx.pg!.exec(
     "TRUNCATE director_projects, personal_assistant_files,assistant_desktop_devices CASCADE; UPDATE compass_ai_settings SET enabled=true",
   );
@@ -541,6 +545,75 @@ describe("director project API", () => {
     );
     expect(fx.model).toHaveBeenCalledTimes(1);
   });
+  it("saves only a share link and reuses it after a model failure, without writing any workbench files", async () => {
+    const c = actor(), p = await createDirectorProject(c, { requestId: randomUUID(), title: "参考链接" });
+    const url = "https://example.com/share/post?signature=abc";
+    const body = { text: "作品 " + url + "#top，复制查看", revision: 1 };
+    await expect(importDirectorReferenceLink(actor("8"), p.id, body)).rejects.toMatchObject({ status: 404 });
+    await expect(importDirectorReferenceLink(c, p.id, { text: url })).rejects.toMatchObject({ status: 409 });
+    await expect(importDirectorReferenceLink(c, p.id, { ...body, text: "http://127.0.0.1/a" })).rejects.toMatchObject({ status: 400 });
+    expect(fx.sampleLink).not.toHaveBeenCalled();
+    fx.sampleLink.mockResolvedValue({ name: "作品.mp4", mime: "video/mp4", durationMs: 1000, frames: [{ timeMs: 0, url: "data:image/jpeg;base64,TEST" }] });
+    fx.model.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+    const first = await importDirectorReferenceLink(c, p.id, body);
+    expect(first.analysisError).toContain("请求失败");
+    const asset = first.project.assets[0];
+    expect(asset).toEqual({ id: first.assetId, url, source: "link", role: "reference", name: "作品.mp4", mime: "video/mp4", durationMs: 1000 });
+    await expect(patchDirectorProject(c, p.id, { revision: first.project.revision, assets: [{ ...asset, url: url + "x" }] })).rejects.toMatchObject({ status: 409 });
+    await expect(patchDirectorProject(c, p.id, { revision: first.project.revision, shots: [shot({ visualId: asset.id })] })).rejects.toMatchObject({ status: 400 });
+    fx.model.mockResolvedValueOnce(envelope({ summary: "观察开场", beats: [{ timeMs: 0, description: "镜头开场" }] }));
+    const retry = await analyzeDirectorReference(c, p.id, { revision: first.project.revision, assetId: asset.id });
+    expect(retry.referenceAnalysis).toMatchObject({ assetId: asset.id, frameSource: "sampled" });
+    expect(await importDirectorReferenceLink(c, p.id, { ...body, revision: retry.revision })).toEqual({ project: retry, assetId: asset.id });
+    expect(fx.sampleLink).toHaveBeenCalledTimes(2);
+    expect(fx.sampleLink).toHaveBeenCalledWith(url);
+    expect(fx.model).toHaveBeenCalledTimes(2);
+    expect((await fx.pg!.query("SELECT id FROM personal_assistant_files")).rows).toEqual([]);
+    expect(JSON.stringify((await fx.pg!.query("SELECT document FROM director_revisions")).rows)).not.toContain("base64");
+  });
+
+  it.each(["browser", "local"] as const)("processes inline JPEG frames for %s references without persisting them", async source => {
+    const c = actor();
+    const asset: DirectorAsset = {
+      id: randomUUID(), name: "参考.mp4", mime: "video/mp4", durationMs: 1000, role: "reference", source,
+      ...(source === "browser" ? { browserKey: "a".repeat(64) } : { localId: randomUUID(), deviceId: device }),
+    };
+    const p = await createDirectorProject(c, { requestId: randomUUID(), title: "本机参考", assets: [asset] });
+    const request = { assetId: asset.id, revision: p.revision };
+    const jpg = await sharp({ create: { width: 64, height: 32, channels: 3, background: "red" } }).jpeg().toBuffer();
+    const frame = { timeMs: 0, jpeg: jpg.toString("base64") };
+    const wide = await sharp({ create: { width: 1025, height: 1, channels: 3, background: "red" } }).jpeg().toBuffer();
+    for (const inlineFrames of [[{ ...frame, timeMs: 1000 }], [frame, frame], [{ ...frame, jpeg: "QUJD" }], [{ ...frame, jpeg: wide.toString("base64") }], Array(5).fill(frame)]) {
+      await expect(analyzeDirectorReference(c, p.id, { ...request, inlineFrames })).rejects.toMatchObject({ status: 400 });
+    }
+    expect(fx.model).not.toHaveBeenCalled();
+    const answer = { summary: "观察开场", beats: [{ timeMs: 0, description: "红色" }] };
+    fx.model.mockResolvedValueOnce(envelope(answer));
+    const analyzed = await analyzeDirectorReference(c, p.id, { ...request, inlineFrames: [frame] });
+    expect(analyzed.referenceAnalysis).toMatchObject({ assetId: asset.id, frameSource: "provided" });
+    expect(fx.model.mock.calls[0][0]).toBe("director_reference");
+    expect(fx.model.mock.calls[0][2].body).toContain("data:image/jpeg;base64,");
+    expect((await fx.pg!.query("SELECT id FROM personal_assistant_files")).rows).toEqual([]);
+    expect(JSON.stringify((await fx.pg!.query("SELECT document FROM director_revisions")).rows)).not.toContain(frame.jpeg);
+    if (source === "local") {
+      const legacyFrame = await file("截图.jpg", "image/jpeg", "product", jpg);
+      fx.model.mockResolvedValueOnce(envelope(answer));
+      const legacy = await analyzeDirectorReference(c, p.id, { ...request, revision: analyzed.revision, frames: [{ timeMs: 0, fileId: legacyFrame.fileId }] });
+      expect(legacy.referenceAnalysis).toEqual(analyzed.referenceAnalysis);
+    }
+  });
+
+  it("keeps browser file bindings immutable and allows rendering only shots readable by the paired machine", async () => {
+    const c = actor();
+    const browser: DirectorAsset = { id: randomUUID(), source: "browser", browserKey: "0".repeat(64), role: "product", name: "同名.mp4", mime: "video/mp4" };
+    const native: DirectorAsset = { id: randomUUID(), source: "local", deviceId: device, localId: randomUUID(), role: "product", name: "同名.mp4", mime: "video/mp4" };
+    const shots = [shot({ visualId: native.id }), shot({ visualId: browser.id })];
+    const p = await createDirectorProject(c, { requestId: randomUUID(), title: "混合素材", assets: [native, browser], shots, mode: "smart", output: "video" });
+    await expect(patchDirectorProject(c, p.id, { revision: 1, assets: [native, { ...browser, browserKey: "1".repeat(64) }] })).rejects.toMatchObject({ status: 409 });
+    await expect(createDirectorRender(c, p.id, { revision: 1, deviceId: device })).rejects.toMatchObject({ response: { error: { code: "DIRECTOR_BROWSER_MEDIA" } } });
+    expect(await createDirectorRender(c, p.id, { revision: 1, deviceId: device, shotId: shots[0].id })).toMatchObject({ shotId: shots[0].id });
+  });
+
   it("extracts actual video frames for the metered vision provider and verifies the returned timestamps", async () => {
     const c = actor(),
       temp = await mkdtemp(join(tmpdir(), "director-spec-"));

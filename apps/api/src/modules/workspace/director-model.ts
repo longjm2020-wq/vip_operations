@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { HttpException } from "@nestjs/common";
 import { z } from "zod";
 import { db, one, rows } from "../../../../../packages/database/src/index.js";
 import {
   directorAnalysisSchema,
+  directorAssetLimit,
   directorEffects,
   directorReferenceSchema,
   directorSuggestionSchema,
@@ -10,6 +12,7 @@ import {
   directorStoryboardSchema,
   emptyDirectorLocks,
   type DirectorProject,
+  type DirectorLinkResult,
   type DirectorShot,
 } from "../../../../../packages/contracts/src/director.js";
 import { fail, parse, type Context } from "../../core.js";
@@ -19,7 +22,9 @@ import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 import { matchesAgentModel, resolveFeatureModel } from "./agent-models.js";
 import { openAgentImage, ownedAgentFiles } from "./agent-files.js";
 import { directorReferenceFrames, inspectVideo, videoFrames } from "./agent-media.js";
-import { readDirectorProject, saveDirectorGeneration } from "./director.js";
+import { patchDirectorProject, readDirectorProject, saveDirectorGeneration } from "./director.js";
+import { shareTextUrl } from "./director-reference-page.js";
+import { sampleDirectorLink } from "./director-reference-link.js";
 
 type Feature = "director_storyboard" | "director_reference";
 type Model = Awaited<ReturnType<typeof resolveFeatureModel>>;
@@ -452,10 +457,24 @@ async function frameImage(content: Uint8Array) {
     .toBuffer();
   return "data:image/jpeg;base64," + bytes.toString("base64");
 }
+async function inlineFrameImage(jpeg: string) {
+  try {
+    const bytes = Buffer.from(jpeg, "base64");
+    if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff)
+      throw Error();
+    const { format, width, height } = await openAgentImage(bytes).metadata();
+    if (format !== "jpeg" || !width || !height || Math.max(width, height) > 1024)
+      throw Error();
+    return await frameImage(bytes);
+  } catch {
+    return fail("DIRECTOR_KEYFRAMES", "关键帧须为可读取的 JPEG，最长边不超过 1024 像素。", 400);
+  }
+}
 export async function analyzeDirectorReference(
   c: Context,
   id: string,
   input: unknown,
+  sampledLink?: Awaited<ReturnType<typeof sampleDirectorLink>>,
 ) {
   const b = parse(directorReferenceSchema, input);
   return generation(c, id, b.revision, async (p, token) => {
@@ -471,13 +490,14 @@ export async function analyzeDirectorReference(
     const selected = await connection("director_reference");
     let frames: { timeMs: number; url: string }[],
       durationMs = asset.durationMs;
-    if (asset.source === "library") {
-      if (b.frames)
-        fail(
-          "DIRECTOR_KEYFRAMES",
-          "工作台参考片将直接从源视频提取关键帧。",
-          400,
-        );
+    const sampled = asset.source === "library" || asset.source === "link";
+    if (sampled && (b.frames || b.inlineFrames))
+      fail("DIRECTOR_KEYFRAMES", "这份参考片将直接从源视频提取关键帧。", 400);
+    if (asset.source === "link") {
+      const media = sampledLink ?? await sampleDirectorLink(asset.url!);
+      frames = media.frames;
+      durationMs = media.durationMs;
+    } else if (asset.source === "library") {
       const [file] = await ownedAgentFiles(c, [asset.fileId!], true);
       try {
         const content = Buffer.from(file.content);
@@ -492,34 +512,37 @@ export async function analyzeDirectorReference(
         );
       }
     } else {
-      if (!b.frames?.length)
+      const supplied = b.inlineFrames ?? b.frames;
+      if (!supplied || (asset.source === "browser" && !b.inlineFrames))
         fail(
           "DIRECTOR_KEYFRAMES",
-          "本机参考片需由原设备提供已上传的带时间戳关键帧。",
+          "请在保存原视频的设备上提取带时间戳的参考帧。",
           400,
         );
       if (
-        new Set(b.frames.map((f) => f.fileId)).size !== b.frames.length ||
-        b.frames.some(
+        (b.frames && new Set(b.frames.map((f) => f.fileId)).size !== b.frames.length) ||
+        supplied.some(
           (f, i) =>
-            (i > 0 && f.timeMs <= b.frames![i - 1].timeMs) ||
+            (i > 0 && f.timeMs <= supplied[i - 1].timeMs) ||
             (durationMs !== undefined && f.timeMs >= durationMs),
         )
       )
         fail("DIRECTOR_KEYFRAMES", "请按源视频时间顺序提供不同的关键帧。", 400);
-      const files = await ownedAgentFiles(
-        c,
-        b.frames.map((f) => f.fileId),
-      );
-      if (
-        files.some((f) => !f.mime.startsWith("image/")) ||
-        files.reduce((s, f) => s + f.size, 0) > 32 * 1024 * 1024
-      )
-        fail("DIRECTOR_KEYFRAMES", "关键帧必须是图片，合计最多32MB。", 400);
       frames = [];
-      for (const f of b.frames) {
-        const [file] = await ownedAgentFiles(c, [f.fileId], true);
-        frames.push({ timeMs: f.timeMs, url: await frameImage(file.content) });
+      if (b.inlineFrames) {
+        for (const f of b.inlineFrames)
+          frames.push({ timeMs: f.timeMs, url: await inlineFrameImage(f.jpeg) });
+      } else if (b.frames) {
+        const files = await ownedAgentFiles(c, b.frames.map((f) => f.fileId));
+        if (
+          files.some((f) => !f.mime.startsWith("image/")) ||
+          files.reduce((s, f) => s + f.size, 0) > 32 * 1024 * 1024
+        )
+          fail("DIRECTOR_KEYFRAMES", "关键帧必须是图片，合计最多32MB。", 400);
+        for (const f of b.frames) {
+          const [file] = await ownedAgentFiles(c, [f.fileId], true);
+          frames.push({ timeMs: f.timeMs, url: await frameImage(file.content) });
+        }
       }
     }
     const base = asset.name.replace(/\.[^.]+$/, "").toLowerCase();
@@ -536,8 +559,7 @@ export async function analyzeDirectorReference(
           reference: asset.name, captions,
           durationMs,
           note: asset.note,
-          source:
-            asset.source === "library" ? "源视频抽帧" : "用户提供的参考帧",
+          source: sampled ? "源视频抽帧" : "用户提供的参考帧",
         }),
       },
     ];
@@ -563,7 +585,7 @@ export async function analyzeDirectorReference(
       ...(output && typeof output === "object" ? output : {}),
       assetId: b.assetId,
       model: selected.model.actual,
-      frameSource: asset.source === "library" ? "sampled" : "provided",
+      frameSource: sampled ? "sampled" : "provided",
     });
     if (
       !parsed.success ||
@@ -582,4 +604,78 @@ export async function analyzeDirectorReference(
       referenceAnalysis: parsed.data,
     });
   });
+}
+
+const linkBody = z
+  .object({
+    text: z.string().trim().min(1).max(8192),
+    revision: z.number().int().positive().optional(),
+  })
+  .strict();
+
+export async function importDirectorReferenceLink(
+  c: Context,
+  id: string,
+  body: unknown,
+): Promise<DirectorLinkResult> {
+  const b = parse(linkBody, body);
+  let project = await readDirectorProject(c, id);
+  if (!b.revision)
+    fail("DIRECTOR_REFRESH", "作品链接导入已更新，请刷新导演台后重试。", 409);
+  if (b.revision !== project.revision)
+    fail("VERSION_CONFLICT", "项目已更新，请刷新。", 409);
+  let url: URL;
+  try {
+    url = shareTextUrl(b.text);
+  } catch (error) {
+    return fail(
+      "DIRECTOR_REFERENCE_LINK",
+      error instanceof Error ? error.message : "请输入公开作品链接。",
+      400,
+    );
+  }
+  url.hash = "";
+  const existing = project.assets.find(
+    (asset) => asset.source === "link" && asset.url === url.href,
+  );
+  if (existing && project.referenceAnalyses?.some((a) => a.assetId === existing.id))
+    return { project, assetId: existing.id };
+  if (!existing && project.assets.length >= directorAssetLimit)
+    fail("DIRECTOR_ASSET_LIMIT", "项目素材已满，请移出素材或新建项目。", 409);
+  const media = await sampleDirectorLink(url.href);
+  const assetId = existing?.id ?? randomUUID();
+  if (!existing) {
+    project = await patchDirectorProject(c, id, {
+      revision: b.revision,
+      assets: [
+        ...project.assets,
+        {
+          id: assetId,
+          source: "link",
+          url: url.href,
+          role: "reference",
+          name: media.name,
+          mime: media.mime,
+          durationMs: media.durationMs,
+        },
+      ],
+    });
+  }
+  try {
+    project = await analyzeDirectorReference(
+      c, id, { revision: project.revision, assetId }, media,
+    );
+    return { project, assetId };
+  } catch (error) {
+    // Keep the validated link available for retry after provider or revision errors.
+    if (!(error instanceof HttpException)) throw error;
+    project = await readDirectorProject(c, id);
+    if (!project.assets.some((a) => a.id === assetId)) throw error;
+    const detail = error.getResponse() as { error?: { message?: string } };
+    return {
+      project,
+      assetId,
+      analysisError: detail.error?.message ?? "拆解未完成，可在参考片上重试。",
+    };
+  }
 }

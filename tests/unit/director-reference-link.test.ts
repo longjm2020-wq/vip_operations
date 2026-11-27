@@ -4,8 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { downloadDirectorReference } from "../../apps/api/src/modules/workspace/director-reference-link.js";
-import { inspectAgentUpload } from "../../apps/api/src/modules/workspace/agent-files.js";
+import { downloadDirectorReference, sampleDirectorLink } from "../../apps/api/src/modules/workspace/director-reference-link.js";
 import { runMedia } from "../../apps/api/src/modules/workspace/agent-media.js";
 import {
   referencePageMedia,
@@ -24,7 +23,7 @@ function reply(
 }
 
 describe("公开作品链接导入", () => {
-  it("检查工作台参考片有可解码的视频轨，拒收仅音频的 MP4 容器", async () => {
+  it("临时抽取真实画面，只返回关键帧与元数据，拒收仅音频的 MP4 容器", async () => {
     const dir = await mkdtemp(join(tmpdir(), "director-link-media-"));
     try {
       for (const [name, source, codec] of [
@@ -33,9 +32,17 @@ describe("公开作品链接导入", () => {
       ]) {
         const path = join(dir, name + ".mp4");
         await runMedia(["-y", "-f", "lavfi", "-i", source, "-c", codec, path]);
-        const checked = inspectAgentUpload(name + ".mp4", await readFile(path), false, true);
-        if (name === "voice") await expect(checked).rejects.toThrow("没有可用于拆解的视频画面");
-        else expect((await checked).metadata.duration).toBeGreaterThan(0);
+        const video = await readFile(path);
+        const checked = sampleDirectorLink("https://example.com/" + name + ".mp4", async () => reply(video));
+        if (name === "voice") await expect(checked).rejects.toMatchObject({ status: 422 });
+        else {
+          const media = await checked;
+          expect(media).not.toHaveProperty("content");
+          expect(media).toMatchObject({ name: "movie.mp4", mime: "video/mp4" });
+          expect(media.durationMs).toBeGreaterThanOrEqual(500);
+          expect(media.durationMs).toBeLessThan(600);
+          expect(media.frames[0]).toEqual({ timeMs: 0, url: expect.stringMatching(/^data:image\/jpeg;base64,/) });
+        }
       }
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -203,7 +210,7 @@ describe("公开作品链接导入", () => {
       downloadDirectorReference("https://example.com/login", async () =>
         reply("<html>请登录</html>"),
       ),
-    ).rejects.toThrow("上传");
+    ).rejects.toThrow("本机导入");
     const redirect = vi.fn(async () =>
       reply("", { location: "http://127.0.0.1/" }, 302),
     );

@@ -202,7 +202,7 @@ sealed class DesktopShell : Form {
     bool ready,initializing,exiting,closePending,dark;
     bool websiteThemeKnown;
     bool? appliedCaptionTheme;
-    long navigation;
+    long navigation,directorPageRevision;
     string pendingUrl=ShellPolicy.Origin+"/my-workspace";
 
     public DesktopShell() {
@@ -426,6 +426,7 @@ sealed class DesktopShell : Form {
             core.PermissionRequested+=(s,e)=>BrowserWindow.Permission(this,e,true);
             core.DownloadStarting+=(s,e)=>BrowserWindow.Download(this,e);
             core.ProcessFailed+=(s,e)=>ShowNotice("网页进程已停止，请关闭并重新打开小序。需要暂停或停止电脑任务时，点击「打开电脑任务」。");
+            core.SourceChanged+=(s,e)=>{directorPageRevision++;};
             core.WebMessageReceived+=OnMessage;
             core.WebResourceResponseReceived+=async(s,e)=>{
                 Uri u;if(!Uri.TryCreate(e.Request.Uri,UriKind.Absolute,out u)||!ShellPolicy.Trusted(e.Request.Uri))return;
@@ -461,12 +462,22 @@ sealed class DesktopShell : Form {
             if(action.StartsWith("director-",StringComparison.Ordinal)){
                 string device=assistant.DeviceId,op=action.Substring(9);
                 var payload=AssistantForm.D(data["payload"]);var core=workspace.CoreWebView2;
-                Func<bool> allowed=()=>!exiting && version==navigation && assistant.Authorized && assistant.DeviceId==device && DirectorStudio.DirectorPage(core.Source);
-                string account=op=="capabilities"?null:await director.Grant(core,device,payload,allowed,op=="status");
-                var result=await director.Handle(this,account,device,op,payload,allowed,
-                    count=>Reply(version,new{channel="xuti-director-progress",id,processed=count}));
-                if(DirectorStudio.DirectorPage(core.Source) && (account==null || (allowed() && account==await DirectorStudio.Session(core))))
+                int grantEpoch=director.AuthorizationEpoch;long currentPage=directorPageRevision;
+                Func<bool> allowed=()=>!exiting && version==navigation && assistant.Authorized && assistant.DeviceId==device
+                    && DirectorStudio.DirectorPage(core.Source) && (op!="pick" || (currentPage==directorPageRevision && grantEpoch==director.AuthorizationEpoch));
+                string account=null;object result;
+                if(op=="pick") {
+                    result=await director.Pick(device,payload,allowed,()=>DirectorStudio.Session(core),
+                        (kind,role)=>DirectorStudio.Choose(this,kind,role),
+                        async original=>{account=await director.Grant(core,device,payload,allowed,false,original);},
+                        count=>Reply(version,new{channel="xuti-director-progress",id,processed=count}));
+                } else {
+                    if(op!="capabilities")account=await director.Grant(core,device,payload,allowed,op=="status");
+                    result=await director.Handle(account,device,op,payload,allowed);
+                }
+                if(DirectorStudio.DirectorPage(core.Source) && (account==null || (account==await DirectorStudio.Session(core) && allowed())))
                     Reply(version,new{channel="xuti-desktop",id,ok=true,data=result});
+                else if(op=="pick")throw DirectorMedia.Error("工作台或本机授权已变化，请重新选择本机素材。");
                 return;
             }
             if(action=="theme"){ApplyTheme(AssistantForm.S(data,"value")=="dark");return;}

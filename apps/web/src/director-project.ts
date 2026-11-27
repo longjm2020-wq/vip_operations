@@ -7,7 +7,7 @@ import type {
 } from "../../../packages/contracts/src/director";
 import { inferDirectorRole } from "../../../packages/contracts/src/director-intent";
 export { directorRoleNames as roleNames } from "../../../packages/contracts/src/director-import-roles";
-import { api, csrf } from "./api";
+import { api } from "./api";
 import {
   localDirectorRequest,
   type DirectorLocalAsset,
@@ -111,26 +111,6 @@ const localDocumentMimes: Record<string, string> = {
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 };
 
-export async function uploadDirectorFile(file: File): Promise<AgentFile> {
-  const form = new FormData();
-  form.append("file", file, file.name);
-  const response = await fetch(`/api/v1${libraryPath}`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "X-CSRF-Token": csrf, "Idempotency-Key": crypto.randomUUID() },
-    body: form,
-  });
-  const result = (await response.json().catch(() => null)) as {
-    data?: AgentFile;
-    error?: { message?: string };
-  } | null;
-  if (!response.ok || !result?.data)
-    throw Error(
-      result?.error?.message ||
-        `上传 ${file.name} 失败（HTTP ${response.status}）`,
-    );
-  return result.data;
-}
 
 export function libraryDirectorFiles(signal: AbortSignal) {
   return api(libraryPath, "GET", undefined, undefined, { signal }).then(
@@ -166,6 +146,8 @@ export function nativeDirectorPlan(
         if (!id) return undefined;
         const found = project.assets.find((item) => item.id === id);
         if (!found) throw Error(`${label} 的素材已移除，请重新选择。`);
+        if (found.source === "browser")
+          throw Error(`请在桌面端导入「${found.name}」的本机原文件，再为「${label}」选择导入的素材。`);
         if (purpose === "visual" && !isVisual(found.mime))
           throw Error(`${label} 需要图片或视频画面素材。`);
         if (
