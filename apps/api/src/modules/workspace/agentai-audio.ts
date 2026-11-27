@@ -21,7 +21,14 @@ import {
   type AgentAiAudioTask,
   type AgentAiAudioVoice,
 } from "../../../../../packages/contracts/src/agentai-audio.js";
-import { audit, canonical, fail, parse, type Context } from "../../core.js";
+import {
+  audit,
+  canonical,
+  fail,
+  parse,
+  requirePermission,
+  type Context,
+} from "../../core.js";
 import { aiFetch, recordAiReceipt } from "../../ai-metering.js";
 import { requireAIConfiguration } from "../analytics/ai.js";
 import {
@@ -554,18 +561,166 @@ export async function createAgentAiSpeech(c: Context, input: unknown) {
     "UPDATE public.agentai_audio_quotes SET payload_encrypted='' WHERE id=$1::uuid",
     quote.id,
   );
+  return submitSpeech(c, reserved.task, body);
+}
+
+function submitSpeech(c: Context, task: Row, body: AgentAiAudioInput) {
   return submitTask(
     c,
-    reserved.task,
+    task,
     "/api/v1/model-runtime/invoke",
     JSON.stringify({
       model_id: body.model,
       modality: "audio",
       operation: "speech",
       params: audioParams(body),
-      client_request_id: "xuti-audio-" + reserved.task.id,
+      client_request_id: "xuti-audio-" + task.id,
     }),
   );
+}
+
+export async function commerceClonedVoices(actor: Context["actor"]) {
+  requirePermission(actor, "aigc.use");
+  const settings = await readAgentAiConnection();
+  if (
+    !agentaiReady(settings) ||
+    !settings?.api_key_encrypted ||
+    !Array.isArray(settings.model_catalog) ||
+    !settings.model_catalog.some(
+      (item: Row) =>
+        item.model === "speech-2.8" && item.available && item.type === "audio",
+    )
+  )
+    return [];
+  return rows(
+    db,
+    `SELECT id, name FROM public.agentai_audio_voices
+    WHERE actor_id=$1::bigint AND credential_fingerprint=$2 AND status='ready'
+    ORDER BY created_at DESC LIMIT 100`,
+    actor.id,
+    credentialFingerprint(settings.api_key_encrypted),
+  );
+}
+
+export async function advanceCommerceSpeech(
+  c: Context,
+  input: { requestId: string; text: string; voiceId: string; maxCny?: number },
+) {
+  requirePermission(c.actor, "aigc.use");
+  const requestId = parse(uuid, input.requestId);
+  const body = parse(agentAiAudioInputSchema, {
+    model: "speech-2.8",
+    input: input.text,
+    voice: input.voiceId,
+  });
+  const fingerprint = hash(canonical({ scope: "commerce-video", body }));
+  const stored = await one(
+    db,
+    `SELECT * FROM public.agentai_audio_tasks
+    WHERE actor_id=$1::bigint AND request_id=$2::uuid`,
+    c.actor.id,
+    requestId,
+  );
+  if (stored) {
+    if (stored.request_hash !== fingerprint)
+      fail("IDEMPOTENCY_CONFLICT", "同一请求标识不能用于不同内容", 409);
+    if (
+      stored.status === "submitting" &&
+      Date.now() - Date.parse(stored.created_at) > 120_000
+    ) {
+      const unresolved = await one(
+        db,
+        `UPDATE public.agentai_audio_tasks
+        SET status='uncertain',error_note='提交结果待核对，未自动重新提交',updated_at=now()
+        WHERE id=$1::uuid AND status='submitting' RETURNING *`,
+        stored.id,
+      );
+      if (unresolved) return { task: audioTaskView(unresolved) };
+      return { task: audioTaskView(stored) };
+    }
+    const task = await refreshAudioTask(stored);
+    if (task.status !== "completed") return { task };
+    const latest = await one(
+      db,
+      "SELECT * FROM public.agentai_audio_tasks WHERE id=$1::uuid",
+      stored.id,
+    );
+    return { task, audio: await readAudioResult(latest!) };
+  }
+  if (
+    typeof input.maxCny !== "number" ||
+    !Number.isFinite(input.maxCny) ||
+    input.maxCny <= 0
+  )
+    fail(
+      "AGENTAI_AUDIO_LIMIT_REQUIRED",
+      "请确认克隆音色的单条语音费用上限",
+      409,
+    );
+  const settings = await readyModel(body.model);
+  if (
+    !(await commerceClonedVoices(c.actor)).some(
+      (voice) => voice.id === input.voiceId,
+    )
+  )
+    fail("AGENTAI_VOICE_INVALID", "该克隆音色未授权给当前账号或已失效", 409);
+  const quote = await remoteJson(
+    "/v1/pricing-estimate",
+    settings.api_key_encrypted,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        model: body.model,
+        modality: "audio",
+        params: audioParams(body),
+        strategy: "balanced",
+        include_all_channels: true,
+      }),
+    },
+  );
+  const estimated = number(quote.effective_total_rmb);
+  const max = number(quote.max_effective_total_rmb);
+  const freeze = number(quote.required_freeze_rmb);
+  if (
+    estimated === null ||
+    max === null ||
+    freeze === null ||
+    max < estimated ||
+    freeze < estimated ||
+    (Array.isArray(quote.param_adjustments) &&
+      quote.param_adjustments.some(
+        (item: Row) =>
+          item.requested !== null &&
+          canonical(item.requested) !== canonical(item.applied),
+      ))
+  )
+    fail(
+      "AGENTAI_AUDIO_ESTIMATE_INVALID",
+      "语音报价缺失或参数发生调整，请核对语音服务",
+      502,
+    );
+  if (Math.max(max, freeze) > input.maxCny)
+    fail(
+      "AGENTAI_AUDIO_LIMIT_EXCEEDED",
+      `克隆语音的报价上界或冻结额超过 ${input.maxCny} 元`,
+      409,
+    );
+  const reserved = await reserveTask(c, {
+    requestId,
+    fingerprint,
+    settings,
+    kind: "speech",
+    model: body.model,
+    name: "带货视频口播",
+    characters: [...body.input].length,
+    estimated,
+    max,
+  });
+  return {
+    task: reserved.fresh
+      ? await submitSpeech(c, reserved.task, body)
+      : audioTaskView(reserved.task),
+  };
 }
 export function inspectVoiceSample(name: string, bytes: Buffer) {
   if (!bytes.length || bytes.length >= 20 * MiB)
@@ -734,7 +889,9 @@ export async function syncAgentAiVoices(c: Context) {
   return readAgentAiAudio(c);
 }
 export async function refreshAgentAiAudio(c: Context, id: unknown) {
-  const task = await ownedTask(c, id);
+  return refreshAudioTask(await ownedTask(c, id));
+}
+async function refreshAudioTask(task: Row) {
   if (
     ["completed", "failed", "uncertain"].includes(task.status) ||
     !task.provider_task_id
@@ -766,7 +923,7 @@ export async function refreshAgentAiAudio(c: Context, id: unknown) {
   if (task.kind === "clone" && task.provider_voice_id)
     await db.$executeRawUnsafe(
       "UPDATE public.agentai_audio_voices SET status=$4 WHERE actor_id=$1::bigint AND credential_fingerprint=$2 AND id=$3",
-      c.actor.id,
+      task.actor_id,
       credentialFingerprint(task.credential_encrypted),
       task.provider_voice_id,
       completed ? "ready" : "expired",
@@ -1092,7 +1249,9 @@ async function downloadAudio(
 export const downloadAgentAiAudio = (value: string) =>
   downloadAudio(value, Date.now() + totalDownloadMs);
 export async function agentAiAudioResult(c: Context, id: unknown) {
-  const task = await ownedTask(c, id);
+  return readAudioResult(await ownedTask(c, id));
+}
+async function readAudioResult(task: Row) {
   if (task.kind !== "speech" || task.status !== "completed" || !task.output_url)
     fail("AGENTAI_AUDIO_NOT_READY", "音频尚未完成", 409);
   const bytes = await downloadAgentAiAudio(task.output_url).catch((error) => {

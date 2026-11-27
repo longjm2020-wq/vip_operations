@@ -177,6 +177,10 @@ function readAssistantDesktopChoices(userId: string) {
   return { owner: userId, choice, preferredDeviceId };
 }
 
+function isCommerceVideoRequest(text: string) {
+  return /^(?:小序[，,\s]*)?(?:(?:请|帮我|给我|为我|我想|我要|能帮我)[，,\s]*)*(?:用[^。！？\n]{1,60}?)?(?:帮我|给我)?(?:拍|做|制作|生成|剪|剪辑|出)[^。！？\n]{0,100}(?:口播|带货)[^。！？\n]{0,24}(?:视频|成片|短片)/.test(text.trim());
+}
+
 export function PersonalAssistantProvider({
   children,
 }: {
@@ -1062,6 +1066,14 @@ export function PersonalAssistantProvider({
   );
   const send = async (value: string) => {
     if (!value.trim() || !composerReady || busy || activeSend.current || voice.listening) return;
+    if (
+      (!draftOverride || draftOverride.mode === "local") && !agent.attachments.length &&
+      user.permissions.includes("aigc.use") && user.permissions.includes("product.read") &&
+      isCommerceVideoRequest(value)
+    ) {
+      navigate("/aigc?view=talk-video", { state: { talkVideoPrompt: value.trim().slice(0, 800) } });
+      return;
+    }
     const requestId = crypto.randomUUID();
     if (!data) return;
     const publicSearch = shouldSearch(value);

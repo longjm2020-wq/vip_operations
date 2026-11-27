@@ -1,7 +1,7 @@
 FROM node:24.21.0-bookworm-slim
 WORKDIR /app
 RUN apt-get update -o Acquire::Retries=3 \
-    && apt-get install -y --no-install-recommends ffmpeg openssl \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk openssl \
     && rm -rf /var/lib/apt/lists/*
 ENV FFMPEG_BIN=/usr/bin/ffmpeg
 RUN npm install -g pnpm@10.32.1
@@ -10,7 +10,7 @@ RUN pnpm install --frozen-lockfile
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN pnpm exec playwright install --with-deps chromium --only-shell
 RUN pnpm db:generate \
-    && pnpm exec vitest run tests/unit/assistant-agent-media.test.ts --maxWorkers=1 \
+    && pnpm exec vitest run tests/unit/assistant-agent-media.test.ts tests/unit/commerce-video-render.test.ts --maxWorkers=1 \
     && pnpm build
 # Arbitrary assistant pages require Chromium's real Linux sandbox. Keep the
 # runtime unprivileged; a host that cannot create the sandbox reports unavailable.

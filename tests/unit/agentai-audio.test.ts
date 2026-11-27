@@ -9,7 +9,7 @@ import {
 } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { readFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Context } from "../../apps/api/src/core.js";
 import type { Tx } from "../../packages/database/src/index.js";
 import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
@@ -116,8 +116,10 @@ vi.mock("../../packages/database/src/index.js", async (original) => {
 });
 import { encryptSecret } from "../../apps/api/src/modules/analytics/secrets.js";
 import {
+  advanceCommerceSpeech,
   agentAiAudioResult,
   audioParams,
+  commerceClonedVoices,
   createAgentAiSpeech,
   createAgentAiVoice,
   downloadAgentAiAudio,
@@ -250,6 +252,62 @@ afterAll(async () => {
   await fixture.db?.close();
 });
 const error = (code: string) => ({ response: { error: { code } } });
+
+it("quotes and resumes only a creator's own cloned voice under the saved spending limit", async () => {
+  const c = admin();
+  c.actor.permissions = ["aigc.use"];
+  c.actor.roleCodes = [];
+  const fingerprint = createHash("sha256").update(key).digest("hex");
+  await fixture.db!.query(
+    `INSERT INTO public.agentai_audio_voices
+    (id,actor_id,settings_version,name,status,credential_fingerprint)
+    VALUES ('ready-voice',7,1,'口播主播','ready',$1),('another-voice',8,1,'其他声音','ready',$1)`,
+    [fingerprint],
+  );
+  expect(await commerceClonedVoices(c.actor)).toEqual([
+    { id: "ready-voice", name: "口播主播" },
+  ]);
+  const run = {
+    requestId: randomUUID(),
+    text: "真丝上衣的领口做工。",
+    voiceId: "ready-voice",
+    maxCny: 0.1,
+  };
+  await expect(
+    advanceCommerceSpeech(c, { ...run, voiceId: "another-voice" }),
+  ).rejects.toMatchObject(error("AGENTAI_VOICE_INVALID"));
+  await expect(advanceCommerceSpeech(c, run)).rejects.toMatchObject(
+    error("AGENTAI_AUDIO_LIMIT_EXCEEDED"),
+  );
+  expect(await query("SELECT id FROM agentai_audio_tasks")).toEqual([]);
+  const approved = { ...run, maxCny: 0.2 };
+  submit = async () => json({ task_id: taskId, status: "processing" }, 202);
+  const first = await advanceCommerceSpeech(c, approved);
+  expect(first.task).toMatchObject({
+    status: "processing",
+    providerTaskId: taskId,
+  });
+  poll = {
+    id: taskId,
+    model: "speech-2.8",
+    status: "completed",
+    is_final: true,
+    output_url: "https://audio.real-cdn.net/cached/presenter.mp3",
+  };
+  const finished = await advanceCommerceSpeech(c, approved);
+  expect(finished).toMatchObject({
+    task: { id: first.task.id, status: "completed" },
+    audio: { mime: "audio/mpeg" },
+  });
+  expect(
+    calls.filter((call) => call.url.endsWith("/api/v1/model-runtime/invoke")),
+  ).toHaveLength(1);
+  expect(
+    (await query("SELECT feature_id FROM ai_model_usage")).map(
+      (row) => row.feature_id,
+    ),
+  ).toContain("agentai_speech");
+});
 
 it("quotes real parameters privately, submits once without pinning and replays the same quote without paying twice", async () => {
   const c = admin(),

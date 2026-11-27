@@ -66,6 +66,7 @@ export class DigitalHumanService {
     return value;
   }
   avatarDto(a) { return { id: a.id, name: a.name, shared: Boolean(a.shared), preview: a.preview, model: undefined }; }
+  videoBusy(user) { return Object.values(this.data.operations).some(op => op.ownerId === user.id && op.type === "video" && active(op)); }
   operationDto(op) {
     return { id: op.id, projectId: op.projectId, type: op.type, status: op.status, createdAt: op.createdAt, updatedAt: op.updatedAt, duration: op.duration || 0, output: op.output, message: op.message || "", expiresAt: op.expiresAt, credits: op.quote?.credits || 0 };
   }
@@ -73,7 +74,7 @@ export class DigitalHumanService {
     const operations = Object.values(this.data.operations).filter(op => op.projectId === p.id && op.ownerId === p.ownerId && op.type !== "avatar").sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return { id: p.id, name: p.name, mode: p.mode, avatarId: p.avatarId, text: p.text || "", voice: p.voice || "", createdAt: p.createdAt, updatedAt: p.updatedAt, deletedAt: p.deletedAt, operations: operations.map(op => this.operationDto(op)) };
   }
-  projects(user) { return Object.values(this.data.projects).filter(p => p.ownerId === user.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(p => this.projectDto(p)); }
+  projects(user) { return Object.values(this.data.projects).filter(p => p.ownerId === user.id && !p.commerceVideo).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(p => this.projectDto(p)); }
   summaries(user) {
     return this.projects(user).map(p => ({ id: p.id, name: p.name, updatedAt: p.updatedAt, deletedAt: p.deletedAt, mode: p.mode, status: p.operations.some(op => op.status === "uncertain") ? "attention" : p.operations.some(active) ? "generating" : p.operations.some(op => op.output) ? "completed" : "draft", activeJobs: p.operations.filter(active).length, completedCount: p.operations.filter(op => op.output).length, cover: this.data.avatars[p.avatarId]?.preview }));
   }
@@ -115,7 +116,7 @@ export class DigitalHumanService {
     await this.store.mutate(data => { data.digitalHuman.settings = settings; });
     return this.admin(user);
   }
-  project(user, id, { writable = false } = {}) { const p = owned(this.data.projects, user, id); if (writable && p.deletedAt) fail("请先恢复回收站中的项目", 409); return p; }
+  project(user, id, { writable = false, commerce = false } = {}) { const p = owned(this.data.projects, user, id); if (Boolean(p.commerceVideo) !== commerce) fail("数字人项目不存在", 404); if (writable && p.deletedAt) fail("请先恢复回收站中的项目", 409); return p; }
   async saveProject(user, input, id) {
     const current = id ? this.project(user, id, { writable: true }) : { id: randomUUID(), ownerId: user.id, createdAt: now(), mode: "video" };
     if (input.avatarId) this.avatar(user, input.avatarId);
@@ -161,6 +162,10 @@ export class DigitalHumanService {
       if (previous) { if (previous.digest !== digest || previous.type !== type) fail("此请求编号已用于其他内容", 409); return { operation: previous, fresh: false }; }
       this.gpu.assertNotStopping(data);
       if (projectId && (!state.projects[projectId] || state.projects[projectId].ownerId !== user.id || state.projects[projectId].deletedAt)) fail("项目已删除或在回收站中", 409);
+      if (input.commercePresenterId) {
+        const presenter = state.commercePresenters?.[input.commercePresenterId];
+        if (!presenter || presenter.revokedAt || presenter.ownerId !== user.id || presenter.avatarId !== input.avatarId) fail("主播已撤销授权，请选择其他主播", 409);
+      }
       if (input.avatarId && !state.settings.templates?.some(t => t.id === input.avatarId) && (!state.avatars[input.avatarId] || state.avatars[input.avatarId].deletedAt)) fail("人物形象已删除", 409);
       if (Object.values(state.operations).some(op => op.ownerId === user.id && op.type === type && active(op))) fail("请先完成或结束当前数字人任务", 409);
       const op = { id: randomUUID(), ownerId: user.id, projectId, avatarId: input.avatarId, type, requestId: key, digest, status: "submitting", createdAt: now(), updatedAt: now(), quote };
@@ -220,15 +225,15 @@ export class DigitalHumanService {
     if (voice && !s.voices.some(v => v.id === voice)) fail("请选择站长提供的声音");
     return { avatar, voice, s };
   }
-  async createVideo(user, projectId, input) {
+  async createVideo(user, projectId, input, { commerce = false, presenterId } = {}) {
     this.assertEnabled(user);
     if (!input.file && !this.settings().textEnabled) fail("文字合成服务尚未启用，请上传口播音频", 409);
     await this.gpu.assertRunning();
-    const p = this.project(user, projectId, { writable: true }); const { avatar, voice, s } = this.selection(user, p, input);
+    const p = this.project(user, projectId, { writable: true, commerce }); const { avatar, voice, s } = this.selection(user, p, input);
     const text = cleanText(input.text ?? p.text, 10_000);
     if (input.file) { input = { ...input, file: normalizeDigitalAudio(input.file) }; validateFile(input.file, audioTypes); await this.validateMedia(user, input.file, "audio", 180); }
     else if (!text || text.length > s.maxTextLength) fail(`口播文案须为 1～${s.maxTextLength} 字`);
-    const claim = await this.begin(user, "video", { ...input, text, avatarId: avatar.id, voice }, projectId); const op = claim.operation;
+    const claim = await this.begin(user, "video", { ...input, commercePresenterId: commerce ? presenterId : undefined, text, avatarId: avatar.id, voice }, projectId); const op = claim.operation;
     if (!claim.fresh) return this.operationDto(op);
     try {
       await this.update(op.id, { avatarId: avatar.id });
@@ -328,7 +333,7 @@ export class DigitalHumanService {
         Object.assign(data.digitalHuman.operations[op.id], { status: "completed", output: asset.path, duration: Number(result.generated_duration_ms || 0) / 1000, message: "视频已保存", updatedAt: now() });
         data.digitalHuman.projects[op.projectId].updatedAt = now();
         const project = data.digitalHuman.projects[op.projectId];
-        data.appState.works.push({ id: `digital-${op.id}`, ownerId: op.ownerId, projectId: op.projectId, category: "digital_human", title: `${project.name} · 口播`, sourceProjectName: project.name, createdAt: now(), updatedAt: now(), cover: asset, videos: [asset] });
+        if (!project.commerceVideo) data.appState.works.push({ id: `digital-${op.id}`, ownerId: op.ownerId, projectId: op.projectId, category: "digital_human", title: `${project.name} · 口播`, sourceProjectName: project.name, createdAt: now(), updatedAt: now(), cover: asset, videos: [asset] });
         settle(data, op.id, true, "数字人口播视频生成完成");
       });
     } else if (["failed", "stopped"].includes(result.status)) {

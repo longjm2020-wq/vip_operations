@@ -39,6 +39,14 @@ export function aigcModelManagement(config, settings) {
       ),
     },
     {
+      id: "aigc_commerce_script",
+      model: config.openrouterModel,
+      selection: "",
+      source: source("OpenRouter", config.openrouterBaseUrl),
+      configured: !!config.openrouterApiKey,
+      choices: [],
+    },
+    {
       id: "aigc_image",
       model: image.providerModel || image.model,
       selection: image.model,

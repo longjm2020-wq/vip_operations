@@ -1,0 +1,310 @@
+.talk-video {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 8px 0 36px;
+}
+
+.talk-video-heading {
+  margin: 15px 0 18px;
+}
+
+.talk-video-heading h1 {
+  margin: 0;
+  font-size: clamp(22px, 3vw, 28px);
+  line-height: 1.3;
+}
+
+.talk-video-heading p {
+  margin: 7px 0 0;
+  color: var(--app-secondary);
+}
+
+.talk-video-composer,
+.talk-video-result {
+  border-radius: 12px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  padding: 14px;
+}
+
+.talk-video-composer textarea.ant-input {
+  background: var(--app-bg);
+  border-radius: 8px;
+  padding: 11px 12px;
+  resize: vertical;
+}
+
+.talk-video-fields,
+.talk-video-result-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.talk-video-fields {
+  margin-top: 12px;
+}
+
+.talk-video-fields .ant-select {
+  width: min(200px, 100%);
+}
+
+.talk-video-submit {
+  margin-inline-start: auto;
+}
+
+.talk-video-notice {
+  margin-bottom: 12px;
+}
+
+.talk-video-result {
+  margin-top: 16px;
+}
+
+.talk-video-result-heading {
+  justify-content: space-between;
+}
+
+.talk-video-result-heading h2 {
+  margin: 0;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.talk-video-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.talk-video-result-actions:empty {
+  display: none;
+}
+
+.talk-video-state {
+  margin: 10px 0 0;
+  color: var(--app-secondary);
+}
+
+.talk-video-player {
+  display: grid;
+  place-items: center;
+  margin: 12px 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--app-bg);
+}
+
+.talk-video-player video {
+  display: block;
+  max-width: 100%;
+  max-height: min(56vh, 420px);
+  aspect-ratio: 9 / 16;
+  border-radius: 5px;
+  background: #000;
+}
+
+.talk-video-details {
+  margin-top: 12px;
+  border-top: 1px solid var(--app-border);
+}
+
+.talk-video-details summary {
+  cursor: pointer;
+  width: fit-content;
+  padding: 10px 0 0;
+}
+
+.talk-video-details summary::marker {
+  color: var(--app-accent);
+}
+
+.talk-video-shots {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(170px, 1fr);
+  grid-template-rows: 1fr;
+  gap: 10px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  margin: 10px 0 0;
+  padding: 0 0 6px;
+  list-style: none;
+}
+
+.talk-video-shot {
+  min-width: 0;
+  padding: 9px;
+  border-radius: 8px;
+  background: var(--app-bg);
+  overflow-wrap: anywhere;
+}
+
+.talk-video-shot img {
+  width: 100%;
+  height: 94px;
+  display: block;
+  object-fit: contain;
+  border-radius: 5px;
+  background: var(--app-muted);
+  margin-bottom: 7px;
+}
+
+.talk-video-shot p {
+  margin: 5px 0 0;
+  color: var(--app-secondary);
+  line-height: 1.5;
+}
+
+.talk-video-shot small {
+  color: var(--app-secondary);
+}
+
+.talk-video-recent {
+  margin-top: 16px;
+}
+
+.talk-video-photo-picker {
+  position: relative;
+}
+
+.talk-video-photo-picker summary {
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 4px 0;
+}
+
+.talk-video-photos {
+  position: absolute;
+  z-index: 1;
+  max-height: 235px;
+  width: min(300px, 70vw);
+  overflow: auto;
+  inset-block-start: calc(100% + 4px);
+  inset-inline-end: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  box-shadow: 0 6px 18px var(--app-shadow);
+}
+
+.talk-video-photos label {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.talk-video-photos img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  background: var(--app-bg);
+  border-radius: 4px;
+}
+
+.talk-video-fee {
+  font-size: 12px;
+}
+
+.talk-video-fields .ant-input-number {
+  width: 142px;
+}
+
+.talk-video-error {
+  margin: 8px 0 0;
+  color: var(--ant-color-error, #ff7875);
+}
+
+.talk-video-modal-fields {
+  display: grid;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.talk-video-roster {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.talk-video-roster summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.talk-video-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.talk-video-file input {
+  color: var(--app-secondary);
+  max-width: 100%;
+}
+
+.talk-video-replace-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.talk-video-replace-option img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  border-radius: 3px;
+}
+
+.talk-video-history {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.talk-video-history li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.talk-video-history .ant-btn {
+  min-width: 0;
+  padding-inline: 0;
+  white-space: normal;
+}
+
+.talk-video-history li > span {
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 520px) {
+  .talk-video-composer,
+  .talk-video-result {
+    padding: 10px;
+  }
+
+  .talk-video-fields .ant-select {
+    flex: 1 1 150px;
+    width: auto;
+  }
+
+  .talk-video-submit {
+    width: 100%;
+  }
+
+  .talk-video-photos {
+    inset-inline-start: 0;
+    inset-inline-end: auto;
+  }
+}

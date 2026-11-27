@@ -30,7 +30,7 @@ jobs:
       - name: Install system media tools
         run: |
           sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-noto-cjk
           "$FFMPEG_BIN" -version
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:generate

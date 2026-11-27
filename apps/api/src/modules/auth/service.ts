@@ -35,15 +35,29 @@ export async function actorForSessionHash(tokenHash: string): Promise<Actor> {
     tokenHash,
   );
   if (!u) fail("UNAUTHENTICATED", "登录已失效", 401);
+  return await actorForUser(String(u.id), u.csrf_token, u);
+}
+
+/** Recheck current account and role permissions when resuming durable work. */
+export async function activeActor(userId: string): Promise<Actor> {
+  const u = await one(db,
+    "SELECT id,username,display_name,avatar->>'id' AS avatar_id FROM users WHERE id=$1::bigint AND status='ACTIVE'",
+    userId,
+  );
+  if (!u) fail("UNAUTHENTICATED", "账号已停用", 401);
+  return actorForUser(userId, undefined, u);
+}
+
+async function actorForUser(userId: string, csrfToken: string | undefined, u: NonNullable<Awaited<ReturnType<typeof one>>>): Promise<Actor> {
   const p = await rows(
     db,
     "SELECT DISTINCT p.code FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=$1::bigint",
-    String(u.id),
+    userId,
   );
   const assignedRoles = await rows(
     db,
     "SELECT r.code,r.name FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1::bigint ORDER BY CASE r.code WHEN 'SUPER_ADMIN' THEN 0 WHEN 'ADMIN' THEN 1 ELSE 2 END,r.name",
-    String(u.id),
+    userId,
   );
   const permissions = new Set<string>(p.map(x=>x.code));
   if (assignedRoles.some(role=>role.code === "SUPER_ADMIN"))
@@ -61,7 +75,7 @@ export async function actorForSessionHash(tokenHash: string): Promise<Actor> {
     permissions: [...permissions],
     roleCodes: assignedRoles.map((r) => r.code),
     roleNames: assignedRoles.map((r) => r.name),
-    csrfToken: u.csrf_token,
+    csrfToken,
   };
 }
 const attempts = new Map<string, { count: number; until: number }>();

@@ -14,6 +14,7 @@ import {
 import { engineConfig, visibleSettings, saveSettings } from "./config.js";
 import { startVideoCheck, videoCheckStatus } from "./video-check.js";
 import type { Actor } from "../../core.js";
+import { handleCommerceVideo, processCommerceVideo } from "./commerce-video.js";
 
 const PREFIX = "/api/v1/aigc";
 const asUser = (actor: Actor): StudioUser => ({
@@ -42,10 +43,11 @@ function statusCode(error: any) {
   return error.statusCode || error.getStatus?.() || 500;
 }
 function safeMessage(error: any, studio?: Studio) {
+  const detail = error.getResponse?.()?.error?.message;
   let message =
     error.name === "ZodError"
       ? error.issues.map((i: any) => i.message).join("；")
-      : String(error.message || "AIGC 请求失败");
+      : String(detail || error.message || "AIGC 请求失败");
   for (const secret of [
     studio?.config.openrouterApiKey,
     studio?.config.opentalkingApiKey,
@@ -126,6 +128,16 @@ export function createAigcService() {
     void persistence?.collectGarbage().catch(() => {});
   }, 3_600_000);
   gc.unref();
+  let commerceBusy = false;
+  const commerceTimer = setInterval(() => {
+    const current = studio;
+    if (commerceBusy || !current) return;
+    commerceBusy = true;
+    void processCommerceVideo(current, () => !closed && studio === current)
+      .catch(() => {})
+      .finally(() => { commerceBusy = false; });
+  }, 2500);
+  commerceTimer.unref();
   void initialize();
 
   const middleware: RequestHandler = async (req, res, next) => {
@@ -199,6 +211,10 @@ export function createAigcService() {
             statusCode: 503,
           });
       }
+      if (suffix.startsWith("/commerce-video/") && actor) {
+        await handleCommerceVideo(studio, actor, suffix.slice("/commerce-video".length), req, res, () => jsonBody(req));
+        return;
+      }
       if (suffix === "/services/bailian-video-check") {
         if (req.method === "GET") return res.json(await videoCheckStatus());
         if (req.method === "POST")
@@ -267,6 +283,7 @@ export function createAigcService() {
       closed = true;
       clearInterval(timer);
       clearInterval(gc);
+      clearInterval(commerceTimer);
       studio?.stop();
       studio = undefined;
       await persistence?.close();

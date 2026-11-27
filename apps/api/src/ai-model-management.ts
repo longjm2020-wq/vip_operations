@@ -269,7 +269,7 @@ export async function aiModelManagement(
       row.source = agentaiSource;
       row.model =
         feature.id === "agentai_speech"
-          ? "海螺语音 2.8 / 豆包语音合成 2.0（按制作任务选择）"
+          ? "海螺语音 2.8 / 豆包语音合成 2.0（服装口播的克隆音色使用海螺 2.8）"
           : "海螺语音克隆 2.8";
       row.status = !agentai?.enabled
         ? "disabled"
@@ -626,7 +626,7 @@ export async function aiModelManagement(
         : selectedRelay
           ? new Date(selectedRelay.catalogAt || 0).getTime()
           : new Date(activeConnection?.updated_at || 0).getTime(),
-      feature.id === "aigc_compile" && row.source.startsWith("OpenRouter")
+      ["aigc_compile", "aigc_commerce_script"].includes(feature.id) && row.source.startsWith("OpenRouter")
         ? new Date(shared?.updated_at || 0).getTime()
         : 0,
     );

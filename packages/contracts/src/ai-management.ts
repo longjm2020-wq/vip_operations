@@ -104,6 +104,14 @@ export const aiFeatures = [
     kind: "aigc_compile",
   },
   {
+    id: "aigc_commerce_script",
+    name: "服装口播 · 台词与分镜",
+    group: "AIGC",
+    href: "/aigc?view=talk-video",
+    boundary: "使用已验证的共享 OpenRouter 连接和固定口播脚本模型。按用户可查看的商品资料和创作要求生成中文台词与分镜。数字人和克隆音色合成分别计入对应服务。",
+    kind: "external",
+  },
+  {
     id: "aigc_image",
     name: "AIGC 图片与关键帧",
     group: "AIGC",
@@ -142,7 +150,7 @@ export const aiFeatures = [
     name: "AIGC 数字人",
     group: "AIGC",
     href: "/aigc",
-    boundary: "由已配置的数字人网关处理人物与语音素材；能力由网关决定。",
+    boundary: "由已配置的数字人网关处理人物与语音素材，包含服装口播的形象驱动。能力由网关决定。",
     kind: "external",
   },
   {
@@ -178,7 +186,7 @@ export const aiFeatures = [
     group: "语音制作",
     href: "/settings/ai?agentai=audio",
     boundary:
-      "使用指定的海螺 2.8 或豆包 2.0 音色合成语音，每次最多5000字符。先获取账号实际参数报价，确认后提交同一持久任务；支持本人任务播放与下载，按供应商实际回执计量。独立于实时通话、听写与朗读设置。",
+      "使用指定的海螺 2.8 或豆包 2.0 音色合成语音，每次最多5000字符。语音制作须确认报价；AIGC 服装口播使用本人已就绪的海螺克隆音色时核验该条语音费用上限。两处均提交持久任务，按供应商实际回执计量。",
     kind: "external",
   },
   {

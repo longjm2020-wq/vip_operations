@@ -12,13 +12,14 @@ export function runMedia(
   args: string[],
   signal?: AbortSignal,
   timeout = 180000,
+  cwd?: string,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     // Never a shell, URL, filter or executable supplied by the model.
     const process = spawn(
       ffmpeg,
       ["-nostdin", "-hide_banner", "-loglevel", "info", ...args],
-      { windowsHide: true, stdio: ["ignore", "ignore", "pipe"], signal },
+      { windowsHide: true, stdio: ["ignore", "ignore", "pipe"], signal, cwd },
     );
     let log = "",
       timedOut = false;
