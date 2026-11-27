@@ -22,6 +22,8 @@ type Receipt = {
   inputVideoSeconds: number | null;
   outputVideoSeconds: number | null;
   billableImages: number | null;
+  voiceOperations: number | null;
+  acceptedVoiceOperation: boolean;
   completedVideoTask: boolean;
   characters: number | null;
   input: number | null;
@@ -36,7 +38,11 @@ type Receipt = {
   failed: boolean;
   pending: boolean;
 };
-export function providerUsage(payload: unknown, source: string): Receipt {
+export function providerUsage(
+  payload: unknown,
+  source: string,
+  feature?: AiFeatureId,
+): Receipt {
   const data =
     payload && typeof payload === "object"
       ? (payload as Record<string, any>)
@@ -85,6 +91,26 @@ export function providerUsage(payload: unknown, source: string): Receipt {
       : {};
   const taskId = text(task.task_id);
   const taskState = text(task.task_status);
+  const voiceEnrollment =
+    bailian && feature === "commerce_bailian_voice_enrollment";
+  const voiceSynthesis = bailian && feature === "commerce_bailian_speech";
+  const voiceCount = voiceEnrollment ? number(usage.count) : null;
+  const voiceOutput = text(task.voice_id, 128);
+  let audioHost: string | undefined;
+  if (voiceSynthesis && typeof task.audio?.url === "string") {
+    try {
+      const url = new URL(task.audio.url);
+      if (
+        ["https:", "http:"].includes(url.protocol) &&
+        !url.username &&
+        !url.password &&
+        !url.port
+      )
+        audioHost = url.hostname;
+    } catch {
+      /* invalid receipt media address */
+    }
+  }
   return {
     inputVideoSeconds: bailian ? number(usage.input_seconds) : null,
     outputVideoSeconds: bailian
@@ -93,6 +119,19 @@ export function providerUsage(payload: unknown, source: string): Receipt {
         ? number(response.duration)
         : null,
     billableImages: bailian ? number(usage.image_count) : null,
+    voiceOperations:
+      voiceCount !== null && Number.isInteger(voiceCount) && voiceCount <= 1e9
+        ? voiceCount
+        : null,
+    acceptedVoiceOperation:
+      typeof response.request_id === "string" &&
+      !!response.request_id &&
+      ((voiceEnrollment &&
+        !!voiceOutput &&
+        /^[A-Za-z0-9_.-]+$/.test(voiceOutput)) ||
+        (voiceSynthesis &&
+          task.finish_reason === "stop" &&
+          audioHost === "dashscope-result-bj.oss-cn-beijing.aliyuncs.com")),
     completedVideoTask: Boolean(
       taskId &&
       taskState === "SUCCEEDED" &&
@@ -189,8 +228,9 @@ async function finish(
   payload?: unknown,
   chatReceiptId?: string,
   chatErrorCode?: string,
+  feature?: AiFeatureId,
 ) {
-  const value = providerUsage(payload, source);
+  const value = providerUsage(payload, source, feature);
   const requestId = chatReceiptId ?? value.requestId;
   const previous = requestId
     ? await one(
@@ -210,6 +250,7 @@ async function finish(
       payload,
       chatReceiptId,
       chatErrorCode,
+      feature,
     );
     await db.$queryRawUnsafe(
       "UPDATE public.ai_model_usage SET completed_at=now() WHERE id=$1::uuid",
@@ -219,6 +260,7 @@ async function finish(
   }
   // Successful HTTP alone does not establish that a selected model ran.
   const confirmed =
+    value.acceptedVoiceOperation ||
     (!value.pending &&
       value.completedVideoTask &&
       requestedModel === "MiniMax/MiniMax-H3") ||
@@ -235,7 +277,7 @@ async function finish(
     provider_request_id=COALESCE($11,provider_request_id),input_characters=COALESCE($12,input_characters),
     input_video_seconds=COALESCE($13,input_video_seconds),output_video_seconds=COALESCE($14,output_video_seconds),billable_images=COALESCE($15,billable_images),
     error_code=CASE WHEN $2='failed' THEN COALESCE($16,error_code,'PROVIDER_ERROR') ELSE NULL END,
-    completed_at=now() WHERE id=$1::uuid`,
+    voice_operations=COALESCE($17,voice_operations),completed_at=now() WHERE id=$1::uuid`,
     id,
     value.failed || chatErrorCode
       ? "failed"
@@ -256,6 +298,7 @@ async function finish(
     value.outputVideoSeconds,
     value.billableImages,
     chatErrorCode ?? null,
+    value.voiceOperations,
   );
 }
 
@@ -267,7 +310,7 @@ export async function recordAiReceipt(
   payload: unknown,
 ) {
   if (!validFeatures.has(feature)) throw Error("Unknown AI feature");
-  const receipt = providerUsage(payload, source);
+  const receipt = providerUsage(payload, source, feature);
   if (!receipt.requestId) return;
   let row = await one(
     db,
@@ -285,7 +328,15 @@ export async function recordAiReceipt(
       model,
     );
   }
-  await finish(String(row.id), source, model, payload);
+  await finish(
+    String(row.id),
+    source,
+    model,
+    payload,
+    undefined,
+    undefined,
+    feature,
+  );
 }
 
 /** Stores normalized receipts, without prompts, media, credentials or raw response data. */
@@ -440,6 +491,7 @@ export async function aiFetch(
           withProviderBillingHeaders(receipt, source, response.headers),
           chatReceiptId,
           agentAiChat ? agentAiChatError(receipt)?.code : undefined,
+          feature,
         ).catch(() => {});
       },
     }),

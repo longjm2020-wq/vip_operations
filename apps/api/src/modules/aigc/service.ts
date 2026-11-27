@@ -273,8 +273,14 @@ export function createAigcService() {
       await studio.handle(req, res, url, actor ? asUser(actor) : undefined);
     } catch (error: any) {
       const code = error.name === "ZodError" ? 400 : statusCode(error);
+      const voiceCode = suffix.startsWith("/commerce-video/voices")
+        ? error.getResponse?.()?.error?.code
+        : undefined;
       if (!res.headersSent)
-        res.status(code).json({ error: safeMessage(error, studio) });
+        res.status(code).json({
+          error: safeMessage(error, studio),
+          ...(typeof voiceCode === "string" && /^BAILIAN_/.test(voiceCode) ? { code: voiceCode } : {}),
+        });
       else res.destroy();
     }
   };

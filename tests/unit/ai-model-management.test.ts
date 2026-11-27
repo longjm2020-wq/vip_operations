@@ -60,6 +60,7 @@ vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
       ? JSON.stringify({
           XAI_API_KEY: "fixture-xai",
           XYLP_IMAGE_TT25_KEY: "fixture-image",
+          BAILIAN_VIDEO_API_KEY: "sk-voice-fixture",
         })
       : "fixture-secret",
   encryptSecret: () => "encrypted",
@@ -704,6 +705,48 @@ describe("connected models in the public chat menu", () => {
 });
 
 describe("AI model administration and real routing", () => {
+  it("uses provider-reported Bailian enrollment counts and speech characters live in management", async () => {
+    const workspace = "ws-voicefixture";
+    const host = workspace + ".cn-beijing.maas.aliyuncs.com";
+    const root = `https://${host}/api/v1/services/audio/tts/`;
+    const model = "cosyvoice-v3.5-flash";
+    await fixture.db!.query("UPDATE aigc_settings SET config=$1::jsonb,updated_at=now()-interval '1 minute' WHERE id=1", [
+      JSON.stringify({ bailianWorkspaceId: workspace }),
+    ]);
+    const network = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url) === root + "customization")
+        return json({
+          request_id: "receipt-enroll",
+          output: { voice_id: model + "-sample-123" },
+          usage: { count: 1 },
+        });
+      if (String(url) === root + "SpeechSynthesizer")
+        return json({
+          request_id: "receipt-speech",
+          output: { audio: { url: "http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/out.mp3?signature=value" }, finish_reason: "stop" },
+          usage: { characters: 18 },
+        });
+      return network(url, init);
+    }) as typeof fetch;
+    try {
+      const send = (feature: "commerce_bailian_voice_enrollment" | "commerce_bailian_speech", path: string, requested: string) =>
+        aiFetch(feature, root + path, { method: "POST", body: JSON.stringify({ model: requested }) }).then((r) => r.json());
+      await send("commerce_bailian_voice_enrollment", "customization", "voice-enrollment");
+      await send("commerce_bailian_speech", "SpeechSynthesizer", model);
+      const { features } = await aiModelManagement(admin());
+      expect(features.find((f) => f.id === "commerce_bailian_voice_enrollment")).toMatchObject({
+        status: "ready", mode: "aigc", usage: { voiceOperations: 1, amounts: [], unknown: 0 },
+      });
+      expect(features.find((f) => f.id === "commerce_bailian_speech")).toMatchObject({
+        status: "ready", usage: { lastModel: model, inputCharacters: 18, voiceOperations: null, amounts: [] },
+      });
+      expect(JSON.stringify(features)).not.toMatch(/sk-voice-fixture|signature=value/);
+    } finally {
+      globalThis.fetch = network;
+      await fixture.db!.query("UPDATE aigc_settings SET config='{}'::jsonb WHERE id=1");
+    }
+  });
   it("requires both super admin and analytics management before reading settings", async () => {
     for (const actor of [
       { ...admin().actor, roleCodes: [] },

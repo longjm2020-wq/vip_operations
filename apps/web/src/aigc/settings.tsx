@@ -262,7 +262,7 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                             视频生成：MiniMax/MiniMax-H3
                           </p>
                           <p className="aigc-connection-note">
-                            北京业务空间 · 768P / 2K · 每段 4～15 秒
+                            北京业务空间 · 同时用于服装口播的百炼音色复刻与配音
                           </p>
                           {config.bailianReuseAvailable && (
                             <div className="aigc-connection-reuse">

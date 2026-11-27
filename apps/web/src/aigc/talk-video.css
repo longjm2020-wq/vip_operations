@@ -309,6 +309,72 @@
   max-width: 100%;
 }
 
+.talk-video-readiness {
+  margin: 4px 0 0;
+  padding-inline-start: 18px;
+}
+
+.talk-video-readiness-actions,
+.talk-video-voice-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.talk-video-voice-section {
+  min-width: 0;
+}
+
+.talk-video-voice-panel,
+.talk-video-voice-preview {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.talk-video-voice-panel {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+}
+
+.talk-video-voice-field {
+  display: grid;
+  gap: 4px;
+}
+
+.talk-video-voice-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--app-secondary);
+}
+
+.talk-video-voice-list {
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.talk-video-voice-list li {
+  display: grid;
+  gap: 5px;
+  padding: 8px 0;
+  border-top: 1px solid var(--app-border);
+  overflow-wrap: anywhere;
+}
+
+.talk-video-voice-action {
+  justify-self: start;
+}
+
+.talk-video-voice-preview audio {
+  max-width: 100%;
+}
+
 .talk-video-replace-option {
   display: inline-flex;
   align-items: center;

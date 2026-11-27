@@ -419,6 +419,11 @@ export function AiModelManagementPage({
                           合成输入字符：{count(row.usage.inputCharacters)}
                         </span>
                       )}
+                      {row.usage.voiceOperations != null && (
+                        <div className="secondary">
+                          供应商回执创建音色：{count(row.usage.voiceOperations)}
+                        </div>
+                      )}
                       <span>
                         {row.usage.amounts.length
                           ? row.usage.amounts
@@ -615,6 +620,9 @@ export function AiModelManagementPage({
               )}
               {detail.usage.inputCharacters != null && (
                 <dd>语音合成输入字符：{count(detail.usage.inputCharacters)}</dd>
+              )}
+              {detail.usage.voiceOperations != null && (
+                <dd>供应商回执创建音色：{count(detail.usage.voiceOperations)}</dd>
               )}
               <dd>
                 {detail.usage.amounts.length

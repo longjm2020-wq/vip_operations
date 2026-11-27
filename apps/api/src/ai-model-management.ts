@@ -31,6 +31,8 @@ import {
   type AgentInternalModel,
 } from "./modules/workspace/agent-models.js";
 import { engineConfig } from "./modules/aigc/config.js";
+import { getBailianVoiceConnection } from "./modules/aigc/bailian-voice-provider.js";
+import { bailianCommerceVoiceModels } from "../../../packages/contracts/src/bailian-commerce-voice.js";
 import {
   agentaiReady,
   readAgentAiConnection,
@@ -158,8 +160,8 @@ export async function aiModelManagement(
       db,
       `SELECT feature_id,count(*)::int AS requests,count(*) FILTER(WHERE status='success')::int AS succeeded,
       count(*) FILTER(WHERE status='failed')::int AS failed,
-      count(*) FILTER(WHERE total_tokens IS NULL AND input_tokens IS NULL AND output_tokens IS NULL AND input_characters IS NULL AND input_video_seconds IS NULL AND output_video_seconds IS NULL AND billable_images IS NULL AND amount IS NULL AND credits IS NULL)::int AS unknown,
-      sum(input_tokens)::text AS input,sum(output_tokens)::text AS output,sum(total_tokens)::text AS total,sum(input_characters)::text AS characters,sum(input_video_seconds)::text AS video_input,sum(output_video_seconds)::text AS video_output,sum(billable_images)::text AS billable_images,min(started_at) AS first
+      count(*) FILTER(WHERE total_tokens IS NULL AND input_tokens IS NULL AND output_tokens IS NULL AND input_characters IS NULL AND input_video_seconds IS NULL AND output_video_seconds IS NULL AND billable_images IS NULL AND voice_operations IS NULL AND amount IS NULL AND credits IS NULL)::int AS unknown,
+      sum(input_tokens)::text AS input,sum(output_tokens)::text AS output,sum(total_tokens)::text AS total,sum(input_characters)::text AS characters,sum(input_video_seconds)::text AS video_input,sum(output_video_seconds)::text AS video_output,sum(billable_images)::text AS billable_images,sum(voice_operations)::text AS voice_operations,min(started_at) AS first
       FROM public.ai_model_usage WHERE $1::int=0 OR started_at>=now()-($1::int*interval '1 day') GROUP BY 1`,
       days,
     ),
@@ -192,6 +194,7 @@ export async function aiModelManagement(
     listRelayStations(),
   ]);
   const aigc = aigcModelManagement(config, state?.compiler);
+  const bailianVoice = await getBailianVoiceConnection();
   const readyKey = !!(
     shared?.enabled &&
     shared.configured &&
@@ -217,6 +220,7 @@ export async function aiModelManagement(
           inputVideoSeconds: numeric(u.video_input),
           outputVideoSeconds: numeric(u.video_output),
           billableImages: numeric(u.billable_images),
+          voiceOperations: numeric(u.voice_operations),
           outputTokens: numeric(u.output),
           totalTokens: numeric(u.total),
           amounts: amounts
@@ -293,6 +297,32 @@ export async function aiModelManagement(
       }
       row.usageNote +=
         " 合成输入字符单独记录；账号报价、备用渠道上界和冻结金额均不是实际费用。";
+      return row;
+    }
+    if (feature.id === "commerce_bailian_voice_enrollment" || feature.id === "commerce_bailian_speech") {
+      const enrollment = feature.id === "commerce_bailian_voice_enrollment";
+      row.mode = "aigc";
+      row.model = enrollment
+        ? "voice-enrollment · 按创建时选定的模型绑定音色"
+        : bailianCommerceVoiceModels.map((model) => model.id).join(" / ");
+      row.source = bailianVoice
+        ? `百炼北京 · ${bailianVoice.workspaceId}.cn-beijing.maas.aliyuncs.com`
+        : "百炼 · 华北 2（北京）";
+      row.status = bailianVoice ? "configured" : "unconfigured";
+      row.statusText = bailianVoice ? "已配置；等待实际回执" : "请配置百炼北京业务空间及密钥";
+      if (
+        bailianVoice &&
+        last?.source === bailianVoice.workspaceId + ".cn-beijing.maas.aliyuncs.com" &&
+        new Date(last.completed_at).getTime() >= new Date(bailianVoice.updatedAt || 0).getTime()
+      ) {
+        if (last.status === "success") {
+          row.status = "ready";
+          row.statusText = enrollment ? "最近创建请求已受理" : `最近成功返回音频 · ${last.model}`;
+        } else if (last.status === "failed") row.statusText = "最近请求失败；请检查业务空间的模型权限与额度";
+      }
+      row.usageNote += enrollment
+        ? " 创建模型由主播设置选择。只统计供应商回执中的创建数量。"
+        : " 合成模型由音色绑定。记录实际回传的字符数及费用，提交前估价不计入实际支出。";
       return row;
     }
     if (feature.kind === "fixed") {

@@ -7,6 +7,7 @@ import sharp from "sharp";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { FAL_LIP_SYNC_MODEL, FalLipSyncService } from "../../packages/aigc-engine/vendor/cloud/fal-lip-sync.mjs";
 import { referenceDownloadOwner } from "../../packages/aigc-engine/vendor/cloud/media-references.mjs";
+import { commerceFalConfigured, commerceFalOwnsVideo, findCommerceFalVideo, readCommerceFalVideo, startCommerceFalVideo } from "../../apps/api/src/modules/aigc/commerce-fal.js";
 
 const owner = { id: "7" };
 const stranger = { id: "8" };
@@ -34,6 +35,7 @@ beforeAll(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 function fixture() {
+  const bytes = new Map();
   const store = {
     assetsDir: tmpdir(),
     data: { digitalHuman: { operations: {} }, assets: {}, appState: { works: [] } },
@@ -44,8 +46,13 @@ function fixture() {
       return structuredClone(result);
     },
     getAssetMetadata(id) { return this.data.assets[id]; },
+    async readAsset(id) {
+      const metadata = this.getAssetMetadata(id);
+      return metadata ? { metadata, buffer: bytes.get(id) } : null;
+    },
     async putAsset({ buffer, ...value }) {
       const id = randomUUID();
+      bytes.set(id, Buffer.from(buffer));
       this.data.assets[id] = { ...value, id, size: buffer.length, storageName: `${id}.bin`, createdAt: new Date().toISOString() };
       return { ...value, path: id, size: buffer.length };
     },
@@ -61,6 +68,31 @@ function fixture() {
 }
 
 const inputFor = () => ({ requestId: randomUUID(), authorized: "true", image, audio });
+
+async function commerceFixture() {
+  const { config, store, service, fakeFetch } = fixture();
+  const jpeg = await sharp(Buffer.from(await image.arrayBuffer())).jpeg().toBuffer();
+  const photo = await store.putAsset({
+    ownerId: owner.id, name: "portrait.jpg", mime: "image/jpeg", buffer: jpeg,
+    source: "commerce-presenter-portrait", kind: "commerce-presenter-portrait",
+  });
+  const profile = { presenterId: randomUUID(), portraitId: photo.path };
+  store.data.digitalHuman.commercePresenters = {
+    [profile.presenterId]: {
+      ownerId: owner.id, engine: "fal", avatarId: profile.portraitId,
+      authorizedAt: new Date().toISOString(),
+    },
+  };
+  return { config, store, service, fakeFetch, profile, studio: { store, digitalHuman: { lipSync: service } } };
+}
+
+async function narration(seconds) {
+  const { stdout } = await run(ffmpeg, [
+    "-v", "error", "-f", "lavfi", "-i", `sine=frequency=440:sample_rate=24000:duration=${seconds}`,
+    "-c:a", "libmp3lame", "-f", "mp3", "pipe:1",
+  ], { encoding: "buffer" });
+  return stdout;
+}
 
 test("sends each authorized pair once through the canonical fal queue and archives an authenticated MP4", async () => {
   const { service, config, store, fakeFetch, recordAiReceipt } = fixture();
@@ -126,4 +158,67 @@ test("preserves a lost submission receipt and refuses to charge again automatica
   expect(service.catalog(owner).jobs[0].status).toBe("uncertain");
   await expect(service.create(owner, async () => inputFor())).rejects.toThrow("核实当前原声口播任务");
   expect(fakeFetch).toHaveBeenCalledTimes(1);
+});
+
+test("reuse of Fal for clothes publishes only the final commercial work downstream", { timeout: 45000 }, async () => {
+  const { studio, store, service, fakeFetch, profile } = await commerceFixture();
+  const original = await service.create(owner, async () => inputFor());
+  store.data.digitalHuman.operations[original.id].status = "uncertain";
+  const runId = randomUUID();
+  expect(commerceFalConfigured(studio)).toBe(true);
+  const speech = await narration(6);
+  const queued = await startCommerceFalVideo(studio, owner, profile, runId, speech);
+  expect(queued.status).toBe("queued");
+  expect(findCommerceFalVideo(studio, owner, runId, profile)).toEqual(queued);
+  expect(findCommerceFalVideo(studio, stranger, runId)).toBeUndefined();
+  await expect(startCommerceFalVideo(studio, owner, { ...profile, presenterId: randomUUID() }, runId, speech))
+    .rejects.toMatchObject({ status: 409 });
+  expect(await startCommerceFalVideo(studio, owner, profile, runId, speech)).toEqual(queued);
+  expect((await startCommerceFalVideo(studio, owner, profile, randomUUID(), speech)).status)
+    .toBe("awaiting_presenter");
+  expect(service.catalog(owner).jobs.map(item => item.id)).toEqual([original.id]);
+  fakeFetch.mockImplementation(async (url) => {
+    if (url === submitUrl) return Response.json({ request_id: remoteId });
+    if (url === resultUrl + "/status") return Response.json({ request_id: remoteId, status: "COMPLETED" });
+    if (url === resultUrl) return Response.json({ video: { url: cdnUrl }, duration: 6 });
+    if (url === tokenUrl) return Response.json({ token: "fixture-no-secret" });
+    if (url === cdnUrl) return new Response(video, { headers: { "content-type": "video/mp4" } });
+    throw Error("unexpected network request");
+  });
+  await service.tick();
+  await service.tick();
+  expect(commerceFalOwnsVideo(studio, owner, queued.operationId)).toBe(true);
+  expect(commerceFalOwnsVideo(studio, stranger, queued.operationId)).toBe(false);
+  expect((await readCommerceFalVideo(studio, owner, queued.operationId)).content).toEqual(video);
+  expect(store.data.appState.works).toEqual([]);
+  expect(fakeFetch.mock.calls.filter(([url]) => url === submitUrl)).toHaveLength(1);
+  await expect(readCommerceFalVideo(studio, stranger, queued.operationId)).rejects.toMatchObject({ status: 404 });
+});
+
+test("pads short speech and compresses moderately long speech without billing unconsented footage", { timeout: 45000 }, async () => {
+  const { studio, store, service, fakeFetch, profile } = await commerceFixture();
+  const short = await startCommerceFalVideo(studio, owner, profile, randomUUID(), await narration(2));
+  const shortOp = store.data.digitalHuman.operations[short.operationId];
+  expect(shortOp.inputDuration).toBeGreaterThanOrEqual(5);
+  expect(shortOp.inputDuration).toBeLessThan(5.3);
+  shortOp.status = "uncertain";
+  const long = await startCommerceFalVideo(studio, owner, profile, randomUUID(), await narration(18));
+  const longOp = store.data.digitalHuman.operations[long.operationId];
+  expect(longOp.inputDuration).toBeLessThanOrEqual(15);
+  expect(longOp.inputDuration).toBeGreaterThan(14.5);
+  // Revoke authorization after queuing the job, while the engine saves its submission state.
+  const mutate = store.mutate.bind(store);
+  store.mutate = async (callback) => {
+    const result = await mutate(callback);
+    if (store.data.digitalHuman.operations[long.operationId].status === "submitting")
+      store.data.digitalHuman.commercePresenters[profile.presenterId].revokedAt = new Date().toISOString();
+    return result;
+  };
+  await service.tick();
+  expect((await readCommerceFalVideo(studio, owner, long.operationId)).status).toBe("failed");
+  expect(fakeFetch).not.toHaveBeenCalled();
+  delete store.data.digitalHuman.commercePresenters[profile.presenterId].revokedAt;
+  await expect(startCommerceFalVideo(studio, owner, profile, randomUUID(), await narration(20)))
+    .rejects.toMatchObject({ status: 400 });
+  expect(fakeFetch).not.toHaveBeenCalled();
 });

@@ -112,6 +112,22 @@ export const aiFeatures = [
     kind: "external",
   },
   {
+    id: "commerce_bailian_voice_enrollment",
+    name: "服装口播 · 百炼音色复刻",
+    group: "AIGC",
+    href: "/aigc?view=talk-video",
+    boundary: "使用本人或已授权的单人录音创建百炼复刻音色。音色绑定北京业务空间和所选目标模型。",
+    kind: "external",
+  },
+  {
+    id: "commerce_bailian_speech",
+    name: "服装口播 · 百炼配音",
+    group: "AIGC",
+    href: "/aigc?view=talk-video",
+    boundary: "按主播所选百炼音色及其绑定模型生成 MP3。正式出片仅在本次配音报价上限内提交。",
+    kind: "external",
+  },
+  {
     id: "aigc_image",
     name: "AIGC 图片与关键帧",
     group: "AIGC",
@@ -151,7 +167,7 @@ export const aiFeatures = [
     group: "AIGC",
     href: "/aigc?view=talk-video&mode=lip-sync",
     boundary:
-      "固定 MiniMax H3 Max Lip Sync，使用独立 fal API Key。将一张授权照片和 5～15 秒录音送往 fal，生成保留原声的 768P 口播视频。记录供应商回执的成片秒数，未回传的金额与 Token 显示未知。",
+      "固定 MiniMax H3 Max Lip Sync，使用独立 fal API Key。原声及服装口播发送一张授权照片和 5～15 秒录音或配音，生成 768P 口播。记录供应商回执的成片秒数，未回传的金额与 Token 显示未知。",
     kind: "external",
   },
   {
@@ -236,6 +252,7 @@ export type AiFeatureUsage = {
   inputVideoSeconds?: number | null;
   outputVideoSeconds?: number | null;
   billableImages?: number | null;
+  voiceOperations?: number | null;
   outputTokens: number | null;
   totalTokens: number | null;
   amounts: { unit: string; amount: number }[];

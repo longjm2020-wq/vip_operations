@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
 import { runMedia } from "../../apps/api/src/modules/workspace/agent-media.js";
+import { bailianCommerceVoiceModels } from "../../packages/contracts/src/bailian-commerce-voice.js";
 
 const root = "/api/v1/aigc/commerce-video";
 const presenter = {
@@ -51,6 +52,224 @@ const originalScenes = [
     imageUrl: photos[0].url,
   },
 ];
+
+test("设置主播可独立创建百炼音色、读取试听并保存主播", async ({
+  page,
+  baseURL,
+}) => {
+  const photoBytes = await sharp({
+    create: { width: 320, height: 400, channels: 3, background: "#627d93" },
+  })
+    .png()
+    .toBuffer();
+  await signInAsCreator(page, baseURL!, photoBytes);
+  const temp = await mkdtemp(join(tmpdir(), "bailian-voice-e2e-"));
+  let recording: Buffer;
+  try {
+    const file = join(temp, "fixture.mp3");
+    await runMedia([
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:duration=6",
+      file,
+    ]);
+    recording = await readFile(file);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+  const voice = {
+    id: randomUUID(),
+    name: "通勤口播",
+    model: "cosyvoice-v3.5-flash",
+    status: "ready",
+  };
+  const avatar = {
+    id: "preview-avatar",
+    name: "已授权的主播形象",
+    engine: "fal",
+  };
+  const catalogVoice = {
+    ...voice,
+    id: `bailian:${voice.id}`,
+    kind: "cloned",
+    provider: "bailian",
+  };
+  let created = false;
+  let saved = false;
+  let portraitUploaded = false;
+  let previews = 0;
+  let previewId: string;
+  await page.route("**/api/v1/aigc/digital-human/lip-sync", (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        minSeconds: 5,
+        maxSeconds: 15,
+        priceUsdPerSecond: 0.08,
+        jobs: [],
+      },
+    }),
+  );
+  await page.route("**/api/v1/aigc/commerce-video/**", async (route) => {
+    const req = route.request();
+    const suffix = new URL(req.url()).pathname.slice(root.length);
+    if (suffix === "/options")
+      return route.fulfill({
+        json: {
+          available: false,
+          presenters: saved
+            ? [
+                {
+                  ...presenter,
+                  voiceKind: "cloned",
+                  voiceProvider: "bailian",
+                  voiceModel: voice.model,
+                  engine: avatar.engine,
+                },
+              ]
+            : [],
+          avatars: portraitUploaded ? [avatar] : [],
+          voices: created ? [catalogVoice] : [],
+          templates: [],
+          bailian: { configured: true, models: bailianCommerceVoiceModels },
+          readiness: {
+            script: false,
+            presenter: false,
+            fal: true,
+            profile: saved,
+            issues: ["请管理员启用并验证 OpenRouter 脚本服务。"],
+          },
+        },
+      });
+    if (suffix === "/jobs") return route.fulfill({ json: { jobs: [] } });
+    if (suffix === "/voices" && req.method() === "GET")
+      return route.fulfill({ json: { voices: created ? [voice] : [] } });
+    if (suffix === "/voices" && req.method() === "POST") {
+      expect(created).toBe(false);
+      const multipart = await new Response(
+        new Uint8Array(req.postDataBuffer()!),
+        {
+          headers: { "Content-Type": req.headers()["content-type"] },
+        },
+      ).formData();
+      expect(multipart.get("name")).toBe(voice.name);
+      expect(multipart.get("model")).toBe(voice.model);
+      expect(multipart.get("authorized")).toBe("true");
+      expect(multipart.get("requestId")).toMatch(/^[0-9a-f-]{36}$/);
+      expect((multipart.get("file") as File).size).toBe(recording.length);
+      created = true;
+      return route.fulfill({ json: { ...voice, status: "pending" } });
+    }
+    if (suffix === `/voices/${voice.id}` && req.method() === "GET")
+      return route.fulfill({ json: voice });
+    if (suffix === `/voices/${voice.id}/preview`) {
+      const body = req.postDataJSON();
+      expect(body.text).toContain("日常通勤款");
+      if (previews++ === 0) {
+        previewId = body.requestId;
+        return route.fulfill({
+          status: 409,
+          json: {
+            error: "试听仍在生成，请稍后读取。",
+            code: "BAILIAN_VOICE_PREVIEW_PENDING",
+          },
+        });
+      }
+      expect(body.requestId).toBe(previewId);
+      return route.fulfill({ contentType: "audio/mpeg", body: recording });
+    }
+    if (suffix === "/presenters/portrait" && req.method() === "POST") {
+      const multipart = await new Response(
+        new Uint8Array(req.postDataBuffer()!),
+        {
+          headers: { "Content-Type": req.headers()["content-type"] },
+        },
+      ).formData();
+      expect(multipart.get("name")).toBe(presenter.name);
+      expect(multipart.get("authorized")).toBe("true");
+      expect(multipart.get("templateId")).toBeNull();
+      expect((multipart.get("file") as File).size).toBe(photoBytes.length);
+      portraitUploaded = true;
+      return route.fulfill({ json: { avatar } });
+    }
+    if (suffix === "/presenters" && req.method() === "POST") {
+      expect(portraitUploaded).toBe(true);
+      expect(req.postDataJSON()).toEqual({
+        name: presenter.name,
+        avatarId: avatar.id,
+        voiceId: catalogVoice.id,
+        authorized: true,
+      });
+      saved = true;
+      return route.fulfill({
+        json: {
+          ...presenter,
+          voiceKind: "cloned",
+          voiceProvider: "bailian",
+          voiceModel: voice.model,
+          engine: avatar.engine,
+        },
+      });
+    }
+    return route.fulfill({ status: 404, json: { error: "测试接口不存在" } });
+  });
+  await page.setViewportSize({ width: 420, height: 900 });
+  await page.goto("/aigc?view=talk-video&mode=commerce");
+  await expect(
+    page.getByText("请管理员启用并验证 OpenRouter 脚本服务。"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "设置主播", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "设置主播" });
+  await dialog.getByRole("button", { name: "百炼音色复刻" }).click();
+  const panel = dialog.getByRole("region", { name: "百炼音色", exact: true });
+  await panel.getByRole("combobox", { name: "复刻模型" }).click();
+  await expect(
+    page.getByText("CosyVoice 3.5 Plus", { exact: true }),
+  ).toBeVisible();
+  await page.getByText("CosyVoice 3.5 Flash", { exact: true }).click();
+  await expect(panel.getByText(/0\.8 元／万字符/)).toBeVisible();
+  await panel.getByRole("textbox", { name: "音色名称" }).fill(voice.name);
+  await panel.getByLabel("参考录音").setInputFiles({
+    name: "fixture.mp3",
+    mimeType: "audio/mpeg",
+    buffer: recording,
+  });
+  const create = panel.getByRole("button", { name: "创建百炼音色" });
+  await expect(create).toBeDisabled();
+  await panel.getByRole("checkbox").check();
+  await create.click();
+  const row = panel.getByRole("listitem", { name: voice.name });
+  await row.getByRole("button", { name: "试听" }).click();
+  const listen = panel.getByRole("button", { name: "生成试听" });
+  await listen.click();
+  await expect(panel.getByRole("alert")).toContainText("试听仍在生成");
+  await listen.click();
+  await expect(panel.getByLabel("合成试听音频")).toBeVisible();
+  await expect
+    .poll(() =>
+      panel
+        .getByLabel("合成试听音频")
+        .evaluate((audio: HTMLAudioElement) => audio.duration),
+    )
+    .toBeGreaterThan(5);
+  await row.getByRole("button", { name: "使用此音色" }).click();
+  await dialog.getByRole("textbox", { name: "主播名称" }).fill(presenter.name);
+  await dialog.getByLabel("主播照片", { exact: true }).setInputFiles({
+    name: "portrait.png",
+    mimeType: "image/png",
+    buffer: photoBytes,
+  });
+  await dialog.getByRole("checkbox", { name: /取得肖像和声音/ }).check();
+  await dialog.getByRole("button", { name: "保存主播" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.getByRole("spinbutton", { name: "克隆配音预算上限（元）" }),
+  ).toBeVisible();
+  await expect(page.getByText(/5～15 秒.*US\$0\.08/)).toBeVisible();
+  expect(saved).toBe(true);
+  expect(previews).toBe(2);
+});
 
 async function signInAsCreator(page: Page, origin: string, photoBytes: Buffer) {
   expect((await page.request.get(`${root}/jobs`)).status()).toBe(401);

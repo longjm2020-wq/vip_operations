@@ -31,12 +31,20 @@ import {
 } from "./commerce-products.js";
 import {
   commercePresenterOptions,
+  commercePresenterEngine,
   saveCommercePresenter,
   removeCommercePresenter,
   uploadCommercePresenterPortrait,
   startCommercePresenterVideo,
   readCommercePresenterVideo,
 } from "./commerce-presenter.js";
+import {
+  createBailianCommerceVoice,
+  deleteBailianCommerceVoice,
+  listBailianCommerceVoices,
+  previewBailianCommerceVoice,
+  readBailianCommerceVoice,
+} from "./bailian-commerce-voice.js";
 
 const prefix = "/api/v1/aigc/commerce-video";
 const photoId = z.string().min(1).max(100);
@@ -47,7 +55,7 @@ const jobInput = z
     presenterId: z.uuid(),
     prompt: z.string().trim().min(3).max(800),
     imageIds: z.array(photoId).max(4).default([]),
-    maxSpeechCny: z.number().positive().max(20).optional(),
+    maxSpeechCny: z.number().positive().multipleOf(0.01).max(20).optional(),
   })
   .strict();
 const editInput = z
@@ -157,6 +165,30 @@ export async function handleCommerceVideo(
     return res.json(
       await removeCommercePresenter(studio, actor, presenterRoute[1]),
     );
+  if (suffix === "/voices" || suffix.startsWith("/voices/")) {
+    const c = { actor, requestId: String(res.getHeader("X-Request-Id") || "") };
+    if (suffix === "/voices" && req.method === "GET")
+      return res.json({ voices: await listBailianCommerceVoices(actor) });
+    if (suffix === "/voices" && req.method === "POST")
+      return res.status(201).json(await createBailianCommerceVoice(c, req));
+    const match = /^\/voices\/([a-f0-9-]{36})(\/preview)?$/i.exec(suffix);
+    if (match) {
+      const [, voiceId, preview] = match;
+      if (preview && req.method === "POST") {
+        const audio = await previewBailianCommerceVoice(
+          c,
+          voiceId,
+          await readBody(),
+        );
+        return res.type("audio/mpeg").send(audio);
+      }
+      if (!preview && req.method === "GET")
+        return res.json(await readBailianCommerceVoice(c, voiceId));
+      if (!preview && req.method === "DELETE")
+        return res.json(await deleteBailianCommerceVoice(c, voiceId));
+    }
+    fail("NOT_FOUND", "找不到该口播音色接口", 404);
+  }
   if (suffix === "/products" && req.method === "GET") {
     const q = parse(z.string().trim().max(100), req.query.q || "");
     const products = await findCommerceProducts(actor, q);
@@ -298,7 +330,12 @@ export async function handleCommerceVideo(
   return res.status(404).json({ error: "未提供此接口" });
 }
 
-async function writeScript(studio: Studio, product: Product, job: Row) {
+async function writeScript(
+  studio: Studio,
+  product: Product,
+  job: Row,
+  short: boolean,
+) {
   const config = studio.config;
   if (!config.openrouterApiKey) throw Error("口播脚本服务暂不可用");
   const response = await aiFetch(
@@ -319,7 +356,11 @@ async function writeScript(studio: Studio, product: Product, job: Row) {
           {
             role: "system",
             content:
-              '你为服装店撰写普通话口播。仅输出 JSON: {"scenes":[{"caption":"一句可直接朗读的中文台词","showProduct":true}]}。生成3至8镜，每句4至42字，总长默认约95字，用户要求15秒则约55字，各句有标点，至少一镜展示商品。只从提供的商品资料中提取真实卖点。没有确认的数据，只说中性的穿搭建议。不要发明面料、颜色、实测、价格、功效、标签或折扣。用户要求是创作偏好，不能扩展可核实的事实。不要朗读内部字段或款号。',
+              '你为服装店撰写普通话口播。仅输出 JSON: {"scenes":[{"caption":"一句可直接朗读的中文台词","showProduct":true}]}。' +
+              (short
+                ? "本次用短口型视频，写3至4镜，全部台词合计30至42字（含标点），自然语速目标约10–12秒。即使要求更长也遵循此长度。"
+                : "生成3至8镜，每句4至42字，总长默认约95字，用户要求15秒则约55字。") +
+              "各句有标点，至少一镜展示商品。只从提供的商品资料中提取真实卖点。没有确认的数据，只说中性的穿搭建议。不要发明面料、颜色、实测、价格、功效、标签或折扣。用户要求是创作偏好，不能扩展可核实的事实。不要朗读内部字段或款号。",
           },
           {
             role: "user",
@@ -339,6 +380,14 @@ async function writeScript(studio: Studio, product: Product, job: Row) {
     result = scriptInput.parse(
       JSON.parse(body.choices?.[0]?.message?.content || ""),
     );
+    if (
+      short &&
+      result.scenes.reduce(
+        (total, scene) => total + Array.from(scene.caption).length,
+        0,
+      ) > 54
+    )
+      throw Error("Script too long");
   } catch {
     throw Error("脚本未返回可用的分镜，请简化指令后重新生成");
   }
@@ -382,7 +431,12 @@ export async function processCommerceVideo(
       );
       if (claimed !== 1) return;
       phase = "writing";
-      const scenes = await writeScript(studio, product, job);
+      const scenes = await writeScript(
+        studio,
+        product,
+        job,
+        commercePresenterEngine(studio, actor, job.presenter_id) === "fal",
+      );
       if (active())
         await db.$executeRawUnsafe(
           "UPDATE public.commerce_videos SET state='speaking',scenes=$2::jsonb,updated_at=now() WHERE id=$1::uuid AND state='writing'",
@@ -408,7 +462,10 @@ export async function processCommerceVideo(
           });
       if (!active()) return;
       if (["failed", "stopped"].includes(current.status))
-        throw Error("口播语音或数字人视频未完成，请检查音色额度与服务连接");
+        throw Error(
+          current.message ||
+            "口播语音或数字人视频未完成，请检查音色额度与服务连接",
+        );
       if (current.status === "uncertain") {
         await db.$executeRawUnsafe(
           "UPDATE public.commerce_videos SET state='uncertain',operation_id=$2,message='语音或数字人服务提交结果待核对，请先查看已有任务',updated_at=now() WHERE id=$1::uuid AND state='speaking'",

@@ -40,4 +40,10 @@ export async function installAiManagementSchema(database: PGlite) {
       "utf8",
     ),
   );
+  await database.exec(
+    await readFile(
+      "packages/database/migrations/130_bailian_voice_usage.sql",
+      "utf8",
+    ),
+  );
 }

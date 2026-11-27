@@ -19,8 +19,17 @@ import {
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
+import {
+  bailianCommerceVoiceModels,
+  type BailianCommerceVoiceCatalog,
+  type BailianCommerceVoiceModel,
+} from "../../../../packages/contracts/src/bailian-commerce-voice";
 import { useUser } from "../shared";
 import { studioApi } from "./api";
+import {
+  CommerceBailianVoice,
+  bailianVoiceModelLabel,
+} from "./commerce-bailian-voice";
 import { LipSync, useLipSync, type LipSyncQuery } from "./lip-sync";
 import "./talk-video.css";
 
@@ -31,14 +40,33 @@ const photoLimit = 4;
 type Named = { id: string; name: string };
 type Photo = { id: string; url: string; color?: string };
 type Product = Named & { styleNo: string; images: Photo[] };
-type Presenter = Named & { voiceKind: "default" | "cloned" };
+type Presenter = Named & {
+  voiceKind: "default" | "cloned";
+  voiceProvider?: "agentai" | "bailian";
+  voiceModel?: BailianCommerceVoiceModel;
+  engine?: "fal";
+};
+type Voice = Named & {
+  kind: "default" | "cloned";
+  provider?: "agentai" | "bailian";
+  model?: BailianCommerceVoiceModel;
+};
+type Avatar = Named & { engine?: "fal" };
 type Options = {
   available: boolean;
   presenters: Presenter[];
-  avatars: Named[];
-  voices: (Named & { kind: "default" | "cloned" })[];
+  avatars: Avatar[];
+  voices: Voice[];
   templates: Named[];
   canClone?: boolean;
+  bailian?: BailianCommerceVoiceCatalog;
+  readiness?: {
+    script: boolean;
+    presenter: boolean;
+    fal: boolean;
+    profile: boolean;
+    issues: string[];
+  };
 };
 type Scene = {
   caption: string;
@@ -206,13 +234,19 @@ function TalkVideoWorkspace({
       {portrait ? (
         <LipSync account={account} connection={connection} />
       ) : (
-        <CommerceTalkVideo account={account} />
+        <CommerceTalkVideo account={account} fal={connection.data} />
       )}
     </section>
   );
 }
 
-function CommerceTalkVideo({ account }: { account: string }) {
+function CommerceTalkVideo({
+  account,
+  fal,
+}: {
+  account: string;
+  fal?: LipSyncQuery["data"];
+}) {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
   const client = useQueryClient();
@@ -287,6 +321,11 @@ function CommerceTalkVideo({ account }: { account: string }) {
       ? photos?.ids || []
       : productPhotos.slice(0, 1).map((photo) => photo.id);
   const needsSpeechBudget = selectedPresenter?.voiceKind === "cloned";
+  const usesFal = selectedPresenter?.engine === "fal";
+  const falDuration = `${fal?.minSeconds ?? 5}～${fal?.maxSeconds ?? 15} 秒`;
+  const speechPrice = bailianCommerceVoiceModels.find(
+    (entry) => entry.id === selectedPresenter?.voiceModel,
+  );
   const canSubmit = Boolean(
     options.data?.available &&
     product.data &&
@@ -359,6 +398,11 @@ function CommerceTalkVideo({ account }: { account: string }) {
 
   const currentJob = job.data;
   const recent = history.data?.jobs || [];
+  const readiness = options.data?.readiness;
+  const issues = readiness?.issues || [];
+  const hasReadyServices = options.data?.available;
+  const needsPresenter = hasReadyServices && presenters.length === 0;
+  const canManagePresenters = readiness?.fal || readiness?.presenter;
   return (
     <>
       {options.isError && (
@@ -374,16 +418,39 @@ function CommerceTalkVideo({ account }: { account: string }) {
           }
         />
       )}
-      {options.data && !options.data.available && (
+      {options.data && (!hasReadyServices || needsPresenter) && (
         <Alert
           className="talk-video-notice"
           type="info"
           showIcon
-          title="生成服务尚未就绪。请管理员检查脚本与数字人口播服务。"
+          title={
+            needsPresenter
+              ? "请先保存一个主播"
+              : readiness
+                ? "完成以下设置后可生成商品口播"
+                : "生成服务尚未就绪。请管理员检查脚本与数字人口播服务。"
+          }
+          description={
+            issues.length > 0 && (
+              <ul className="talk-video-readiness">
+                {issues.map((issue) => (
+                  <li key={issue}>{issue}</li>
+                ))}
+              </ul>
+            )
+          }
           action={
-            <Button size="small" onClick={() => void options.refetch()}>
-              重新检查
-            </Button>
+            <div className="talk-video-readiness-actions">
+              {(needsPresenter ||
+                (!readiness?.profile && canManagePresenters)) && (
+                <Button size="small" onClick={() => setAddingPresenter(true)}>
+                  去设置主播
+                </Button>
+              )}
+              <Button size="small" onClick={() => void options.refetch()}>
+                重新检查
+              </Button>
+            </div>
           }
         />
       )}
@@ -391,7 +458,11 @@ function CommerceTalkVideo({ account }: { account: string }) {
         <Input.TextArea
           aria-label="视频要求"
           value={draft}
-          placeholder="例如：给这款外套拍一条通勤口播，开头直接讲版型，中间展示领口和袖口。"
+          placeholder={
+            usesFal
+              ? "例如：拍一条约 10 秒的通勤口播，先看版型，再讲一句袖口细节。"
+              : "例如：给这款外套拍一条通勤口播，开头直接讲版型，中间展示领口和袖口。"
+          }
           autoSize={{ minRows: 2, maxRows: 5 }}
           maxLength={promptLimit}
           onChange={(event) => setDraft(event.target.value)}
@@ -519,6 +590,23 @@ function CommerceTalkVideo({ account }: { account: string }) {
         {options.data?.available && (
           <p className="talk-video-state talk-video-fee">
             提交后会调用生成服务，供应商可能计费。
+            {selectedPresenter?.voiceProvider === "bailian" && speechPrice && (
+              <>
+                百炼 {speechPrice.label} 配音 {speechPrice.cnyPer10k}{" "}
+                元／万计费字符。配音预算仅约束合成音频。
+              </>
+            )}
+          </p>
+        )}
+        {usesFal && (
+          <p className="talk-video-state talk-video-fee">
+            此主播使用 fal 对口型。配音需为 {falDuration}。
+            {fal?.priceUsdPerSecond != null && (
+              <>
+                对口型每秒 US${fal.priceUsdPerSecond.toFixed(2)}
+                ，按实际时长计费。
+              </>
+            )}
           </p>
         )}
         {error && (
@@ -589,6 +677,7 @@ function CommerceTalkVideo({ account }: { account: string }) {
       )}
       {addingPresenter && options.data && (
         <PresenterDialog
+          account={account}
           options={options.data}
           onClose={() => setAddingPresenter(false)}
           onRemoved={(id) =>
@@ -621,6 +710,30 @@ function CommerceTalkVideo({ account }: { account: string }) {
             setAddingPresenter(false);
             void client.invalidateQueries({ queryKey: optionsKey });
           }}
+          onVoiceSelected={(voice) =>
+            client.setQueryData<Options>(
+              optionsKey,
+              (current) =>
+                current && {
+                  ...current,
+                  voices: [
+                    voice,
+                    ...current.voices.filter(({ id }) => id !== voice.id),
+                  ],
+                },
+            )
+          }
+          onVoiceRemoved={(voiceId) => {
+            client.setQueryData<Options>(
+              optionsKey,
+              (current) =>
+                current && {
+                  ...current,
+                  voices: current.voices.filter(({ id }) => id !== voiceId),
+                },
+            );
+            void client.invalidateQueries({ queryKey: optionsKey });
+          }}
         />
       )}
     </>
@@ -642,53 +755,82 @@ function useProduct(account: string, id?: string) {
 }
 
 function PresenterDialog({
+  account,
   options,
   onClose,
   onSaved,
   onRemoved,
+  onVoiceSelected,
+  onVoiceRemoved,
 }: {
+  account: string;
   options: Options;
   onClose: () => void;
   onSaved: (presenter: Presenter) => void;
   onRemoved: (id: string) => void;
+  onVoiceSelected: (voice: Voice) => void;
+  onVoiceRemoved: (id: string) => void;
 }) {
   const { modal } = App.useApp();
+  const canUpload = Boolean(
+    options.templates?.length || options.readiness?.fal,
+  );
   const [name, setName] = useState("");
   const [avatarId, setAvatar] = useState(
     options.avatars.length === 1 ? options.avatars[0]?.id : undefined,
   );
-  const [voiceId, setVoice] = useState(
-    options.voices.find((voice) => voice.kind === "default")?.id,
+  const [voiceId, setVoice] = useState<string | undefined>(
+    options.voices.find((voice) => voice.kind === "default")?.id ||
+      options.voices[0]?.id,
   );
   const [newPortrait, setNewPortrait] = useState(
-    !options.avatars.length && Boolean(options.templates?.length),
+    !options.avatars.length && canUpload,
   );
   const [templateId, setTemplate] = useState(options.templates?.[0]?.id);
   const [portrait, setPortrait] = useState<File>();
-  const [createdAvatar, setCreatedAvatar] = useState<Named>();
+  const [createdAvatar, setCreatedAvatar] = useState<Avatar>();
   const [authorized, setAuthorized] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showBailian, setShowBailian] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const [failure, setFailure] = useState("");
   const upload = useRef<{
     file: File;
     name: string;
-    templateId: string;
+    templateId?: string;
     id: string;
   } | null>(null);
+  const avatars = [
+    ...(createdAvatar &&
+    !options.avatars.some((item) => item.id === createdAvatar.id)
+      ? [createdAvatar]
+      : []),
+    ...options.avatars,
+  ];
+  const falUpload = Boolean(options.readiness?.fal && !templateId);
+  const falPortrait = newPortrait
+    ? falUpload
+    : avatars.find((item) => item.id === avatarId)?.engine === "fal";
+  const compatibleVoices = options.voices.filter(
+    (voice) => !falPortrait || voice.kind === "cloned",
+  );
+  const activeVoiceId = compatibleVoices.some((voice) => voice.id === voiceId)
+    ? voiceId
+    : undefined;
   const canSave = Boolean(
     name.trim() &&
-    voiceId &&
+    activeVoiceId &&
     authorized &&
-    (newPortrait ? portrait && templateId : avatarId),
+    (newPortrait ? portrait && (templateId || falUpload) : avatarId),
   );
 
   async function save() {
-    if (!canSave || saving) return;
+    if (!canSave || saving || voiceBusy) return;
     setSaving(true);
     setFailure("");
     try {
       let selectedAvatar = avatarId;
-      if (newPortrait && portrait && templateId) {
+      if (newPortrait && portrait && (templateId || falUpload)) {
         const nameForAvatar = name.trim();
         if (
           upload.current?.file !== portrait ||
@@ -705,10 +847,10 @@ function PresenterDialog({
         const form = new FormData();
         form.set("file", portrait);
         form.set("name", nameForAvatar);
-        form.set("templateId", templateId);
+        if (templateId) form.set("templateId", templateId);
         form.set("requestId", upload.current.id);
         form.set("authorized", "true");
-        const result: { avatar: Named | null; message?: string } =
+        const result: { avatar: Avatar | null; message?: string } =
           await studioApi(`${path}/presenters/portrait`, "POST", form);
         if (!result.avatar)
           throw new Error(result.message || "形象尚未创建，请先核实任务进度。");
@@ -721,7 +863,7 @@ function PresenterDialog({
         await studioApi(`${path}/presenters`, "POST", {
           name: name.trim(),
           avatarId: selectedAvatar,
-          voiceId,
+          voiceId: activeVoiceId,
           authorized,
         }),
       );
@@ -737,13 +879,14 @@ function PresenterDialog({
       open
       title={options.presenters.length ? "管理主播" : "设置主播"}
       onCancel={onClose}
-      mask={{ closable: !saving }}
-      closable={!saving}
+      mask={{ closable: !saving && !voiceBusy }}
+      closable={!saving && !voiceBusy}
+      keyboard={!saving && !voiceBusy}
       okText="保存主播"
       onOk={() => void save()}
       confirmLoading={saving}
-      okButtonProps={{ disabled: !canSave }}
-      cancelButtonProps={{ disabled: saving }}
+      okButtonProps={{ disabled: !canSave || voiceBusy }}
+      cancelButtonProps={{ disabled: saving || voiceBusy }}
     >
       <div className="talk-video-modal-fields">
         {options.presenters.length > 0 && (
@@ -798,7 +941,7 @@ function PresenterDialog({
         {newPortrait ? (
           <>
             <label className="talk-video-file">
-              形象照
+              主播照片
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
@@ -806,6 +949,7 @@ function PresenterDialog({
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   setFailure("");
+                  setAuthorized(false);
                   if (file && file.size > 10 * 1024 * 1024) {
                     setFailure("形象照须小于 10 MB。");
                     event.target.value = "";
@@ -816,6 +960,11 @@ function PresenterDialog({
                 }}
               />
             </label>
+            {falUpload && (
+              <p className="talk-video-voice-note">
+                请上传单人正面照，宽高至少 256 像素，文件最大 10 MB。
+              </p>
+            )}
             {options.templates.length > 1 && (
               <Select
                 aria-label="形象模板"
@@ -833,37 +982,87 @@ function PresenterDialog({
           <Select
             aria-label="形象"
             value={avatarId}
-            placeholder="选择已授权形象"
-            onChange={setAvatar}
+            placeholder="选择已授权主播照片或形象"
+            onChange={(value) => {
+              setAvatar(value);
+              setAuthorized(false);
+            }}
             disabled={saving}
-            options={[
-              ...(createdAvatar ? [createdAvatar] : []),
-              ...options.avatars,
-            ].map(({ id, name }) => ({ value: id, label: name }))}
+            options={avatars.map(({ id, name }) => ({
+              value: id,
+              label: name,
+            }))}
           />
         )}
-        {options.templates?.length > 0 &&
-          (newPortrait ? options.avatars.length > 0 : true) && (
-            <Button
-              type="link"
-              size="small"
-              onClick={() => setNewPortrait(!newPortrait)}
-              disabled={saving}
-            >
-              {newPortrait ? "选择已有形象" : "上传新形象照"}
-            </Button>
-          )}
+        {canUpload && (newPortrait ? avatars.length > 0 : true) && (
+          <Button
+            type="link"
+            size="small"
+            onClick={() => {
+              setNewPortrait(!newPortrait);
+              setAuthorized(false);
+            }}
+            disabled={saving}
+          >
+            {newPortrait ? "选择已有主播照片或形象" : "上传主播照片"}
+          </Button>
+        )}
         <Select
           aria-label="音色"
-          value={voiceId}
+          value={activeVoiceId}
           placeholder="选择音色"
           onChange={setVoice}
-          disabled={saving}
-          options={options.voices.map(({ id, name, kind }) => ({
-            value: id,
-            label: kind === "cloned" ? `${name}（已克隆）` : name,
-          }))}
+          disabled={saving || voiceBusy}
+          options={compatibleVoices.map(
+            ({ id, name, kind, provider, model }) => ({
+              value: id,
+              label:
+                provider === "bailian"
+                  ? `${name}（百炼 · ${bailianVoiceModelLabel(model) || "复刻音色"}）`
+                  : kind === "cloned"
+                    ? `${name}（已克隆）`
+                    : name,
+            }),
+          )}
         />
+        {options.bailian && (
+          <div className="talk-video-voice-section">
+            <Button
+              type="default"
+              size="small"
+              aria-expanded={showBailian}
+              disabled={saving || voiceBusy}
+              onClick={() => setShowBailian(!showBailian)}
+            >
+              {showBailian ? "收起百炼音色" : "百炼音色复刻"}
+            </Button>
+            {showBailian && (
+              <CommerceBailianVoice
+                account={account}
+                catalog={options.bailian}
+                disabled={saving}
+                onBusy={setVoiceBusy}
+                onSelect={(voice) => {
+                  const id = `bailian:${voice.id}`;
+                  onVoiceSelected({
+                    id,
+                    name: voice.name,
+                    kind: "cloned",
+                    provider: "bailian",
+                    model: voice.model,
+                  });
+                  setVoice(id);
+                  setShowBailian(false);
+                }}
+                onRemoved={(id) => {
+                  const catalogId = `bailian:${id}`;
+                  if (voiceId === catalogId) setVoice(undefined);
+                  onVoiceRemoved(catalogId);
+                }}
+              />
+            )}
+          </div>
+        )}
         {options.canClone &&
           !options.voices.some((voice) => voice.kind === "cloned") && (
             <Link to="/settings/ai">前往 AI 模型管理创建克隆音色</Link>
@@ -873,7 +1072,9 @@ function PresenterDialog({
           onChange={(event) => setAuthorized(event.target.checked)}
           disabled={saving}
         >
-          我已取得肖像和声音的使用授权，可用于服装带货视频。
+          {falPortrait
+            ? "我已取得肖像和声音的使用授权，同意生成视频时将主播照片与口播音频交给 fal 对口型。"
+            : "我已取得肖像和声音的使用授权，可用于服装带货视频。"}
         </Checkbox>
         {failure && <Alert type="error" showIcon title={failure} />}
       </div>
