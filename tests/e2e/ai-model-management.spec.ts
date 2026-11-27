@@ -468,7 +468,7 @@ test("retired team billing is read-only and separate from active model settings"
 }) => {
   await fixture(page, true, true);
   await page.goto("/settings/ai");
-  const history = page.locator("details").filter({ hasText: "历史团队用量" });
+  const history = page.locator("details").filter({ hasText: "历史功能用量" });
   await history.locator("summary").click();
   const row = history.locator('tr[data-row-key="mastra_team"]');
   await expect(row).toContainText("0.2 USD");

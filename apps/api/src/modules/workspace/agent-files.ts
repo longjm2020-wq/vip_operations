@@ -235,7 +235,6 @@ export async function inspectAgentUpload(
   name: string,
   b: Buffer,
   generated = false,
-  requireVideoTrack = false,
 ) {
   const ext = extname(name).toLowerCase(),
     mime = mimeByExt[ext];
@@ -263,7 +262,7 @@ export async function inspectAgentUpload(
   } else if (mime.startsWith("video/")) {
     if (!isVideoHeader(b))
       throw Error("视频格式无效");
-    Object.assign(metadata, await inspectVideo(b, requireVideoTrack));
+    Object.assign(metadata, await inspectVideo(b));
     metadata.note = "视觉理解抽取最多6帧，不包含音轨识别。";
   } else if (ext === ".pdf") {
     if (!b.subarray(0, 1024).toString().includes("%PDF-"))
@@ -626,7 +625,7 @@ export async function uploadAgentFile(c: Context, req: Request) {
   return storeUploadedAgentFile(c, incoming);
 }
 
-export async function storeUploadedAgentFile(c: Context, incoming: { name: string; content: Buffer }, requireVideoTrack = false) {
+async function storeUploadedAgentFile(c: Context, incoming: { name: string; content: Buffer }) {
   requireAssistant(c);
   try {
     const ext = extname(incoming.name).toLowerCase(),
@@ -639,7 +638,7 @@ export async function storeUploadedAgentFile(c: Context, incoming: { name: strin
       throw Error("单个原视频最大支持200MB（超过64MB将自动压缩）");
 
     const prepared = await compressAgentUpload(incoming.name, incoming.content);
-    const info = await inspectAgentUpload(prepared.name, prepared.content, false, requireVideoTrack);
+    const info = await inspectAgentUpload(prepared.name, prepared.content);
     if (prepared.note) {
       info.metadata.note = info.metadata.note
         ? `${prepared.note} ${info.metadata.note}`
@@ -677,9 +676,7 @@ export async function deleteAgentFile(c: Context, id: string) {
         AND status IN ('QUEUED','RUNNING') AND input::text LIKE $2
       UNION ALL SELECT id FROM assistant_desktop_tasks WHERE user_id=$1::bigint AND (folder_attachment_id=$3::uuid
         OR (folder_attachments IS NOT NULL AND folder_attachments @> jsonb_build_array(jsonb_build_object('id', $3::uuid))))
-        AND status IN ('WAITING','RUNNING','PAUSED','NEEDS_USER')
-      UNION ALL SELECT r.id FROM director_renders r JOIN director_projects p ON p.id=r.project_id
-        WHERE p.user_id=$1::bigint AND r.status IN ('queued','running','paused') AND r.source_files @> ARRAY[$3::uuid] LIMIT 1`, c.actor.id, `%${id}%`, id);
+        AND status IN ('WAITING','RUNNING','PAUSED','NEEDS_USER') LIMIT 1`, c.actor.id, `%${id}%`, id);
     if (busy) fail("FILE_BUSY", "文件仍被任务使用，请完成或停止任务后再删除。", 409);
     await tx.$executeRawUnsafe("DELETE FROM public.personal_assistant_files WHERE id=$1::uuid AND user_id=$2::bigint", id, c.actor.id);
     return { deleted: true };

@@ -1389,6 +1389,24 @@ test("本条可改成普通对话，打开网页的草稿不弹窗，发送后�
   expect(requests[1]).not.toHaveProperty("explicitChat");
 });
 
+test("原本转到导演台的短视频要求留在小序对话", async ({ page }) => {
+  const requests = await setup(page);
+  const retiredRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.startsWith("/api/v1/my-workspace/director"))
+      retiredRequests.push(request.url());
+  });
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const brief = "做一条短视频";
+  await composer.locator("textarea").fill(brief);
+  await expect(composer.getByRole("button", { name: "本条目标：普通对话" })).toBeVisible();
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect.poll(() => requests.map((request) => request.message)).toEqual([brief]);
+  await expect(page).toHaveURL(/\/my-workspace$/);
+  expect(retiredRequests).toEqual([]);
+});
+
 test("首条浏览器指令默认走本地，尚未连接时可发送并获得连接指引", async ({ page }) => {
   const { state, requests } = await desktopScenario(page, false, false);
   state.connected = false;

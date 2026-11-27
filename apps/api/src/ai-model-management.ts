@@ -38,10 +38,12 @@ import {
 import { listRelayStations } from "./modules/workspace/smart-models.js";
 
 const agentaiFeatures = new Set(["assistant_chat", "assistant_employee"]);
-const historicalTeams = [
+const historicalFeatures = [
   { id: "assistant_team", name: "网站智能体团队" },
   { id: "mastra_team", name: "Mastra 智能体团队" },
   { id: "deerflow_team", name: "DeerFlow 智能体团队" },
+  { id: "director_storyboard", name: "导演创作与分镜" },
+  { id: "director_reference", name: "导演参考片拆解" },
 ];
 const agentaiSource = "AgentAI · https://agentai.token6688.com/v1";
 
@@ -296,16 +298,6 @@ export async function aiModelManagement(
     if (feature.kind === "fixed") {
       row.mode = "fixed";
       row.status = "local";
-      const directorLocalModels: Record<string, string> = {
-        director_transcription: "AutoSubs（模型按本机配置）", director_voice_clone: "Qwen3-TTS Base", director_talking_head: "MuseTalk 1.5",
-      };
-      if (directorLocalModels[feature.id]) {
-        row.model = directorLocalModels[feature.id];
-        row.source = "所选 Windows 执行电脑";
-        row.statusText = "在导演台检查本机配置";
-        row.usageNote = "设备本地推理；本站不产生模型 API 费用。";
-        return row;
-      }
       row.model = "Tesseract.js 本地 OCR";
       row.source = "当前浏览器本地运行";
       row.statusText = "本地功能";
@@ -683,9 +675,9 @@ export async function aiModelManagement(
   });
   return {
     features,
-    historicalUsage: historicalTeams
-      .filter((team) => latest.some((row) => row.feature_id === team.id))
-      .map((team) => ({ ...team, usage: usageFor(team.id) })),
+    historicalUsage: historicalFeatures
+      .filter((feature) => latest.some((row) => row.feature_id === feature.id))
+      .map((feature) => ({ ...feature, usage: usageFor(feature.id) })),
     days,
     generatedAt: new Date().toISOString(),
     recordingSince: iso(meta?.recording_since),

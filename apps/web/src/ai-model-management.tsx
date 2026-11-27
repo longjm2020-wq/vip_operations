@@ -448,7 +448,7 @@ export function AiModelManagementPage({
       </Card>
       {!!data?.historicalUsage?.length && (
         <details className="ai-management-history">
-          <summary>历史团队用量</summary>
+          <summary>历史功能用量</summary>
           <Table
             rowKey="id"
             size="small"

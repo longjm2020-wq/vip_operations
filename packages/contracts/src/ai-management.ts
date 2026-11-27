@@ -1,30 +1,5 @@
 export const aiFeatures = [
   {
-    id: "director_transcription", name: "导演录音转字幕", group: "AI 导演台",
-    href: "/my-workspace/director", kind: "fixed",
-    boundary: "正式配音没有手写字幕时，可通过本机登记的 AutoSubs 模型转写并对齐时间点。",
-  },
-  {
-    id: "director_voice_clone", name: "导演音色克隆", group: "AI 导演台",
-    href: "/my-workspace/director", kind: "fixed",
-    boundary: "在执行电脑使用已授权的样本和 Qwen3-TTS Base 合成镜头配音。实际就绪状态见该设备的导演台。",
-  },
-  {
-    id: "director_talking_head", name: "导演肖像口型", group: "AI 导演台",
-    href: "/my-workspace/director", kind: "fixed",
-    boundary: "在已配置 MuseTalk 的执行电脑上用授权肖像和镜头配音生成口播。",
-  },
-  {
-    id: "director_storyboard", name: "导演创作与分镜", group: "AI 导演台",
-    href: "/my-workspace/director", kind: "structured",
-    boundary: "在「编排分镜」按创作要求、素材目录和参考片分析起草或重编分镜。本机素材提供目录信息，素材较多时按数量缩短备注和工作台文档摘录。仅实际模型调用计量。",
-  },
-  {
-    id: "director_reference", name: "导演参考片拆解", group: "AI 导演台",
-    href: "/my-workspace/director", kind: "vision_structured",
-    boundary: "「整理素材」可拆解已有工作台视频、公开作品链接或用户选定的本机参考片。链接视频临时取帧，本机参考片仅发送抽样画面。识图模型分析时间点、节奏和构图，按实际模型请求计量。",
-  },
-  {
     id: "assistant_chat",
     name: "小序互动对话",
     group: "小序",

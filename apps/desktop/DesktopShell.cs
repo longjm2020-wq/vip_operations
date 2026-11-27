@@ -31,13 +31,10 @@ static partial class ShellPolicy {
             uri.Host.Length>0 && uri.UserInfo.Length==0;
     }
     public static Dictionary<string,object> Message(string source,string current,string raw) {
-        if(!Trusted(source)||!Trusted(current)||raw==null||raw.Length>512*1024) throw new Exception("不支持的客户端请求");
-        var d=AssistantForm.D(DirectorMedia.Json().DeserializeObject(raw));
+        if(!Trusted(source)||!Trusted(current)||raw==null||raw.Length>4096) throw new Exception("不支持的客户端请求");
+        var parser=new JavaScriptSerializer { MaxJsonLength=4096, RecursionLimit=16 };
+        var d=AssistantForm.D(parser.DeserializeObject(raw));
         string channel=AssistantForm.S(d,"channel"), action=AssistantForm.S(d,"action");
-        if(channel=="xuti-desktop" && action.StartsWith("director-",StringComparison.Ordinal)) {
-            DirectorStudio.ValidateMessage(source,current,d,action.Substring(9));return d;
-        }
-        if(raw.Length>4096)throw new Exception("不支持的客户端请求");
         if(channel!="xuti-desktop"||!new[]{"status","pair","authorize","show-tasks","open-local-browser","theme"}.Contains(action)) throw new Exception("不支持的客户端请求");
         if(action=="theme") {
             if(d.Keys.Any(k=>!new[]{"channel","action","value"}.Contains(k))||!new[]{"light","dark"}.Contains(AssistantForm.S(d,"value"))) throw new Exception("主题无效");
@@ -74,7 +71,10 @@ static partial class ShellPolicy {
             }
             bool denied=false;try{Message("https://example.com",Origin,valid);}catch{denied=true;}if(!denied)throw new Exception("External page bridge accepted");
             DesktopRelease.SelfTest();
-            DirectorTest.Policy();
+            bool retiredActionDenied=false;
+            try{Message(Origin,Origin,"{\"channel\":\"xuti-desktop\",\"action\":\"director-capabilities\"}");}
+            catch{retiredActionDenied=true;}
+            if(!retiredActionDenied)throw new Exception("Retired bridge action accepted");
             Console.WriteLine("Desktop origin, navigation, bridge and release validation: passed");return 0;
         } catch(Exception e){Console.WriteLine(e.Message);return 1;}
     }
@@ -178,7 +178,6 @@ static class WindowCaption {
 
 sealed class DesktopShell : Form {
     readonly WebView2 workspace=new WebView2{Dock=DockStyle.Fill,DefaultBackgroundColor=Color.FromArgb(247,248,253)};
-    readonly DirectorStudio director=new DirectorStudio();
     readonly AssistantForm assistant=new AssistantForm{TopLevel=false,FormBorderStyle=FormBorderStyle.None,Dock=DockStyle.Fill};
     readonly Panel workPanel=new Panel{Dock=DockStyle.Fill};
     readonly Panel taskPanel=new Panel{Dock=DockStyle.Fill,Visible=false,Padding=new Padding(30,12,30,12)};
@@ -202,7 +201,7 @@ sealed class DesktopShell : Form {
     bool ready,initializing,exiting,closePending,dark;
     bool websiteThemeKnown;
     bool? appliedCaptionTheme;
-    long navigation,directorPageRevision;
+    long navigation;
     string pendingUrl=ShellPolicy.Origin+"/my-workspace";
 
     public DesktopShell() {
@@ -231,7 +230,6 @@ sealed class DesktopShell : Form {
         ClientSizeChanged+=(s,e)=>PositionUpdateNotice();
         updateNotice.SizeChanged+=(s,e)=>PositionUpdateNotice();
         assistant.Changed+=RefreshUpdateNotice;
-        assistant.Changed+=()=>{if(!assistant.Authorized)director.PauseAll();};
         updateTimer.Tick+=async(s,e)=>await CheckForReleaseAsync();
         assistant.SetupRequested+=()=>{var ignored=RequestSetup();};
         assistant.WorkspaceRequested+=()=>ShowWorkspace(null);
@@ -240,7 +238,7 @@ sealed class DesktopShell : Form {
         FormClosing+=async(s,e)=>{
             if(exiting)return;
             e.Cancel=true;if(closePending)return;closePending=true;
-            updateTimer.Stop();releaseLifetime.Cancel();director.PauseAll();
+            updateTimer.Stop();releaseLifetime.Cancel();
             await Task.WhenAny(assistant.EndSession(),Task.Delay(3000));
             assistant.Shutdown();exiting=true;BeginInvoke(new Action(Close));
         };
@@ -426,20 +424,17 @@ sealed class DesktopShell : Form {
             core.PermissionRequested+=(s,e)=>BrowserWindow.Permission(this,e,true);
             core.DownloadStarting+=(s,e)=>BrowserWindow.Download(this,e);
             core.ProcessFailed+=(s,e)=>ShowNotice("网页进程已停止，请关闭并重新打开小序。需要暂停或停止电脑任务时，点击「打开电脑任务」。");
-            core.SourceChanged+=(s,e)=>{directorPageRevision++;};
             core.WebMessageReceived+=OnMessage;
             core.WebResourceResponseReceived+=async(s,e)=>{
                 Uri u;if(!Uri.TryCreate(e.Request.Uri,UriKind.Absolute,out u)||!ShellPolicy.Trusted(e.Request.Uri))return;
-                if(u.AbsolutePath=="/api/v1/auth/login" && e.Response.StatusCode<300)director.PauseAll();
                 if((u.AbsolutePath=="/api/v1/auth/logout"&&e.Response.StatusCode<300)||(u.AbsolutePath=="/api/v1/auth/me"&&e.Response.StatusCode==401)) {
-                    director.PauseAll();
                     try{await assistant.Disconnect();}catch{}
                 }
             };
             // No native object, token, filesystem or execution API is injected into any page.
             await core.AddScriptToExecuteOnDocumentCreatedAsync(@"(() => {
                 if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return;
-                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'" + ShellPolicy.Version + @"',localBrowser:true,nativeUpdates:true,director:true}), writable:false});
+                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'" + ShellPolicy.Version + @"',localBrowser:true,nativeUpdates:true}), writable:false});
                 let lastTheme;
                 const theme = () => {
                     const value=document.documentElement.dataset.theme;
@@ -459,27 +454,6 @@ sealed class DesktopShell : Form {
         try {
             var data=ShellPolicy.Message(e.Source,workspace.CoreWebView2.Source,e.WebMessageAsJson);
             string action=AssistantForm.S(data,"action");id=AssistantForm.S(data,"id");
-            if(action.StartsWith("director-",StringComparison.Ordinal)){
-                string device=assistant.DeviceId,op=action.Substring(9);
-                var payload=AssistantForm.D(data["payload"]);var core=workspace.CoreWebView2;
-                int grantEpoch=director.AuthorizationEpoch;long currentPage=directorPageRevision;
-                Func<bool> allowed=()=>!exiting && version==navigation && assistant.Authorized && assistant.DeviceId==device
-                    && DirectorStudio.DirectorPage(core.Source) && (op!="pick" || (currentPage==directorPageRevision && grantEpoch==director.AuthorizationEpoch));
-                string account=null;object result;
-                if(op=="pick") {
-                    result=await director.Pick(device,payload,allowed,()=>DirectorStudio.Session(core),
-                        (kind,role)=>DirectorStudio.Choose(this,kind,role),
-                        async original=>{account=await director.Grant(core,device,payload,allowed,false,original);},
-                        count=>Reply(version,new{channel="xuti-director-progress",id,processed=count}));
-                } else {
-                    if(op!="capabilities")account=await director.Grant(core,device,payload,allowed,op=="status");
-                    result=await director.Handle(account,device,op,payload,allowed);
-                }
-                if(DirectorStudio.DirectorPage(core.Source) && (account==null || (account==await DirectorStudio.Session(core) && allowed())))
-                    Reply(version,new{channel="xuti-desktop",id,ok=true,data=result});
-                else if(op=="pick")throw DirectorMedia.Error("工作台或本机授权已变化，请重新选择本机素材。");
-                return;
-            }
             if(action=="theme"){ApplyTheme(AssistantForm.S(data,"value")=="dark");return;}
             if(action=="status") await assistant.RefreshStatus();
             if(action=="pair") {

@@ -37,7 +37,6 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { api } from "./api";
-import { directorBriefIntent, inferDirectorRole, uniqueDirectorKinds } from "../../../packages/contracts/src/director-intent";
 import { useUser } from "./shared";
 import {
   canUsePersonalAssistant,
@@ -376,7 +375,6 @@ export function PersonalAssistantProvider({
   const [includeContext, setIncludeContext] = useState(false),
     [sending, setSending] = useState(false);
   const [checkingSend, setCheckingSend] = useState(false);
-  const directorRequest = useRef<{ fingerprint: string; id: string } | null>(null);
   const activeSend = useRef<string | null>(null);
   const [error, setError] = useState("");
   const [agent, setAgent] = useState<AgentOptions>({
@@ -711,23 +709,6 @@ export function PersonalAssistantProvider({
     !agent.attachments.length &&
     shouldSearchAssistantPublicWeb(value);
   const draftIsPublicSearch = shouldSearch(text);
-  const directorDraft = (value: string, publicSearch: boolean) => {
-    if (
-      publicSearch ||
-      externalMode ||
-      (docked && draftOverride && draftOverride.mode !== "chat")
-    )
-      return;
-    const intent = directorBriefIntent(value);
-    if (!intent) return;
-    if (!docked || !draftOverride) {
-      const target = classifyAssistantExecution(value, { inferExternalTargets: false });
-      if (target.kind !== "site") return;
-    }
-    return intent;
-  };
-  const draftDirectorIntent = directorDraft(text, draftIsPublicSearch);
-  const draftDirectorLabel = draftDirectorIntent ? "AI 导演台" : undefined;
   const resolveDraft = (value: string) =>
     workbenchDraftTarget(value, {
       target: draftOverride,
@@ -755,11 +736,11 @@ export function PersonalAssistantProvider({
       (draftRoute?.kind === "desktop" &&
         (!draftRoute.deviceName ||
           draftRoute.deviceName === desktopTarget?.name)));
-  const showChatModel = !externalMode && draftIsSite && !desktopOnlyPrompt && !draftDirectorIntent;
+  const showChatModel = !externalMode && draftIsSite && !desktopOnlyPrompt;
   const desktopExample = desktopTarget?.platform === "macos"
     ? macCopyExample
     : "在我的电脑上打开记事本";
-  const composerReady = draftIsPublicSearch || draftDirectorIntent
+  const composerReady = draftIsPublicSearch
     ? !!data
     : docked
       ? !!data &&
@@ -1101,9 +1082,8 @@ export function PersonalAssistantProvider({
       !externalMode &&
       !nativeAppRequest &&
       (!target || target === "site" || target === "pending");
-    const directorIntent = directorDraft(value, publicSearch);
     const websiteRequest =
-      !directorIntent && siteRequest && selected?.mode !== "chat" && !agent.attachments.length
+      siteRequest && selected?.mode !== "chat" && !agent.attachments.length
         ? parseAssistantWebsiteRequest(value)
         : undefined;
     const webOpenResult = websiteRequest
@@ -1125,36 +1105,6 @@ export function PersonalAssistantProvider({
       desktopSetupLifecycle.current.epoch === epoch &&
       currentOwner.current === user.id;
     try {
-      if (directorIntent) {
-        if (!agent.attachments.length && /^(?:请|帮我)?(?:打开|进入|切换到)\s*(?:AI\s*导演台|智能导演台)[。！!\s]*$/i.test(value.trim())) {
-          setText("");
-          setDraftOverride(undefined);
-          setOpen(false);
-          navigate("/my-workspace/director");
-          return;
-        }
-        const files = agent.attachments;
-        const uniqueKinds = uniqueDirectorKinds(files.map(file => file.mime));
-        const fingerprint = JSON.stringify([user.id, value.trim(), files.map(file => file.id)]);
-        if (directorRequest.current?.fingerprint !== fingerprint)
-          directorRequest.current = { fingerprint, id: requestId };
-        const { data: project } = await api("/my-workspace/director/projects", "POST", {
-          requestId: directorRequest.current.id, brief: value.trim(), title: value.trim().slice(0, 80), ...directorIntent,
-          assets: files.map(file => ({
-            id: file.id, source: "library", fileId: file.id, name: file.name, mime: file.mime,
-            role: inferDirectorRole(file.name, file.mime, value, uniqueKinds.has(file.mime.split("/")[0])),
-            ...(file.duration ? { durationMs: Math.round(file.duration * 1000) } : {}),
-          })),
-        });
-        if (!isCurrent()) return;
-        setText(current => current.trim() === value.trim() ? "" : current);
-        setAgent(previous => ({ ...previous, attachments: previous.attachments.filter(file => !files.some(sent => sent.id === file.id)) }));
-        directorRequest.current = null;
-        setDraftOverride(undefined);
-        setOpen(false);
-        navigate(`/my-workspace/director?project=${encodeURIComponent(project.id)}${directorIntent.mode === "smart" ? "&run=1" : ""}`, { state: { directorAutostart: project.id } });
-        return;
-      }
       if (
         draftStart.current && draftStart.current.anchor !== anchorRequest && (
           (automatic && !selected && !agent.attachments.length &&
@@ -1738,11 +1688,11 @@ export function PersonalAssistantProvider({
         type="text"
         size="small"
         className="assistant-draft-target"
-        aria-label={`本条目标：${draftDirectorLabel || draftRoute.label}`}
-        title={`本条目标：${draftDirectorLabel || draftRoute.label}。点击更改`}
+        aria-label={`本条目标：${draftRoute.label}`}
+        title={`本条目标：${draftRoute.label}。点击更改`}
         disabled={busy || voice.listening}
       >
-        <span>{draftDirectorLabel || draftRoute.label}</span>
+        <span>{draftRoute.label}</span>
         <DownOutlined aria-hidden />
       </Button>
     </Dropdown>
@@ -1950,7 +1900,6 @@ export function PersonalAssistantProvider({
             ? `告诉我你想完成什么，例如：${desktopExample}…`
             : data?.ready ||
                 desktopMode ||
-                draftDirectorIntent ||
                 draftIsPublicSearch ||
                 ((docked || browserMode) && browser.data?.ready)
               ? browserMode

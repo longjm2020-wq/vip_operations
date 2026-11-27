@@ -572,11 +572,13 @@ it("tracks H3 by task id without inventing tokens or currency and does not doubl
     amounts: [],
   });
 });
-it("keeps former engine receipts read-only and separate from employee model settings", async () => {
+it("keeps retired team and director receipts read-only and outside active model settings", async () => {
   await fixture.db!.exec(`
     INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,total_tokens,amount,amount_unit,completed_at) VALUES
     (gen_random_uuid(),'deerflow_team','openrouter.ai','legacy/model','legacy/model','success',10,0.2,'USD',now()),
-    (gen_random_uuid(),'mastra_team','openrouter.ai','mastra/model','mastra/model','success',25,0.3,'OpenRouter credits',now());
+    (gen_random_uuid(),'mastra_team','openrouter.ai','mastra/model','mastra/model','success',25,0.3,'OpenRouter credits',now()),
+    (gen_random_uuid(),'director_storyboard','openrouter.ai','text/model','text/model','success',50,0.4,'USD',now()),
+    (gen_random_uuid(),'director_reference','openrouter.ai','vision/model','vision/model','success',35,0.15,'USD',now());
     INSERT INTO ai_model_usage(id,feature_id,source,status) VALUES(gen_random_uuid(),'mastra_team','openrouter.ai','failed');
   `);
   const { features, historicalUsage } = await aiModelManagement(admin());
@@ -598,7 +600,21 @@ it("keeps former engine receipts read-only and separate from employee model sett
     totalTokens: 25,
     amounts: [{ unit: "OpenRouter credits", amount: 0.3 }],
   });
-  for (const feature of ["assistant_team", "mastra_team", "deerflow_team"]) {
+  expect(historicalUsage.find((f) => f.id === "director_storyboard")?.usage).toMatchObject({
+    requests: 1,
+    totalTokens: 50,
+    amounts: [{ unit: "USD", amount: 0.4 }],
+  });
+  expect(historicalUsage.find((f) => f.id === "director_reference")?.usage).toMatchObject({
+    requests: 1,
+    totalTokens: 35,
+    amounts: [{ unit: "USD", amount: 0.15 }],
+  });
+  for (const feature of [
+    "assistant_team", "mastra_team", "deerflow_team",
+    "director_storyboard", "director_reference", "director_transcription",
+    "director_voice_clone", "director_talking_head",
+  ]) {
     expect(features.some((f) => f.id === feature)).toBe(false);
     await expect(
       saveAiFeatureModel(admin(), {
