@@ -734,6 +734,7 @@ function CommerceTalkVideo({
             );
             void client.invalidateQueries({ queryKey: optionsKey });
           }}
+          onVoiceRecheck={() => void options.refetch()}
         />
       )}
     </>
@@ -762,6 +763,7 @@ function PresenterDialog({
   onRemoved,
   onVoiceSelected,
   onVoiceRemoved,
+  onVoiceRecheck,
 }: {
   account: string;
   options: Options;
@@ -770,6 +772,7 @@ function PresenterDialog({
   onRemoved: (id: string) => void;
   onVoiceSelected: (voice: Voice) => void;
   onVoiceRemoved: (id: string) => void;
+  onVoiceRecheck: () => void;
 }) {
   const { modal } = App.useApp();
   const canUpload = Boolean(
@@ -1042,6 +1045,7 @@ function PresenterDialog({
                 catalog={options.bailian}
                 disabled={saving}
                 onBusy={setVoiceBusy}
+                onRecheck={onVoiceRecheck}
                 onSelect={(voice) => {
                   const id = `bailian:${voice.id}`;
                   onVoiceSelected({

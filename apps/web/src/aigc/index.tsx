@@ -103,6 +103,9 @@ function AigcStudio() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState("");
   const [settings, setSettings] = useState(false);
+  const focusVoiceSettings =
+    params.get("settings") === "bailian-voice" &&
+    user.permissions.includes("aigc.manage");
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [trash, setTrash] = useState(false);
@@ -846,11 +849,24 @@ function AigcStudio() {
       <Drawer
         title="AIGC 服务设置"
         width={720}
-        open={settings}
-        onClose={() => setSettings(false)}
+        open={settings || focusVoiceSettings}
+        onClose={() => {
+          setSettings(false);
+          if (focusVoiceSettings)
+            setParams(
+              (current) => {
+                const next = new URLSearchParams(current);
+                next.delete("settings");
+                return next;
+              },
+              { replace: true },
+            );
+        }}
         destroyOnHidden
       >
         <ServiceSettings
+          key={focusVoiceSettings ? "bailian-voice" : "services"}
+          focusVoice={focusVoiceSettings}
           onSaved={() => {
             void reload();
             void loadCatalog().catch((e) => message.error(e.message));

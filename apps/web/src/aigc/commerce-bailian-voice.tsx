@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Checkbox, Input, Select } from "antd";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   bailianCommerceSpeechCost,
   bailianCommerceVoiceModels,
@@ -10,6 +11,7 @@ import {
 } from "../../../../packages/contracts/src/bailian-commerce-voice";
 import { assistantPublicText } from "../../../../packages/contracts/src/ai-presentation";
 import { csrf, queryClient } from "../api";
+import { useCan } from "../shared";
 import { studioApi } from "./api";
 
 const path = "/commerce-video/voices";
@@ -65,6 +67,7 @@ export function CommerceBailianVoice({
   onSelect,
   onRemoved,
   onBusy,
+  onRecheck,
 }: {
   account: string;
   catalog: BailianCommerceVoiceCatalog;
@@ -72,9 +75,11 @@ export function CommerceBailianVoice({
   onSelect: (voice: BailianCommerceVoice) => void;
   onRemoved: (id: string) => void;
   onBusy: (busy: boolean) => void;
+  onRecheck: () => void;
 }) {
   const client = useQueryClient();
   const { modal } = App.useApp();
+  const canManage = useCan("aigc.manage");
   const listKey = ["commerce-video", account, "bailian-voices"];
   const [name, setName] = useState("");
   const [model, setModel] = useState(catalog.models[0]?.id);
@@ -82,6 +87,7 @@ export function CommerceBailianVoice({
   const [authorized, setAuthorized] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [enrollmentFailed, setEnrollmentFailed] = useState(false);
   const [previewId, setPreviewId] = useState<string>();
   const [previewText, setPreviewText] = useState(
     "这件外套是日常通勤款，看看它的版型和袖口。",
@@ -215,8 +221,17 @@ export function CommerceBailianVoice({
       form.set("name", label);
       form.set("authorized", "true");
       form.set("requestId", enrollment.current!.id);
-      saveVoice(await studioApi(path, "POST", form));
+      const result: BailianCommerceVoice = await studioApi(path, "POST", form);
+      saveVoice(result);
+      if (result.status === "failed") {
+        // An explicit refusal can be retried from the same form after credentials are fixed.
+        enrollment.current = null;
+        setEnrollmentFailed(true);
+        setError(result.note || "音色创建未获受理。请核对音色连接后重试。");
+        return;
+      }
       enrollment.current = null;
+      setEnrollmentFailed(false);
       setFile(undefined);
       setName("");
       setAuthorized(false);
@@ -297,6 +312,11 @@ export function CommerceBailianVoice({
           type="info"
           showIcon
           title={catalog.reason || "请管理员连接百炼北京业务空间。"}
+          action={
+            <Button size="small" onClick={onRecheck}>
+              重新检查
+            </Button>
+          }
         />
       )}
       {catalog.configured && (
@@ -310,7 +330,10 @@ export function CommerceBailianVoice({
                 value: entry.id,
                 label: entry.label,
               }))}
-              onChange={setModel}
+              onChange={(value) => {
+                setModel(value);
+                setEnrollmentFailed(false);
+              }}
               disabled={locked}
             />
           </label>
@@ -325,7 +348,10 @@ export function CommerceBailianVoice({
             value={name}
             maxLength={50}
             disabled={locked}
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) => {
+              setName(event.target.value);
+              setEnrollmentFailed(false);
+            }}
           />
           <label className="talk-video-file">
             参考录音
@@ -337,6 +363,7 @@ export function CommerceBailianVoice({
               onChange={(event) => {
                 const candidate = event.target.files?.[0];
                 setError("");
+                setEnrollmentFailed(false);
                 setAuthorized(false);
                 if (
                   candidate &&
@@ -369,7 +396,7 @@ export function CommerceBailianVoice({
             }
             onClick={create}
           >
-            创建百炼音色
+            {enrollmentFailed ? "重试创建百炼音色" : "创建百炼音色"}
           </Button>
         </>
       )}
@@ -396,6 +423,15 @@ export function CommerceBailianVoice({
               </p>
               {voice.note && (
                 <p className="talk-video-voice-note">{voice.note}</p>
+              )}
+              {(voice.providerCode || voice.providerRequestId) && (
+                <details className="talk-video-voice-note">
+                  <summary>查看百炼回执</summary>
+                  {voice.providerCode && <p>错误码 {voice.providerCode}</p>}
+                  {voice.providerRequestId && (
+                    <p>请求编号 {voice.providerRequestId}</p>
+                  )}
+                </details>
               )}
               <div className="talk-video-voice-actions">
                 {voice.status === "ready" &&
@@ -496,6 +532,15 @@ export function CommerceBailianVoice({
         </p>
       )}
       {error && <Alert type="error" showIcon title={error} />}
+      {(!catalog.configured || enrollmentFailed) && canManage && (
+        <Link
+          to="/aigc?settings=bailian-voice"
+          target="_blank"
+          rel="noreferrer"
+        >
+          在新标签页核验百炼音色连接
+        </Link>
+      )}
     </section>
   );
 }

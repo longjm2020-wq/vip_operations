@@ -17,6 +17,8 @@ import {
   bailianCommerceSpeechCost,
   bailianCommerceVoiceModels,
   bailianCommerceVoiceModelSchema,
+  bailianProviderCode,
+  bailianProviderRequestId,
   type BailianCommerceVoice,
   type BailianCommerceVoiceCatalog,
   type BailianCommerceVoiceModel,
@@ -60,7 +62,7 @@ const speechInput = z.strictObject({
   maxCny: z.number().positive().max(20),
 });
 const connectionMissing =
-  "请管理员在 AIGC 服务配置中设置百炼北京业务空间和 API Key。";
+  "请管理员在「AIGC 服务配置」的百炼音色连接中设置北京业务空间和 API Key。";
 const uncertainEnrollment =
   "百炼音色创建结果待核对。请刷新本条音色，系统会查询原申请。";
 const uncertainSpeech =
@@ -103,6 +105,8 @@ function snapshot(
     status,
     available: Boolean(matched && status === "ready"),
     note,
+    providerCode: bailianProviderCode(voice.provider_error_code),
+    providerRequestId: bailianProviderRequestId(voice.provider_request_id),
   };
 }
 
@@ -343,6 +347,14 @@ function safeProviderFailure(error: unknown, fallback: string) {
   return fallback;
 }
 
+function enrollmentDiagnostics(error: unknown) {
+  const provider = error instanceof BailianVoiceError ? error : undefined;
+  return {
+    code: bailianProviderCode(provider?.providerCode) ?? null,
+    requestId: bailianProviderRequestId(provider?.providerRequestId) ?? null,
+  };
+}
+
 async function checkBailianVoice(
   voice: Row,
   connection: Connection | undefined,
@@ -392,7 +404,9 @@ async function checkBailianVoice(
       (await one(
         db,
         `
-      UPDATE public.commerce_bailian_voices SET status=$2,provider_voice_id=COALESCE(provider_voice_id,$3),note=$4
+      UPDATE public.commerce_bailian_voices
+      SET status=$2,provider_voice_id=COALESCE(provider_voice_id,$3),note=$4,
+        provider_error_code=NULL,provider_request_id=NULL
       WHERE id=$1::uuid AND deleted_at IS NULL AND deleting_at IS NULL AND status IN ('pending','unknown')
       RETURNING *
     `,
@@ -402,8 +416,27 @@ async function checkBailianVoice(
         note,
       )) || voice
     );
-  } catch {
-    return claimed;
+  } catch (error) {
+    if (!(error instanceof BailianVoiceError) || error.uncertain)
+      return claimed;
+    // A rejected status query cannot determine whether the creation completed.
+    const diagnostics = enrollmentDiagnostics(error);
+    return (
+      (await one(
+        db,
+        `
+      UPDATE public.commerce_bailian_voices SET status='unknown',note=$2,
+        provider_error_code=$3,provider_request_id=$4
+      WHERE id=$1::uuid AND deleted_at IS NULL AND deleting_at IS NULL
+        AND status IN ('pending','unknown')
+      RETURNING *
+    `,
+        voice.id,
+        error.message,
+        diagnostics.code,
+        diagnostics.requestId,
+      )) || claimed
+    );
   }
 }
 
@@ -514,15 +547,19 @@ export async function createBailianCommerceVoice(c: Context, req: Request) {
     return snapshot(stored, connection);
   } catch (error) {
     const rejected = error instanceof BailianVoiceError && !error.uncertain;
+    const diagnostics = enrollmentDiagnostics(error);
     const stored = await one(
       db,
       `
-      UPDATE public.commerce_bailian_voices SET status=$2,note=$3
+      UPDATE public.commerce_bailian_voices SET status=$2,note=$3,
+        provider_error_code=$4,provider_request_id=$5
       WHERE id=$1::uuid AND status='pending' AND deleted_at IS NULL RETURNING *
     `,
       reserved.voice.id,
       rejected ? "failed" : "unknown",
       safeProviderFailure(error, uncertainEnrollment),
+      diagnostics.code,
+      diagnostics.requestId,
     );
     return snapshot(
       stored || (await ownedVoice(c.actor, reserved.voice.id)),

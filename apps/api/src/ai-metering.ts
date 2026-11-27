@@ -82,7 +82,7 @@ export function providerUsage(
               ? currency
               : null;
   const credits = number(usage.credits ?? usage.points);
-  const bailian = /^ws-[a-z0-9]+\.cn-beijing\.maas\.aliyuncs\.com$/.test(
+  const bailian = /^(?:ws|llm)-[a-z0-9]+\.cn-beijing\.maas\.aliyuncs\.com$/.test(
     source,
   );
   const task =

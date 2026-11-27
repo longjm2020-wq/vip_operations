@@ -17,6 +17,7 @@ import {
 } from "antd";
 import { Link } from "react-router-dom";
 import { studioApi, type Item } from "./api";
+import { BailianVoiceConnection } from "./bailian-voice-connection";
 import "./settings.css";
 const secretLabels: Record<string, string> = {
   BAILIAN_VIDEO_API_KEY: "百炼 MiniMax H3 视频 API Key",
@@ -39,7 +40,13 @@ const secretLabels: Record<string, string> = {
   XYLP_CHAT_SOL6_KEY: "TT-6 Sol 编译渠道 Key",
   XYLP_CHAT_SOL56_KEY: "TT-5.6 Sol 编译渠道 Key",
 };
-export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
+export function ServiceSettings({
+  onSaved,
+  focusVoice = false,
+}: {
+  onSaved: () => void;
+  focusVoice?: boolean;
+}) {
   const { message, modal } = App.useApp();
   const [tab, setTab] = useState("connections");
   const [config, setConfig] = useState<Item>();
@@ -234,7 +241,7 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                 </div>
                 <Collapse
                   className="aigc-connections-groups"
-                  defaultActiveKey={["video"]}
+                  defaultActiveKey={focusVoice ? ["bailian-voice"] : ["video"]}
                   items={[
                     {
                       key: "video",
@@ -262,7 +269,7 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                             视频生成：MiniMax/MiniMax-H3
                           </p>
                           <p className="aigc-connection-note">
-                            北京业务空间 · 同时用于服装口播的百炼音色复刻与配音
+                            用于调用 MiniMax H3 的北京业务空间。
                           </p>
                           {config.bailianReuseAvailable && (
                             <div className="aigc-connection-reuse">
@@ -383,6 +390,49 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                       ),
                     },
                     {
+                      key: "bailian-voice",
+                      label: label("百炼音色连接", "服装口播 · 音色复刻与配音"),
+                      extra: (
+                        <Tag
+                          color={
+                            config.bailianVoiceSource === "voice"
+                              ? "blue"
+                              : "default"
+                          }
+                        >
+                          {config.bailianVoiceSource === "voice"
+                            ? "专用连接"
+                            : "待核验"}
+                        </Tag>
+                      ),
+                      children: (
+                        <BailianVoiceConnection
+                          config={config}
+                          disabled={busy}
+                          onSaved={(updated) => {
+                            setConfig(
+                              (current) =>
+                                current && {
+                                  ...current,
+                                  revision: updated.revision,
+                                  bailianVoiceWorkspaceId:
+                                    updated.bailianVoiceWorkspaceId,
+                                  bailianVoiceSource:
+                                    updated.bailianVoiceSource,
+                                  secrets: {
+                                    ...current.secrets,
+                                    BAILIAN_VOICE_API_KEY:
+                                      updated.secrets?.BAILIAN_VOICE_API_KEY,
+                                  },
+                                },
+                            );
+                            message.success("百炼音色连接已加密保存");
+                            onSaved();
+                          }}
+                        />
+                      ),
+                    },
+                    {
                       key: "images",
                       label: label("图片生成", "玄宇令牌 / 星火 AIGC"),
                       extra: keyStatus(imageKeys),
@@ -478,7 +528,9 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                       children: (
                         <>
                           <p className="aigc-connection-note">
-                            使用 fal 云端服务生成 768P 口播。保存后可在口播页提交照片和录音。仅实际生成按 fal 计费。{" "}
+                            使用 fal 云端服务生成 768P
+                            口播。保存后可在口播页提交照片和录音。仅实际生成按
+                            fal 计费。{" "}
                             <a
                               href="https://fal.ai/dashboard/keys"
                               target="_blank"

@@ -11,7 +11,14 @@ import {
   maxAssetBytes,
   objectStorageReady,
 } from "./persistence.js";
-import { engineConfig, visibleSettings, saveSettings } from "./config.js";
+import {
+  engineConfig,
+  readBailianVoiceCredential,
+  saveBailianVoiceConnection,
+  visibleSettings,
+  saveSettings,
+} from "./config.js";
+import { checkBailianVoiceAccess } from "./bailian-voice-provider.js";
 import { startVideoCheck, videoCheckStatus } from "./video-check.js";
 import type { Actor } from "../../core.js";
 import { handleCommerceVideo, processCommerceVideo } from "./commerce-video.js";
@@ -222,6 +229,20 @@ export function createAigcService() {
             .status(202)
             .json(await startVideoCheck(await jsonBody(req), actor!.id));
         return res.status(405).json({ error: "不支持此操作" });
+      }
+      if (suffix === "/services/bailian-voice-connection" && req.method === "PUT") {
+        const result = await saveBailianVoiceConnection(actor!.id, await jsonBody(req));
+        return res.json(result);
+      }
+      if (suffix === "/services/bailian-voice-check" && req.method === "POST") {
+        const body = await jsonBody(req);
+        const source = body?.source;
+        if (source !== "configured" && source !== "saved")
+          return res.status(400).json({ error: "请选择要核验的百炼语音连接" });
+        const connection = await readBailianVoiceCredential(source);
+        if (!connection)
+          return res.status(409).json({ error: "所选连接尚未配置有效的百炼北京业务空间和 API Key" });
+        return res.json({ ...(await checkBailianVoiceAccess(connection)), source });
       }
       if (suffix === "/services") {
         if (req.method === "GET") return res.json(await visibleSettings());

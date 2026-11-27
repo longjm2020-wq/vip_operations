@@ -24,7 +24,49 @@ export type BailianCommerceVoice = {
   status: "pending" | "ready" | "failed" | "unknown";
   available?: boolean;
   note?: string;
+  providerCode?: string;
+  providerRequestId?: string;
 };
+
+const bailianDiagnosticCodes = new Set([
+  "AccessDenied",
+  "AccessDenied.Unpurchased",
+  "access_denied",
+  "AllocationQuota.FreeTierOnly",
+  "App.AccessDenied",
+  "Arrearage",
+  "BailianGateway.Team.NotAuthorised",
+  "BailianGateway.Workspace.NotAuthorised",
+  "DataInspectionFailed",
+  "data_inspection_failed",
+  "Endpoint.AccessDenied",
+  "insufficient_quota",
+  "InternalError",
+  "InvalidApiKey",
+  "invalid_api_key",
+  "InvalidParameter",
+  "isv.OUT_OF_SERVICE",
+  "Model.AccessDenied",
+  "ModelNotFound",
+  "NotFound",
+  "ServiceUnavailable",
+  "Throttling.AllocationQuota",
+  "Throttling.RateQuota",
+  "Workspace.AccessDenied",
+]);
+
+export const bailianProviderCode = (value: unknown) =>
+  typeof value === "string" && bailianDiagnosticCodes.has(value)
+    ? value
+    : undefined;
+
+export const bailianProviderRequestId = (value: unknown) =>
+  typeof value === "string" &&
+  /^(?:[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}|[a-f0-9]{32}|[a-f0-9]{64})$/i.test(
+    value,
+  )
+    ? value
+    : undefined;
 
 export type BailianCommerceVoiceCatalog = {
   configured: boolean;

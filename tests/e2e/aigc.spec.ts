@@ -229,6 +229,109 @@ test("H3 settings reuse a saved connection and require confirmation before one p
     path: test.info().outputPath("aigc-connections.png"),
   });
 });
+
+test("百炼音色可独立核验与保存，保留原 H3 视频连接", async ({ page }) => {
+  await fixture(page);
+  const videoWorkspace = "ws-video12345678";
+  const savedWorkspace = "ws-audio12345678";
+  let settings = {
+    revision: 4,
+    encryptionReady: true,
+    bailianWorkspaceId: videoWorkspace,
+    bailianVoiceWorkspaceId: "",
+    bailianVoiceSource: "video",
+    bailianReuseAvailable: true,
+    bailianReuseWorkspaceId: savedWorkspace,
+    secrets: { BAILIAN_VIDEO_API_KEY: true, BAILIAN_VOICE_API_KEY: false },
+  };
+  const checks: string[] = [];
+  await page.route("**/api/v1/aigc/services", (route) => {
+    expect(route.request().method()).toBe("GET");
+    return route.fulfill({ json: settings });
+  });
+  await page.route(
+    "**/api/v1/aigc/services/bailian-voice-connection",
+    (route) => {
+      expect(route.request().method()).toBe("PUT");
+      expect(route.request().postDataJSON()).toEqual({
+        revision: 4,
+        bailianVoiceWorkspaceId: savedWorkspace,
+        useSavedQwenVoiceConnection: true,
+      });
+      settings = {
+        ...settings,
+        revision: 5,
+        bailianVoiceSource: "voice",
+        bailianVoiceWorkspaceId: savedWorkspace,
+        secrets: { ...settings.secrets, BAILIAN_VOICE_API_KEY: true },
+      };
+      return route.fulfill({ json: settings });
+    },
+  );
+  await page.route("**/api/v1/aigc/services/bailian-voice-check", (route) => {
+    const { source } = route.request().postDataJSON();
+    checks.push(source);
+    const isVideoKey =
+      source === "configured" && settings.bailianVoiceSource === "video";
+    return route.fulfill({
+      json: {
+        checkedAt: "2026-11-28T03:00:00.000Z",
+        source,
+        enrollment: isVideoKey
+          ? {
+              status: "unauthorized",
+              note: "此密钥无法查询音色，请核对业务空间。",
+              diagnostic: {
+                action: "list_voice",
+                providerStatus: 403,
+                providerCode: "AccessDenied",
+                providerRequestId: "req-audio-403",
+              },
+            }
+          : { status: "reachable", note: "音色查询通过" },
+        models: [
+          { id: "qwen-audio-3.1-tts-plus", status: "unknown" },
+          {
+            id: "cosyvoice-v3.5-flash",
+            status: isVideoKey ? "denied" : "authorized",
+          },
+        ],
+      },
+    });
+  });
+  await page.goto("/aigc?settings=bailian-voice");
+  const drawer = page.getByRole("dialog", { name: "AIGC 服务设置" });
+  await expect(drawer.getByLabel("百炼音色 API Key")).toBeVisible();
+  await drawer
+    .getByRole("button", { name: "核验音色连接", exact: true })
+    .click();
+  await expect(drawer.getByText("音色查询未获授权")).toBeVisible();
+  await expect(drawer.getByText(/HTTP 403.*req-audio-403/)).toBeVisible();
+  await drawer.getByRole("button", { name: "核验小序语音连接" }).click();
+  await expect(drawer.getByText("音色查询接口可访问")).toBeVisible();
+  await expect(
+    drawer.getByText(/CosyVoice 3.5 Flash.*权限已核对/),
+  ).toBeVisible();
+  await expect(
+    drawer.getByText(/Qwen Audio 3.1 TTS Plus.*权限待核对/),
+  ).toBeVisible();
+  await drawer.getByRole("checkbox", { name: /将小序已保存/ }).check();
+  await expect(drawer.getByLabel("百炼音色北京业务空间 ID")).toHaveValue(
+    savedWorkspace,
+  );
+  await drawer.getByRole("button", { name: "保存音色连接" }).click();
+  await expect(drawer.getByText(/当前使用专用音色连接/)).toBeVisible();
+  await drawer
+    .getByRole("button", { name: "核验音色连接", exact: true })
+    .click();
+  await expect(drawer.getByText("音色查询接口可访问")).toBeVisible();
+  await drawer.getByRole("button", { name: /^视频生成/ }).click();
+  await expect(
+    drawer.getByLabel("百炼北京业务空间 ID", { exact: true }),
+  ).toHaveValue(videoWorkspace);
+  expect(checks).toEqual(["configured", "saved", "configured"]);
+});
+
 test("native blue studio supports all five entries and omits commercial navigation", async ({
   page,
 }) => {

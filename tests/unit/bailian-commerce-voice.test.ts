@@ -164,6 +164,15 @@ describe("百炼服装口播复刻音色", () => {
       import.meta.url,
     );
     await fixture.db.exec(await readFile(migration, "utf8"));
+    await fixture.db.exec(
+      await readFile(
+        new URL(
+          "../../packages/database/migrations/131_bailian_voice_diagnostics.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
   });
   afterAll(async () => {
     await fixture.db?.close();
@@ -269,6 +278,117 @@ describe("百炼服装口播复刻音色", () => {
       prefix,
       fields.model,
     );
+    expect(fixture.enroll).toHaveBeenCalledTimes(1);
+  });
+
+  it("保存失败的回执标识与已知错误码，同一请求不重传录音", async () => {
+    const fields = requestFields();
+    const providerRequestId = "6af300ee-ea98-498a-9ee8-e3bf902ad6bc";
+    fixture.enroll.mockRejectedValueOnce(
+      new BailianVoiceError(
+        "BAILIAN_VOICE_AUTH",
+        "当前业务空间未授权所选模型。",
+        false,
+        403,
+        {
+          action: "create_voice",
+          providerStatus: 403,
+          providerCode: "Model.AccessDenied",
+          providerRequestId,
+        },
+      ),
+    );
+    const failed = await createBailianCommerceVoice(own(), upload(fields));
+    expect(failed).toMatchObject({
+      status: "failed",
+      providerCode: "Model.AccessDenied",
+      providerRequestId,
+      note: "当前业务空间未授权所选模型。",
+    });
+    expect(await readBailianCommerceVoice(own(), failed.id)).toEqual(failed);
+    expect(await createBailianCommerceVoice(own(), upload(fields))).toEqual(
+      failed,
+    );
+    await expect(
+      readBailianCommerceVoice(own("2"), failed.id),
+    ).rejects.toMatchObject(withCode("BAILIAN_VOICE_NOT_FOUND"));
+    expect(fixture.enroll).toHaveBeenCalledTimes(1);
+    expect(
+      await createBailianCommerceVoice(
+        own(),
+        upload({
+          ...fields,
+          requestId: randomUUID(),
+        }),
+      ),
+    ).toMatchObject({ status: "ready" });
+    expect(fixture.enroll).toHaveBeenCalledTimes(2);
+  });
+
+  it("拒绝保存供应商附带的非标准错误码和含个人信息或链接的标识", async () => {
+    const unsafeCode = "customer@example.com";
+    const unsafeRequestId = "https://example.com/audio?signature=private";
+    fixture.enroll.mockRejectedValueOnce(
+      new BailianVoiceError(
+        "BAILIAN_VOICE_AUTH",
+        "请核对业务空间及 API Key。",
+        false,
+        403,
+        {
+          action: "create_voice",
+          providerStatus: 403,
+          providerCode: unsafeCode,
+          providerRequestId: unsafeRequestId,
+        },
+      ),
+    );
+    const failed = await createBailianCommerceVoice(own(), upload());
+    expect(failed).toMatchObject({
+      status: "failed",
+      providerCode: undefined,
+      providerRequestId: undefined,
+    });
+    expect(JSON.stringify(failed)).not.toMatch(/customer@|https:\/\//);
+    const stored = await fixture.db!.query(
+      "SELECT provider_error_code,provider_request_id FROM public.commerce_bailian_voices",
+    );
+    expect(stored.rows).toEqual([
+      { provider_error_code: null, provider_request_id: null },
+    ]);
+  });
+
+  it("查询时遭到拒绝保留原创建任务，恢复权限后可继续查到音色", async () => {
+    fixture.enroll.mockImplementationOnce(async (_connection, input) => ({
+      voiceId: input.model + "-" + input.prefix + "-example",
+      status: "pending",
+    }));
+    const voice = await createBailianCommerceVoice(own(), upload());
+    fixture.query.mockRejectedValueOnce(
+      new BailianVoiceError(
+        "BAILIAN_VOICE_AUTH",
+        "当前业务空间无查询权限。",
+        false,
+        403,
+        {
+          action: "query_voice",
+          providerStatus: 403,
+          providerCode: "Workspace.AccessDenied",
+        },
+      ),
+    );
+    expect(await readBailianCommerceVoice(own(), voice.id)).toMatchObject({
+      status: "unknown",
+      providerCode: "Workspace.AccessDenied",
+    });
+    await fixture.db!.exec(
+      "UPDATE public.commerce_bailian_voices SET checked_at=NULL",
+    );
+    fixture.query.mockResolvedValueOnce({ status: "ready" });
+    expect(await readBailianCommerceVoice(own(), voice.id)).toMatchObject({
+      status: "ready",
+      providerCode: undefined,
+      providerRequestId: undefined,
+    });
     expect(fixture.enroll).toHaveBeenCalledTimes(1);
   });
 

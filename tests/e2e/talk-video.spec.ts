@@ -96,6 +96,7 @@ test("设置主播可独立创建百炼音色、读取试听并保存主播", as
     provider: "bailian",
   };
   let created = false;
+  let rejectedRequest: string | undefined;
   let saved = false;
   let portraitUploaded = false;
   let previews = 0;
@@ -158,6 +159,21 @@ test("设置主播可独立创建百炼音色、读取试听并保存主播", as
       expect(multipart.get("authorized")).toBe("true");
       expect(multipart.get("requestId")).toMatch(/^[0-9a-f-]{36}$/);
       expect((multipart.get("file") as File).size).toBe(recording.length);
+      const requestId = String(multipart.get("requestId"));
+      if (!rejectedRequest) {
+        rejectedRequest = requestId;
+        return route.fulfill({
+          json: {
+            ...voice,
+            id: randomUUID(),
+            status: "failed",
+            note: "百炼拒绝了音色创建，请核对北京业务空间。",
+            providerCode: "AccessDenied",
+            providerRequestId: "fixture-denied",
+          },
+        });
+      }
+      expect(requestId).not.toBe(rejectedRequest);
       created = true;
       return route.fulfill({ json: { ...voice, status: "pending" } });
     }
@@ -239,7 +255,17 @@ test("设置主播可独立创建百炼音色、读取试听并保存主播", as
   await expect(create).toBeDisabled();
   await panel.getByRole("checkbox").check();
   await create.click();
-  const row = panel.getByRole("listitem", { name: voice.name });
+  await expect(panel.getByRole("alert")).toContainText("百炼拒绝了音色创建");
+  await panel.getByText("查看百炼回执").click();
+  await expect(panel.getByText("请求编号 fixture-denied")).toBeVisible();
+  await expect(panel.getByRole("textbox", { name: "音色名称" })).toHaveValue(
+    voice.name,
+  );
+  await expect(panel.getByRole("checkbox")).toBeChecked();
+  await panel.getByRole("button", { name: "重试创建百炼音色" }).click();
+  const row = panel.getByRole("listitem", { name: voice.name }).filter({
+    has: page.getByRole("button", { name: "试听", exact: true }),
+  });
   await row.getByRole("button", { name: "试听" }).click();
   const listen = panel.getByRole("button", { name: "生成试听" });
   await listen.click();

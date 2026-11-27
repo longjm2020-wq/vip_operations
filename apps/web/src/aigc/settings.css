@@ -93,6 +93,25 @@
 .aigc-connection-check .aigc-connection-note {
   margin: 0;
 }
+.aigc-voice-probe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.aigc-voice-probe p {
+  margin: 0 0 5px;
+}
+.aigc-voice-probe ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.aigc-voice-probe li + li {
+  margin-top: 4px;
+}
+.aigc-voice-probe small {
+  display: block;
+  overflow-wrap: anywhere;
+}
 .aigc-connection-details {
   font-size: 12px;
   color: var(--app-secondary);

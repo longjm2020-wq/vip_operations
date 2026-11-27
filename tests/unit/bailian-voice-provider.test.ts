@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bailianCommerceVoiceModels } from "../../packages/contracts/src/bailian-commerce-voice.js";
 import {
+  checkBailianVoiceAccess,
   deleteBailianVoice,
   enrollBailianVoice,
   findBailianVoice,
@@ -15,20 +16,20 @@ import { runMedia } from "../../apps/api/src/modules/workspace/agent-media.js";
 
 const provider = vi.hoisted(() => ({
   meteredFetch: vi.fn(),
-  storedSettings: vi.fn(),
-  encryptionReady: vi.fn(),
-  decryptSecret: vi.fn(),
+  readBailianVoiceCredential: vi.fn(),
 }));
 vi.mock("../../apps/api/src/ai-metering.js", () => ({
   aiFetch: provider.meteredFetch,
 }));
-vi.mock("../../apps/api/src/modules/aigc/config.js", () => ({
-  storedSettings: provider.storedSettings,
-}));
-vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
-  encryptionReady: provider.encryptionReady,
-  decryptSecret: provider.decryptSecret,
-}));
+vi.mock(
+  "../../apps/api/src/modules/aigc/config.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../apps/api/src/modules/aigc/config.js")
+    >()),
+    readBailianVoiceCredential: provider.readBailianVoiceCredential,
+  }),
+);
 
 const connection = { workspaceId: "ws-0123456789", apiKey: "sk-fixture-only" };
 const host = "https://ws-0123456789.cn-beijing.maas.aliyuncs.com";
@@ -37,6 +38,7 @@ const resultPath =
 const model = bailianCommerceVoiceModels[0].id;
 const prefix = "fixture123";
 const voiceId = `${model}-${prefix}-abc123`;
+const receiptId = "649b2bbc-c541-9e16-9845-db7fe4fe5b2d";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -44,24 +46,139 @@ afterEach(() => {
 });
 
 describe("百炼主播音色 HTTP 协议", () => {
-  it("仅使用 AIGC 已保存且可解密的北京业务空间连接", async () => {
-    provider.encryptionReady.mockReturnValue(true);
-    provider.storedSettings.mockResolvedValue({
-      config: { bailianWorkspaceId: connection.workspaceId },
-      secrets_encrypted: "encrypted",
-      updated_at: new Date("2026-11-27T00:00:00Z"),
-    });
-    provider.decryptSecret.mockReturnValue(
-      JSON.stringify({ BAILIAN_VIDEO_API_KEY: connection.apiKey }),
-    );
-    expect(await getBailianVoiceConnection()).toEqual({
+  it("读取 AIGC 配置及显式选择的小序百炼语音连接", async () => {
+    const configured = {
       ...connection,
       updatedAt: "2026-11-27T00:00:00.000Z",
+    };
+    provider.readBailianVoiceCredential.mockResolvedValueOnce(configured);
+    expect(await getBailianVoiceConnection()).toEqual(configured);
+    expect(await getBailianVoiceConnection("saved")).toBeUndefined();
+    expect(provider.readBailianVoiceCredential.mock.calls).toEqual([
+      ["configured"],
+      ["saved"],
+    ]);
+  });
+
+  it("用北京 llm- API Host 只读检查复刻访问与三款模型的授权", async () => {
+    const authHost = "https://llm-0123456789.cn-beijing.maas.aliyuncs.com";
+    const network = vi.fn(async (url: string | URL, init: RequestInit) => {
+      expect(init.redirect).toBe("error");
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer sk-fixture-only",
+      });
+      const parsed = new URL(url);
+      expect(parsed.origin).toBe(authHost);
+      if (parsed.pathname === "/api/v1/services/audio/tts/customization") {
+        expect(init.method).toBe("POST");
+        expect(JSON.parse(init.body as string)).toEqual({
+          model: "voice-enrollment",
+          input: {
+            action: "list_voice",
+            prefix: "xuticheck",
+            page_index: 0,
+            page_size: 1,
+          },
+        });
+        return Response.json({
+          request_id: receiptId,
+          output: { voice_list: [{ voice_id: "private-result-to-ignore" }] },
+        });
+      }
+      expect(init.method).toBe("GET");
+      expect(parsed.pathname).toBe("/api/v1/models/permissions");
+      expect(parsed.searchParams.get("authorization_scope")).toBe("AUTHORIZED");
+      expect(parsed.searchParams.get("action")).toBe("INFERENCE");
+      const selected = parsed.searchParams.get("model");
+      const [qwen, cosyPlus] = bailianCommerceVoiceModels.map(({ id }) => id);
+      return Response.json({
+        success: true,
+        output: {
+          permissions: [
+            ...(selected === qwen || selected === cosyPlus
+              ? [
+                  {
+                    model: selected,
+                    permissions: { inference: selected === qwen },
+                  },
+                ]
+              : []),
+            { model: "another-model", permissions: { inference: true } },
+          ],
+        },
+      });
     });
-    provider.decryptSecret.mockImplementation(() => {
-      throw Error("damaged data");
+    vi.stubGlobal("fetch", network);
+    const result = await checkBailianVoiceAccess({
+      ...connection,
+      workspaceId: "llm-0123456789",
     });
-    expect(await getBailianVoiceConnection()).toBeUndefined();
+    expect(result.enrollment).toMatchObject({
+      status: "reachable",
+      diagnostic: { providerStatus: 200, providerRequestId: receiptId },
+    });
+    expect(result.models.map(({ status }) => status)).toEqual([
+      "authorized",
+      "denied",
+      "unknown",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("private-result-to-ignore");
+    expect(network).toHaveBeenCalledTimes(4);
+    expect(provider.meteredFetch).not.toHaveBeenCalled();
+  });
+
+  it("区分模型权限、工作空间和欠费，并保留脱敏供应商回执", async () => {
+    const response = (code: string, status = 403) =>
+      Response.json(
+        {
+          code,
+          message: "raw-provider-content-private",
+          request_id: "invalid-provider-id-with-private-content",
+        },
+        { status, headers: { "x-request-id": receiptId } },
+      );
+    provider.meteredFetch
+      .mockResolvedValueOnce(response("Model.AccessDenied"))
+      .mockResolvedValueOnce(response("Workspace.AccessDenied"))
+      .mockResolvedValueOnce(response("Arrearage"))
+      .mockResolvedValueOnce(response("UnknownPrivatePayload"));
+    const input = {
+      model,
+      prefix,
+      audio: Buffer.from("test"),
+      mime: "audio/wav" as const,
+    };
+    const scenarios = [
+      ["BAILIAN_VOICE_PERMISSION", "Model.AccessDenied"],
+      ["BAILIAN_VOICE_WORKSPACE", "Workspace.AccessDenied"],
+      ["BAILIAN_VOICE_BILLING", "Arrearage"],
+      ["BAILIAN_VOICE_PERMISSION", undefined],
+    ] as const;
+    for (const [code, providerCode] of scenarios) {
+      const err = await enrollBailianVoice(connection, input).catch(
+        (error) => error,
+      );
+      expect(err).toMatchObject({
+        code,
+        uncertain: false,
+        providerCode,
+        providerRequestId: receiptId,
+        diagnostic: { action: "create_voice", providerStatus: 403 },
+      });
+      expect(err.message).not.toContain("raw-provider-content-private");
+    }
+    const network = vi
+      .fn()
+      .mockResolvedValueOnce(response("InvalidApiKey", 401));
+    vi.stubGlobal("fetch", network);
+    const denied = await checkBailianVoiceAccess(connection);
+    expect(denied.enrollment.status).toBe("unauthorized");
+    expect(denied.models.map(({ status }) => status)).toEqual([
+      "unknown",
+      "unknown",
+      "unknown",
+    ]);
+    expect(network).toHaveBeenCalledTimes(1);
   });
 
   it("为目标模型计量创建，随后免费查询审核状态并执行删除", async () => {
@@ -196,7 +313,7 @@ describe("百炼主播音色 HTTP 协议", () => {
           const id = `${selected.id}-${prefix}-fixture`;
           provider.meteredFetch.mockResolvedValueOnce(
             Response.json({
-              request_id: "speech-request",
+              request_id: receiptId,
               output: {
                 finish_reason: "stop",
                 audio: { url: "http://" + resultPath },
@@ -210,7 +327,7 @@ describe("百炼主播音色 HTTP 协议", () => {
             text: "看看袖口。",
           });
           expect(generated.bytes.equals(mp3)).toBe(true);
-          expect(generated.providerRequestId).toBe("speech-request");
+          expect(generated.providerRequestId).toBe(receiptId);
           expect(generated.characters).toBe(index === 0 ? 12 : null);
           const [feature, address, init] =
             provider.meteredFetch.mock.calls[index++];

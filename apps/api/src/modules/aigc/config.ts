@@ -18,6 +18,7 @@ import {
 
 export const secretNames = [
   "BAILIAN_VIDEO_API_KEY",
+  "BAILIAN_VOICE_API_KEY",
   "VIDEO_RELAY_API_KEY",
   "XYLP_IMAGE_TT25_KEY",
   "XYLP_IMAGE_BANANA_PRO_KEY",
@@ -37,6 +38,18 @@ export const secretNames = [
   "XYLP_CHAT_SOL6_KEY",
   "XYLP_CHAT_SOL56_KEY",
 ] as const;
+export const bailianVoiceWorkspacePattern =
+  /^(?:ws-[a-z0-9]{8,60}|llm-[a-z0-9]{8,59})$/;
+export const bailianVoiceKeyPattern = /^sk-(?!or-|sp-)[A-Za-z0-9._-]{8,4093}$/;
+
+const voiceConnectionInput = z
+  .object({
+    revision: z.number().int().positive(),
+    bailianVoiceWorkspaceId: z.string().trim().max(63),
+    apiKey: z.string().trim().max(4096).optional(),
+    useSavedQwenVoiceConnection: z.boolean().default(false),
+  })
+  .strict();
 const endpoint = z
   .string()
   .max(500)
@@ -83,8 +96,65 @@ export async function storedSettings() {
 async function savedQwenConnection() {
   return one(
     db,
-    "SELECT qwen_api_key_encrypted,qwen_workspace_id FROM assistant_realtime_settings WHERE id=1",
+    "SELECT qwen_api_key_encrypted,qwen_workspace_id,updated_at FROM assistant_realtime_settings WHERE id=1",
   );
+}
+
+export type BailianVoiceCredentialSource = "configured" | "saved";
+
+export async function readBailianVoiceCredential(
+  source: BailianVoiceCredentialSource = "configured",
+) {
+  if (!encryptionReady()) return;
+  try {
+    if (source === "saved") {
+      const saved = await savedQwenConnection();
+      const workspaceId = saved?.qwen_workspace_id;
+      const apiKey =
+        saved?.qwen_api_key_encrypted &&
+        decryptSecret(saved.qwen_api_key_encrypted);
+      if (
+        typeof workspaceId !== "string" ||
+        !bailianVoiceWorkspacePattern.test(workspaceId) ||
+        typeof apiKey !== "string" ||
+        !bailianVoiceKeyPattern.test(apiKey)
+      )
+        return;
+      return {
+        workspaceId,
+        apiKey,
+        updatedAt: saved?.updated_at
+          ? new Date(saved.updated_at).toISOString()
+          : undefined,
+      };
+    }
+    const stored = await storedSettings();
+    if (!stored?.secrets_encrypted) return;
+    const secrets = JSON.parse(decryptSecret(stored.secrets_encrypted));
+    const dedicated = Boolean(secrets.BAILIAN_VOICE_API_KEY);
+    const workspaceId = dedicated
+      ? stored.config.bailianVoiceWorkspaceId
+      : stored.config.bailianWorkspaceId;
+    const apiKey = dedicated
+      ? secrets.BAILIAN_VOICE_API_KEY
+      : secrets.BAILIAN_VIDEO_API_KEY;
+    if (
+      typeof workspaceId !== "string" ||
+      !bailianVoiceWorkspacePattern.test(workspaceId) ||
+      typeof apiKey !== "string" ||
+      !bailianVoiceKeyPattern.test(apiKey)
+    )
+      return;
+    return {
+      workspaceId,
+      apiKey,
+      updatedAt: stored.updated_at
+        ? new Date(stored.updated_at).toISOString()
+        : undefined,
+    };
+  } catch {
+    return;
+  }
 }
 export async function visibleSettings() {
   const setting = await storedSettings();
@@ -95,6 +165,8 @@ export async function visibleSettings() {
   const qwen = await savedQwenConnection();
   return {
     ...setting.config,
+    bailianVoiceWorkspaceId: setting.config.bailianVoiceWorkspaceId || "",
+    bailianVoiceSource: secrets.BAILIAN_VOICE_API_KEY ? "voice" : "video",
     bailianReuseAvailable: Boolean(
       encryptionReady() &&
       qwen?.qwen_api_key_encrypted &&
@@ -107,6 +179,63 @@ export async function visibleSettings() {
       secretNames.map((name) => [name, Boolean(secrets[name])]),
     ),
   };
+}
+
+export async function saveBailianVoiceConnection(
+  userId: string,
+  input: unknown,
+) {
+  const parsed = voiceConnectionInput.parse(input);
+  if (!encryptionReady())
+    throw Object.assign(new Error("服务器尚未配置凭据加密"), {
+      statusCode: 503,
+    });
+  const old = await storedSettings();
+  const secrets = old.secrets_encrypted
+    ? JSON.parse(decryptSecret(old.secrets_encrypted))
+    : {};
+  const saved = parsed.useSavedQwenVoiceConnection
+    ? await readBailianVoiceCredential("saved")
+    : undefined;
+  if (parsed.useSavedQwenVoiceConnection && !saved)
+    throw Object.assign(new Error("还没有可复用的百炼北京语音连接"), {
+      statusCode: 400,
+    });
+  const workspaceId = saved?.workspaceId || parsed.bailianVoiceWorkspaceId;
+  const apiKey =
+    saved?.apiKey || parsed.apiKey || secrets.BAILIAN_VOICE_API_KEY;
+  if (
+    !bailianVoiceWorkspacePattern.test(workspaceId) ||
+    typeof apiKey !== "string" ||
+    !bailianVoiceKeyPattern.test(apiKey)
+  )
+    throw Object.assign(
+      new Error("请填写百炼北京业务空间 ID 和普通百炼 API Key"),
+      { statusCode: 400 },
+    );
+  if (
+    !saved &&
+    !parsed.apiKey &&
+    workspaceId !== old.config.bailianVoiceWorkspaceId
+  )
+    throw Object.assign(
+      new Error("更换音色业务空间时，请同时填写该空间的 API Key"),
+      { statusCode: 400 },
+    );
+  secrets.BAILIAN_VOICE_API_KEY = apiKey;
+  const changed = await rows(
+    db,
+    "UPDATE aigc_settings SET config=jsonb_set(config,'{bailianVoiceWorkspaceId}',to_jsonb($1::text)),secrets_encrypted=$2,revision=revision+1,updated_by=$3::bigint,updated_at=now() WHERE id=1 AND revision=$4 RETURNING revision",
+    workspaceId,
+    encryptSecret(JSON.stringify(secrets)),
+    userId,
+    parsed.revision,
+  );
+  if (!changed.length)
+    throw Object.assign(new Error("设置已被修改，请刷新后重试"), {
+      statusCode: 409,
+    });
+  return visibleSettings();
 }
 export async function saveSettings(userId: string, input: unknown) {
   const parsed = inputSchema.parse(input);
@@ -129,7 +258,8 @@ export async function saveSettings(userId: string, input: unknown) {
     ? JSON.parse(decryptSecret(old.secrets_encrypted))
     : {};
   for (const [name, value] of Object.entries(parsed.secrets || {}))
-    if (value.trim()) secrets[name] = value.trim();
+    if (name !== "BAILIAN_VOICE_API_KEY" && value.trim())
+      secrets[name] = value.trim();
   if (
     secrets.FAL_LIP_SYNC_API_KEY &&
     !/^[!-~]{1,2048}$/.test(secrets.FAL_LIP_SYNC_API_KEY)
@@ -164,7 +294,12 @@ export async function saveSettings(userId: string, input: unknown) {
   const changed = await rows(
     db,
     "UPDATE aigc_settings SET config=$1::jsonb,secrets_encrypted=$2,revision=revision+1,updated_by=$3::bigint,updated_at=now() WHERE id=1 AND revision=$4 AND COALESCE(config->'bailianVideoCheck'->>'state','') NOT IN ('submitting','pending','uncertain') RETURNING revision",
-    JSON.stringify(config),
+    JSON.stringify({
+      ...config,
+      ...(old.config.bailianVoiceWorkspaceId
+        ? { bailianVoiceWorkspaceId: old.config.bailianVoiceWorkspaceId }
+        : {}),
+    }),
     encryptSecret(JSON.stringify(secrets)),
     userId,
     revision,
