@@ -212,7 +212,6 @@ beforeAll(async () => {
     "124_desktop_folder_attachment.sql",
     "125_desktop_folder_attachments.sql",
     "126_desktop_attachment_directory_repair.sql",
-    "127_director_projects.sql",
     "111_realtime_native_app_commands.sql",
   ])
     await fixture.database.exec(
@@ -238,7 +237,7 @@ beforeEach(async () => {
     "TRUNCATE personal_assistant_browser_requests,personal_assistant_browser_goals,personal_assistant_browser_actions,personal_assistant_browser_tasks,personal_assistant_browser_profiles; UPDATE personal_assistant_browser_runtime SET ready=false,heartbeat_at=NULL",
   );
   await fixture.database!.exec(
-    "TRUNCATE director_renders,director_revisions,director_projects,assistant_realtime_tools,assistant_realtime_sessions,assistant_desktop_tasks,assistant_desktop_devices,personal_assistant_jobs,personal_assistant_files,personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now(); UPDATE users SET status='ACTIVE'",
+    "TRUNCATE assistant_realtime_tools,assistant_realtime_sessions,assistant_desktop_tasks,assistant_desktop_devices,personal_assistant_jobs,personal_assistant_files,personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now(); UPDATE users SET status='ACTIVE'",
   );
   fixture.inventory.mockReset();
   fixture.queueInventory.mockReset();

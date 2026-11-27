@@ -6,17 +6,6 @@ import ffmpeg from "ffmpeg-static";
 
 const run = promisify(execFile);
 const MB = 1024 * 1024;
-// Verified against xylp.ai/apidoc on 2026-09-28. SD duration/size caps below
-// are workspace upload limits; H3 has the stricter documented 15-second cap.
-export function omniReferences(id) {
-  if (!["h3-omni", "sd20-omni", "sd25-omni"].includes(id)) return undefined;
-  const h3 = id === "h3-omni", count = id === "sd25-omni" ? 10 : 3;
-  return {
-    video: { field: "video_url", maxFiles: count, extensions: ["mp4", "mov"], maxBytes: 50 * MB, minSeconds: h3 ? 2 : 1, maxSeconds: h3 ? 15 : 30, maxTotalSeconds: h3 ? 15 : 120, minFps: h3 ? 23.976 : 23.8, maxFps: 60, ...(h3 ? {} : { minAspect: .4, maxAspect: 2.5 }), priceMultiplier: h3 ? 1 : .5 },
-    audio: { field: "audio_url", maxFiles: count, extensions: ["mp3", "wav"], maxBytes: 15 * MB, minSeconds: h3 ? 2 : 1, maxSeconds: h3 ? 15 : 30, maxTotalSeconds: h3 ? 15 : 120, priceMultiplier: 0 },
-  };
-}
-
 export async function probeReference(filePath, kind, name) {
   const video = kind === "referenceVideo";
   const extension = path.extname(name).slice(1).toLowerCase();

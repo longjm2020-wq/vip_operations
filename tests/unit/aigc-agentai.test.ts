@@ -25,7 +25,7 @@ import {
   videoCatalog,
   selectVideoRoute,
   videoRequestBody,
-  preflightXhaiVideo,
+  preflightAgentAiVideo,
   submitVideo,
   pollVideo,
   // @ts-expect-error JavaScript video provider.
@@ -44,7 +44,7 @@ const snapshot = JSON.parse(
 const config = () => ({
   videoSecrets: {
     AGENTAI_API_KEY: "agentai-fixture-key",
-    XHAI_API_KEY: "xhai-different-key",
+    UNRELATED_API_KEY: "different-key",
   },
   agentaiModels: structuredClone(snapshot.models),
   enabledVideoProviders: ["agentai"],
@@ -113,7 +113,7 @@ it("offers exactly the three approved images and nine approved videos with indep
   );
   expect(
     agentaiConfigured(
-      { ...cfg, videoSecrets: { XHAI_API_KEY: "xhai-only" } },
+      { ...cfg, videoSecrets: { UNRELATED_API_KEY: "unrelated-only" } },
       "minimax-h3",
     ),
   ).toBe(false);
@@ -352,7 +352,7 @@ it("requires a video estimate for the exact submitted input and preserves provid
   });
   await expect(submitVideo(cfg, route, input())).rejects.toThrow(/缺少/);
   expect(spy).not.toHaveBeenCalled();
-  const preflight = await preflightXhaiVideo(cfg, route, input());
+  const preflight = await preflightAgentAiVideo(cfg, route, input());
   await expect(submitVideo(cfg, route, input(5), preflight)).rejects.toThrow(
     /缺少/,
   );
@@ -392,7 +392,7 @@ it.each(["adjustment", "bad-upper-bound", "bad-duration", "ambiguous-lane"])(
       return json(value);
     });
     vi.stubGlobal("fetch", spy);
-    await expect(preflightXhaiVideo(cfg, route, input())).rejects.toThrow();
+    await expect(preflightAgentAiVideo(cfg, route, input())).rejects.toThrow();
     expect(
       spy.mock.calls.every(
         ([url]) => new URL(String(url)).pathname === "/v1/pricing-estimate",

@@ -19,24 +19,10 @@ import {
 export const secretNames = [
   "BAILIAN_VIDEO_API_KEY",
   "BAILIAN_VOICE_API_KEY",
-  "VIDEO_RELAY_API_KEY",
-  "XYLP_IMAGE_TT25_KEY",
-  "XYLP_IMAGE_BANANA_PRO_KEY",
-  "XHAI_API_KEY",
   "XAI_API_KEY",
   "RUNNINGHUB_API_KEY",
   "OPENTALKING_GATEWAY_KEY",
   "FAL_LIP_SYNC_API_KEY",
-  "XYLP_VIDEO_H3_OMNI_KEY",
-  "XYLP_VIDEO_SD20_OMNI_KEY",
-  "XYLP_VIDEO_SD25_OMNI_KEY",
-  "XYLP_VIDEO_VIDU_Q3_KEY",
-  "XYLP_VIDEO_GK35_KEY",
-  "XYLP_VIDEO_OMNI11_KEY",
-  "XYLP_VIDEO_ENHANCE_KEY",
-  "XYLP_CHAT_ASTRA_KEY",
-  "XYLP_CHAT_SOL6_KEY",
-  "XYLP_CHAT_SOL56_KEY",
 ] as const;
 export const bailianVoiceWorkspacePattern =
   /^(?:ws-[a-z0-9]{8,60}|llm-[a-z0-9]{8,59})$/;
@@ -76,8 +62,6 @@ const inputSchema = z.object({
     .regex(/^(?:ws-[a-z0-9]{8,64})?$/, "请填写百炼北京业务空间 ID")
     .default(""),
   useSavedQwenConnection: z.boolean().default(false),
-  videoRelayBaseUrl: endpoint,
-  xhaiBaseUrl: endpoint,
   opentalkingBaseUrl: endpoint,
   runninghubWorkflowId: z
     .string()
@@ -87,11 +71,36 @@ const inputSchema = z.object({
     .partialRecord(z.enum(secretNames), z.string().max(4096))
     .optional(),
 });
+
+function activeSecrets(encrypted?: string): Record<string, string> {
+  if (!encrypted || !encryptionReady()) return {};
+  const stored = JSON.parse(decryptSecret(encrypted)) as Record<string, string>;
+  return Object.fromEntries(secretNames.flatMap((name) => typeof stored[name] === "string" ? [[name, stored[name]]] : []));
+}
+
+function activeSettings(config: Record<string, any>) {
+  const { bailianWorkspaceId, bailianVoiceWorkspaceId, bailianVideoCheck, opentalkingBaseUrl, runninghubWorkflowId } = config;
+  return { bailianWorkspaceId, bailianVoiceWorkspaceId, bailianVideoCheck, opentalkingBaseUrl, runninghubWorkflowId };
+}
 export async function storedSettings() {
   return (await one(
     db,
     "SELECT config,secrets_encrypted,revision,updated_at FROM aigc_settings WHERE id=1",
   ))!;
+}
+
+export async function clearRetiredAigcCredentials() {
+  if (!encryptionReady()) return;
+  const row = await storedSettings();
+  if (!row?.secrets_encrypted) return;
+  const stored = JSON.parse(decryptSecret(row.secrets_encrypted)) as Record<string, string>;
+  const retired = (name: string) => name === "VIDEO_RELAY_API_KEY" || name === "XHAI_API_KEY" || name.startsWith("XYLP_");
+  if (!Object.keys(stored).some(retired)) return;
+  const remaining = Object.fromEntries(Object.entries(stored).filter(([name]) => !retired(name)));
+  await db.$executeRawUnsafe(
+    "UPDATE aigc_settings SET secrets_encrypted=$1,revision=revision+1,updated_at=now() WHERE id=1 AND secrets_encrypted=$2",
+    encryptSecret(JSON.stringify(remaining)), row.secrets_encrypted,
+  );
 }
 async function savedQwenConnection() {
   return one(
@@ -130,7 +139,7 @@ export async function readBailianVoiceCredential(
     }
     const stored = await storedSettings();
     if (!stored?.secrets_encrypted) return;
-    const secrets = JSON.parse(decryptSecret(stored.secrets_encrypted));
+    const secrets = activeSecrets(stored.secrets_encrypted);
     const dedicated = Boolean(secrets.BAILIAN_VOICE_API_KEY);
     const workspaceId = dedicated
       ? stored.config.bailianVoiceWorkspaceId
@@ -158,13 +167,10 @@ export async function readBailianVoiceCredential(
 }
 export async function visibleSettings() {
   const setting = await storedSettings();
-  const secrets =
-    setting.secrets_encrypted && encryptionReady()
-      ? JSON.parse(decryptSecret(setting.secrets_encrypted))
-      : {};
+  const secrets = activeSecrets(setting.secrets_encrypted);
   const qwen = await savedQwenConnection();
   return {
-    ...setting.config,
+    ...activeSettings(setting.config),
     bailianVoiceWorkspaceId: setting.config.bailianVoiceWorkspaceId || "",
     bailianVoiceSource: secrets.BAILIAN_VOICE_API_KEY ? "voice" : "video",
     bailianReuseAvailable: Boolean(
@@ -191,9 +197,7 @@ export async function saveBailianVoiceConnection(
       statusCode: 503,
     });
   const old = await storedSettings();
-  const secrets = old.secrets_encrypted
-    ? JSON.parse(decryptSecret(old.secrets_encrypted))
-    : {};
+  const secrets = activeSecrets(old.secrets_encrypted);
   const saved = parsed.useSavedQwenVoiceConnection
     ? await readBailianVoiceCredential("saved")
     : undefined;
@@ -254,9 +258,7 @@ export async function saveSettings(userId: string, input: unknown) {
       new Error("视频连接测试尚未结束，请先查询或核实原任务"),
       { statusCode: 409 },
     );
-  const secrets = old.secrets_encrypted
-    ? JSON.parse(decryptSecret(old.secrets_encrypted))
-    : {};
+  const secrets = activeSecrets(old.secrets_encrypted);
   for (const [name, value] of Object.entries(parsed.secrets || {}))
     if (name !== "BAILIAN_VOICE_API_KEY" && value.trim())
       secrets[name] = value.trim();
@@ -318,10 +320,7 @@ export async function engineConfig() {
   ]);
   const setting = await storedSettings();
   const agentai = await readAgentAiConnection();
-  const secrets =
-    setting.secrets_encrypted && encryptionReady()
-      ? JSON.parse(decryptSecret(setting.secrets_encrypted))
-      : {};
+  const secrets = activeSecrets(setting.secrets_encrypted);
   const ai = await one(
     db,
     "SELECT enabled,api_key_encrypted,verified_at FROM compass_ai_settings WHERE id=1",
@@ -330,6 +329,12 @@ export async function engineConfig() {
     ai?.enabled && ai.verified_at && ai.api_key_encrypted && encryptionReady()
       ? decryptSecret(ai.api_key_encrypted)
       : "";
+  const videoSecrets: Record<string, string> = {
+    ...secrets,
+    AGENTAI_API_KEY: agentaiReady(agentai)
+      ? decryptSecret(agentai!.api_key_encrypted)
+      : "",
+  };
   return {
     aiFetch,
     recordAiReceipt,
@@ -362,13 +367,8 @@ export async function engineConfig() {
     durableStorageConfigured: true,
     sessionSecret: process.env.COMPASS_MAIL_KEY || "",
     publicBaseUrl: process.env.APP_ORIGIN,
-    ...setting.config,
-    videoSecrets: {
-      ...secrets,
-      AGENTAI_API_KEY: agentaiReady(agentai)
-        ? decryptSecret(agentai!.api_key_encrypted)
-        : "",
-    },
+    ...activeSettings(setting.config),
+    videoSecrets,
     agentaiModels:
       agentai?.catalog_at && Array.isArray(agentai.model_catalog)
         ? agentai.model_catalog.filter(

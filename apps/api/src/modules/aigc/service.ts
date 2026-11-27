@@ -4,6 +4,7 @@ import {
   type Studio,
   type StudioUser,
 } from "../../../../../packages/aigc-engine/index.mjs";
+import { imageGenerationConfigured } from "../../../../../packages/aigc-engine/model-management.mjs";
 import { db, rows } from "../../../../../packages/database/src/index.js";
 import { actorFor } from "../auth/service.js";
 import {
@@ -12,6 +13,7 @@ import {
   objectStorageReady,
 } from "./persistence.js";
 import {
+  clearRetiredAigcCredentials,
   engineConfig,
   readBailianVoiceCredential,
   saveBailianVoiceConnection,
@@ -20,6 +22,7 @@ import {
 } from "./config.js";
 import { checkBailianVoiceAccess } from "./bailian-voice-provider.js";
 import { startVideoCheck, videoCheckStatus } from "./video-check.js";
+import { downloadPublicReference } from "./public-reference-download.js";
 import type { Actor } from "../../core.js";
 import { handleCommerceVideo, processCommerceVideo } from "./commerce-video.js";
 
@@ -87,6 +90,7 @@ export function createAigcService() {
       )
         return;
       persistence = candidate;
+      await clearRetiredAigcCredentials();
       const config = await engineConfig();
       const created = await createStudio({
         config,
@@ -191,12 +195,7 @@ export function createAigcService() {
           storage: objectStorageReady() ? "object" : "database",
           maxUploadBytes: maxAssetBytes(),
           compile: Boolean(studio?.config.openrouterApiKey),
-          image: Boolean(
-            studio?.config.videoSecrets?.VIDEO_RELAY_API_KEY ||
-            studio?.config.videoSecrets?.XYLP_IMAGE_TT25_KEY ||
-            studio?.config.videoSecrets?.XYLP_IMAGE_BANANA_PRO_KEY ||
-            studio?.config.videoSecrets?.XHAI_API_KEY,
-          ),
+          image: Boolean(studio && imageGenerationConfigured(studio.config)),
           video: Boolean(
             studio?.config.bailianWorkspaceId &&
             studio?.config.videoSecrets?.BAILIAN_VIDEO_API_KEY,
@@ -221,6 +220,22 @@ export function createAigcService() {
       if (suffix.startsWith("/commerce-video/") && actor) {
         await handleCommerceVideo(studio, actor, suffix.slice("/commerce-video".length), req, res, () => jsonBody(req));
         return;
+      }
+      if (suffix === "/assets/import-reference" && req.method === "POST" && actor) {
+        const input = await jsonBody(req);
+        if (typeof input?.projectId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.projectId) ||
+            typeof input?.shareText !== "string" || !input.shareText.trim() || input.shareText.length > 8192)
+          return res.status(400).json({ error: "请在短视频项目中粘贴作品分享链接或公开直链" });
+        const controller = new AbortController();
+        const cancel = () => controller.abort();
+        res.once("close", cancel);
+        try {
+          const asset = await studio.importPublicReference(asUser(actor), input.projectId, (target) =>
+            downloadPublicReference(input.shareText, target, maxAssetBytes(), controller.signal), controller.signal);
+          return res.status(201).json(asset);
+        } finally {
+          res.off("close", cancel);
+        }
       }
       if (suffix === "/services/bailian-video-check") {
         if (req.method === "GET") return res.json(await videoCheckStatus());

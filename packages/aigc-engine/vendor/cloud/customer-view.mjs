@@ -1,9 +1,13 @@
 import { videoCatalog, videoProviders, selectVideoRoute } from "./video-providers.mjs";
 import { fail } from "./access.mjs";
+import { defaultImageModel, imageModelAvailable } from "./image-provider.mjs";
 
 export function customerProvider(config) {
-  const provider = videoProviders(config).find(p => p.id === (config.publicVideoProvider || "xylp"));
-  if (!provider || ["xai", "xhai"].includes(provider.id) || ["xai", "xhai"].includes(provider.protocol)) fail("平台视频服务暂不可用，请联系管理员", 503);
+  const providers = videoProviders(config).filter(p => p.id !== "xai" && p.protocol !== "xai" &&
+    (!config.enabledVideoProviders || config.enabledVideoProviders.includes(p.id)));
+  const publicId = config.publicVideoProvider || config.defaultVideoSelection?.providerId;
+  const provider = providers.find(p => p.id === publicId) || (!config.publicVideoProvider && providers[0]);
+  if (!provider) fail("平台视频服务暂不可用，请联系管理员", 503);
   return provider;
 }
 
@@ -59,13 +63,13 @@ export function assertVideoAccess(data, userId, route) {
 }
 
 export function projectForClient(project, user, config) {
-  if (user.role === "super_admin" || !project) return project;
+  if (!project) return project;
   const value = structuredClone(project);
-  if (value.videoSelection) {
+  if (user.role !== "super_admin" && value.videoSelection) {
     const allowed = value.videoSelection.providerId === customerProvider(config).id;
     value.videoSelection = allowed ? { ...value.videoSelection, providerId: "platform" } : { providerId: "restricted", modelId: "", resolution: "" };
   }
-  if (value.imageSelection?.modelId?.startsWith("gt-image-2.5-")) value.imageSelection = { modelId: "tt-image-2.5-token" };
+  if (!imageModelAvailable(value.imageSelection?.modelId)) value.imageSelection = { modelId: defaultImageModel(config) };
   return value;
 }
 
@@ -77,6 +81,6 @@ export function taskForClient(task, user, config) {
 }
 export function reviewForClient(review, user, config) {
   if (user.role === "super_admin" || !review) return review;
-  const restricted = review.imageService.model.startsWith("gt-image-2.5-");
-  return { ...review, ...(review.imageModels ? { imageModels: review.imageModels.filter(model => !model.id.startsWith("gt-image-2.5-")) } : {}), frames: review.frames.map(({ cost, ...frame }) => ({ ...frame, ...(frame.imageModel?.startsWith("gt-image-2.5-") ? { imageModel: "restricted" } : {}) })), videoModelLabel: customerText(review.videoModelLabel, config), imageService: restricted ? { model: "restricted", label: "当前图片模型受限，请改选可用模型", detail: "", configured: false } : { model: review.imageService.model, label: review.imageService.label, detail: review.imageService.detail, configured: review.imageService.configured }, billing: review.billing && { ...review.billing, issue: customerText(review.billing.issue, config) } };
+  const { source, ...imageService } = review.imageService;
+  return { ...review, frames: review.frames.map(({ cost, ...frame }) => ({ ...frame, ...(frame.imageModel && !imageModelAvailable(frame.imageModel) ? { imageModel: "retired" } : {}) })), videoModelLabel: customerText(review.videoModelLabel, config), imageService, billing: review.billing && { ...review.billing, issue: customerText(review.billing.issue, config) } };
 }

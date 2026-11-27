@@ -17,6 +17,7 @@ import {
 import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
+  AudioOutlined,
   DeleteOutlined,
   DownloadOutlined,
   FileImageOutlined,
@@ -50,23 +51,20 @@ const tools = [
   {
     kind: "video",
     title: "短视频制作",
-    description: "从参考镜头到商品成片，让创意落地。",
     icon: <PlayCircleOutlined />,
-    meta: "参考拆解 · 分镜 · 视频生成",
+    description: "参考拆解、分镜与视频生成",
   },
   {
     kind: "detail",
     title: "电商详情页制作",
-    description: "用真实商品资料，构建完整的视觉表达。",
     icon: <FileImageOutlined />,
-    meta: "详情页 · 主图 · 内容策划",
+    description: "详情页、主图与内容策划",
   },
   {
     kind: "digital",
     title: "数字人",
-    description: "创建你的形象，让内容开口说话。",
     icon: <RobotOutlined />,
-    meta: "形象创建 · 口播 · 实时互动",
+    description: "形象创建与实时互动",
   },
 ];
 export function AigcPage() {
@@ -231,10 +229,7 @@ function AigcStudio() {
       else if (type === "detail")
         project = await studioApi("/detail-projects", "POST", {
           ...detailDraft(framework),
-          imageModelId:
-            catalog.image?.defaultModelId ||
-            catalog.image?.models?.find((m: Item) => m.configured)?.id ||
-            "tt-image-2.5-token",
+          ...(catalog.image?.defaultModelId ? { imageModelId: catalog.image.defaultModelId } : {}),
         });
       else
         project = await studioApi("/digital-human/projects", "POST", {
@@ -257,9 +252,8 @@ function AigcStudio() {
     })),
     ...data.detailProjects.map((p: Item) => ({ ...p, kind: "detail" })),
     ...data.digitalHumanProjects.map((p: Item) => ({ ...p, kind: "digital" })),
-  ]
-    .filter((p: Item) => Boolean(p.deletedAt) === trash)
-    .filter(
+  ].filter((p: Item) => Boolean(p.deletedAt) === trash);
+  const visibleProjects = allProjects.filter(
       (p: Item) =>
         (filter === "all" || p.kind === filter) &&
         p.name.toLowerCase().includes(search.toLowerCase()),
@@ -303,26 +297,26 @@ function AigcStudio() {
           .toLowerCase()
           .includes(search.toLowerCase()),
     );
+  const canReadProducts = user.permissions.includes("product.read");
+  const entries = [
+    tools[0],
+    {
+      kind: "talk-video",
+      title: canReadProducts ? "服装口播" : "数字人口播",
+      icon: <AudioOutlined />,
+      description: canReadProducts ? "商品讲解、字幕与短片" : "上传照片与原声对口型",
+    },
+    ...tools.slice(1),
+  ];
   return (
-    <div className="aigc-page">
+    <div className={`aigc-page${!projectId && view === "home" ? " aigc-home" : ""}`}>
       <header className="aigc-page-header">
-        <div>
-          <div className="aigc-eyebrow">
-            <ThunderboltOutlined /> XUTI CREATIVE STUDIO
-          </div>
-          <h1>
-            {projectId
-              ? tools.find((t) => t.kind === kind)?.title
-              : "AIGC 创作空间"}
-          </h1>
-          <p>
-            {projectId
-              ? "素材、创作与结果，在这里连成一条线。"
-              : "把商品灵感，变成可发布的内容。"}
-          </p>
-        </div>
-        <Space>
+        <h1>
+          {projectId ? tools.find((t) => t.kind === kind)?.title : "AIGC 创作空间"}
+        </h1>
+        <Space size={6}>
           <Button
+            type="text"
             icon={<ReloadOutlined />}
             onClick={() => {
               void reload();
@@ -333,6 +327,7 @@ function AigcStudio() {
           </Button>
           {status.manage && (
             <Button
+              type="text"
               icon={<SettingOutlined />}
               onClick={() => setSettings(true)}
             >
@@ -412,6 +407,7 @@ function AigcStudio() {
         ) : (
           <>
             <Tabs
+              className="aigc-navigation"
               activeKey={view}
               onChange={(value) => {
                 setFilter("all");
@@ -459,56 +455,56 @@ function AigcStudio() {
             />
             {view === "home" && (
               <>
-                <Button
-                  type="primary"
-                  icon={<PlayCircleOutlined />}
-                  onClick={() => navigate({ view: "talk-video" })}
-                >
-                  {user.permissions.includes("product.read")
-                    ? "服装口播"
-                    : "数字人口播"}
-                </Button>
-                <div className="aigc-entry-grid">
-                  {tools.map((tool, i) => (
+                <section className="aigc-entry-grid" aria-label="创作入口">
+                  {entries.map((tool) => (
                     <button
                       key={tool.kind}
-                      className={`aigc-entry aigc-entry-${i}`}
-                      disabled={!status.ready || Boolean(creating)}
-                      onClick={() => void create(tool.kind)}
+                      type="button"
+                      className="aigc-entry"
+                      disabled={tool.kind !== "talk-video" && (!status.ready || Boolean(creating))}
+                      onClick={() => {
+                        if (tool.kind === "talk-video") navigate({ view: tool.kind, mode: canReadProducts ? "commerce" : "lip-sync" });
+                        else void create(tool.kind);
+                      }}
                     >
                       <span className="aigc-entry-icon">{tool.icon}</span>
-                      <span className="aigc-entry-number">0{i + 1}</span>
-                      <h2>{tool.title}</h2>
-                      <p>{tool.description}</p>
-                      <span className="aigc-entry-bottom">
-                        {creating === tool.kind ? "正在创建…" : tool.meta}
-                        <ArrowRightOutlined />
-                      </span>
+                      <div className="aigc-entry-copy">
+                        <h2>{tool.title}</h2>
+                        <p>{creating === tool.kind ? "正在创建…" : tool.description}</p>
+                      </div>
+                      <ArrowRightOutlined className="aigc-entry-arrow" />
                     </button>
                   ))}
-                </div>
-                <section className="aigc-projects">
-                  <div className="aigc-section-heading">
-                    <h2>
-                      我的项目 <small>{allProjects.length}</small>
+                </section>
+                <section className="aigc-projects" aria-labelledby="aigc-projects-title">
+                  <div className="aigc-projects-toolbar">
+                    <h2 id="aigc-projects-title">
+                      {trash ? "回收站" : "我的项目"} <small>{allProjects.length}</small>
                     </h2>
-                    <Space wrap>
+                    <div className="aigc-projects-controls">
                       <Input.Search
                         aria-label="搜索项目"
                         placeholder="搜索项目"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
+                        allowClear
                       />
                       <Button
-                        type={trash ? "primary" : "text"}
-                        icon={<DeleteOutlined />}
-                        onClick={() => setTrash(!trash)}
+                        type="text"
+                        icon={trash ? <ArrowLeftOutlined /> : <DeleteOutlined />}
+                        onClick={() => {
+                          setTrash(!trash);
+                          setSearch("");
+                          setFilter("all");
+                        }}
                       >
-                        回收站
+                        {trash ? "返回项目" : "回收站"}
                       </Button>
-                    </Space>
+                    </div>
                   </div>
                   <Segmented
+                    aria-label="按类型筛选项目"
+                    className="aigc-projects-filters"
                     value={filter}
                     onChange={setFilter}
                     options={[
@@ -518,61 +514,49 @@ function AigcStudio() {
                       { value: "digital", label: "数字人" },
                     ]}
                   />
-                  {!allProjects.length ? (
+                  {!visibleProjects.length ? (
                     <Empty
-                      className="aigc-empty"
+                      className="aigc-projects-empty"
                       image={Empty.PRESENTED_IMAGE_SIMPLE}
                       description={
-                        trash
-                          ? "回收站为空"
-                          : "从上方选择一种创作方式，开始你的第一个项目"
+                        allProjects.length ? "没有匹配的项目" : trash ? "回收站为空" : "暂无项目"
                       }
                     />
                   ) : (
-                    <div className="aigc-project-grid">
-                      {allProjects.map((p: Item) => (
-                        <Card
-                          key={`${p.kind}-${p.id}`}
-                          className="aigc-project-card"
-                          actions={[
-                            trash ? (
-                              <Button
-                                type="text"
-                                onClick={() => projectAction(p, "restore")}
-                              >
-                                恢复项目
-                              </Button>
-                            ) : (
-                              <Button
-                                type="text"
-                                onClick={() => projectAction(p, "trash")}
-                              >
-                                移入回收站
-                              </Button>
-                            ),
-                          ]}
-                        >
-                          <button
-                            className="aigc-project-open"
-                            disabled={trash}
-                            onClick={() => open(p.kind, p.id)}
-                          >
-                            <div className="aigc-project-art">
-                              {tools.find((t) => t.kind === p.kind)?.icon}
-                              <Tag>{stateText[p.status] || "草稿"}</Tag>
+                    <ul className="aigc-project-list">
+                      {visibleProjects.map((p: Item) => {
+                        const tool = tools.find((t) => t.kind === p.kind);
+                        const project = (
+                          <>
+                            <span className="aigc-project-icon">{tool?.icon}</span>
+                            <div className="aigc-project-name">
+                              <h3>{p.name}</h3>
+                              <span>{tool?.title}</span>
                             </div>
-                            <h3>{p.name}</h3>
-                            <p>
-                              {tools.find((t) => t.kind === p.kind)?.title} ·{" "}
+                            <span className="aigc-project-date">
                               {new Date(p.updatedAt).toLocaleDateString()}
-                            </p>
-                            <span>
-                              打开项目 <ArrowRightOutlined />
                             </span>
-                          </button>
-                        </Card>
-                      ))}
-                    </div>
+                            <Tag>{stateText[p.status] || "草稿"}</Tag>
+                          </>
+                        );
+                        return (
+                          <li key={`${p.kind}-${p.id}`} className="aigc-project-card">
+                            {trash ? (
+                              <div className="aigc-project-row">{project}</div>
+                            ) : (
+                              <button type="button" className="aigc-project-row aigc-project-open" onClick={() => open(p.kind, p.id)}>
+                                {project}
+                              </button>
+                            )}
+                            {trash ? (
+                              <Button type="text" onClick={() => projectAction(p, "restore")}>恢复项目</Button>
+                            ) : (
+                              <Button type="text" icon={<DeleteOutlined />} aria-label="移入回收站" title="移入回收站" onClick={() => projectAction(p, "trash")} />
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
                   )}
                 </section>
               </>

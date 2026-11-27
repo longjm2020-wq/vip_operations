@@ -1,15 +1,14 @@
 import { selectedCast } from "../shared/project-cast.mjs";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { jobRequestSignal } from "./job-request.mjs";
 import { generationProject } from "./project-references.mjs";
 import { KEYFRAME_REVIEW_VERSION, reviewChecks, frameApproved, createKeyframeGate, hasKeyframeApproval, keyframePrompt, referenceFiles } from "./keyframe-contract.mjs";
 import { normalizeProductLocks, productTruthRevision } from "./product-truth.mjs";
-import { keyframeImageRoute, keyframeImageBody, dryRunKeyframe, submitKeyframe, pollKeyframe, imageCatalog, imageModel, validateImageReferences, assertImageAccess } from "./image-provider.mjs";
-import { videoKey, validateVideoInput, videoReferenceCount } from "./video-providers.mjs";
+import { keyframeImageRoute, keyframeImageBody, dryRunKeyframe, submitKeyframe, pollKeyframe, imageCatalog, imageModel, imageRouteAvailable, imageRouteConfigured, validateImageReferences, assertImageAccess } from "./image-provider.mjs";
+import { validateVideoInput, videoReferenceCount } from "./video-providers.mjs";
 import { operationPlan, reserve, markSubmitted, settle } from "./access.mjs";
 import { assertVideoAccess } from "./customer-view.mjs";
-import { uploadXhaiImages } from "./xhai-files.mjs";
 
 const now = () => new Date().toISOString();
 const truthRevisionFor = (job, project) => productTruthRevision({ ...project, ...job.payload.artifacts.referenceSnapshot, id: project.id }, job.payload.artifacts.productLock);
@@ -70,7 +69,9 @@ export class KeyframeService {
       videoInputMode: videoModel?.inputMode || "references", videoModelLabel: videoModel?.label,
       aspectRatio: job.payload.resolvedVideoAspectRatio || refs.resolvedVideoAspectRatio || (refs.videoAspectRatio === "auto" ? "9:16" : refs.videoAspectRatio),
       imageModels: imageCatalog(this.config, this.store.data.platform?.users.find(user => user.id === job.ownerId)?.role).models,
-      imageService: { model: route.model, label: imageModel(route).label, detail: imageModel(route).detail, configured: Boolean(videoKey(this.config, route)), source: `https://xylp.ai/apidoc#model/${encodeURIComponent(route.model)}` },
+      imageService: imageRouteAvailable(route)
+        ? { model: route.model, label: imageModel(route).label, detail: imageModel(route).detail, configured: imageRouteConfigured(this.config, route), source: route.baseUrl }
+        : { model: "retired", label: "原图片模型已下线", detail: "请选用当前图片模型。已提交的图片任务需核对原请求。", configured: false },
       locked: ["completed", "cancelled"].includes(job.status) || gate.phase === "released",
     };
   }
@@ -93,7 +94,7 @@ export class KeyframeService {
         validateImageReferences(selectedRoute, refs, job.payload.resolvedVideoAspectRatio || refs.resolvedVideoAspectRatio || (refs.videoAspectRatio === "auto" ? "9:16" : refs.videoAspectRatio));
       }
       const frame = gate.frames.find(f => f.unitId === input.unitId);
-      if (["generate", "regenerate"].includes(input.action) && !videoKey(this.config, gate.imageRoute || keyframeImageRoute(this.config))) throw new Error("关键帧图片服务尚未配置密钥，可上传已制作的关键帧");
+      if (["generate", "regenerate"].includes(input.action) && !imageRouteConfigured(this.config, selectedRoute)) throw new Error("当前关键帧图片模型尚未连接，可切换模型或上传已制作的关键帧");
       if (["approve", "reject", "regenerate", "upload"].includes(input.action) && (!frame || input.revision !== frame.revision)) throw new Error("关键帧版本已变化，请刷新后重新验收");
       if (frame && (frame.requestId || frame.submission?.state === "inflight")) throw new Error("本帧仍有供应商请求；请先查询原任务，不能重复提交或替换");
       if (["generate", "regenerate", "upload"].includes(input.action) && !this.visual.enabled(job)) job.payload.visualReview = this.visual.settings(job.ownerId);
@@ -115,7 +116,6 @@ export class KeyframeService {
         Object.assign(frame, { asset: input.action === "upload" ? input.asset : undefined, dimensions: input.dimensions, revision: randomUUID(), status: input.action === "upload" ? "review" : "empty", approvalMethod: undefined, visualRecord: undefined, correction: String(input.correction || frame.correction || "").slice(0, 2000), checks: [], approvedRevision: undefined, approvedAt: undefined, cost: undefined, imageModel: undefined, submission: undefined });
         if (input.action === "regenerate") {
           const route = gate.imageRoute || keyframeImageRoute(this.config);
-          if (!videoKey(this.config, route)) throw new Error("关键帧图片服务尚未配置密钥，可上传已制作的关键帧");
           gate.imageRoute = route;
           gate.phase = "generating";
           job.status = "queued";
@@ -125,7 +125,6 @@ export class KeyframeService {
         }
       } else if (input.action === "generate") {
         const route = gate.imageRoute || keyframeImageRoute(this.config);
-        if (!videoKey(this.config, route)) throw new Error("关键帧图片服务尚未配置密钥，可上传已制作的关键帧");
         if (!gate.frames.some(f => !f.asset)) throw new Error("关键帧已生成；如有问题请指定本帧重做");
         gate.imageRoute = route;
         gate.phase = "generating";
@@ -195,6 +194,13 @@ export class KeyframeService {
       return this.visual.frames(job, refs);
     }
     const imageRoute = gate.imageRoute;
+    if (!imageRouteAvailable(imageRoute)) {
+      const unresolved = gate.frames.some(item => item.requestId || item.submission);
+      await this.pause(job.id, unresolved
+        ? "原图片服务已下线，供应商请求待核实，请保留原任务号；系统已暂停"
+        : "原图片服务已下线，请选择当前模型或上传关键帧", "review");
+      return false;
+    }
     if (frame.submission?.state === "mismatch") throw new Error(`图片任务 ${frame.requestId || "未知"} 的生成参数发生变化，须人工核对，不能自动归档或重新提交`);
     if (frame.requestId) {
       let result;
@@ -247,19 +253,7 @@ export class KeyframeService {
     const images = await this.referenceDataUrls(refs, { model: imageModel(imageRoute) });
     const unit = job.payload.artifacts.units.find(u => u.id === frame.unitId);
     const body = keyframeImageBody(imageRoute, { prompt: keyframePrompt(refs, job.payload.artifacts, unit, frame.correction), images, aspectRatio });
-    if (imageRoute.protocol === "agentai-image") await dryRunKeyframe(this.config,imageRoute,body);
-    if (imageRoute.protocol === "xhai-image") {
-      const fingerprint = createHash("sha256").update(images.join("\n")).digest("hex");
-      const cached = gate.xhaiReferenceUploads;
-      body.params.images = cached?.fingerprint === fingerprint
-        ? cached.urls
-        : await uploadXhaiImages(imageRoute.baseUrl, videoKey(this.config, imageRoute), images);
-      if (!cached || cached.fingerprint !== fingerprint) await this.store.mutate(data => {
-        const current = data.jobs[job.id];
-        if (current?.status === "running") current.payload.keyframeGate.xhaiReferenceUploads = { fingerprint, urls: body.params.images };
-      });
-      await dryRunKeyframe(this.config, imageRoute, body);
-    }
+    await dryRunKeyframe(this.config, imageRoute, body);
     const canSubmit = await this.store.mutate(data => {
       const { job: current, task } = state(data, job.id);
       if (current.status !== "running") return false;

@@ -29,6 +29,7 @@ export function AssetInput({
   projectId,
   files,
   onChange,
+  onUploading,
   maximum = 20,
   single = false,
   disabled = false,
@@ -38,6 +39,7 @@ export function AssetInput({
   projectId?: string;
   files: Item[];
   onChange: (files: Item[]) => void;
+  onUploading?: (value: boolean) => void;
   maximum?: number;
   single?: boolean;
   disabled?: boolean;
@@ -86,6 +88,7 @@ export function AssetInput({
             return false;
           }
           setUploading(true);
+          onUploading?.(true);
           try {
             const form = new FormData();
             form.set("file", file);
@@ -97,6 +100,7 @@ export function AssetInput({
             message.error(e.message);
           } finally {
             setUploading(false);
+            onUploading?.(false);
           }
           return false;
         }}

@@ -4,10 +4,8 @@ export {
   videoKey,
   selectVideoRoute,
   validateVideoInput,
-  preflightXhaiVideo,
+  preflightAgentAiVideo,
   submitVideo,
   pollVideo,
-  XhaiVideoAdjustmentError,
 } from "./vendor/cloud/video-providers.mjs";
-export { uploadXhaiImages } from "./vendor/cloud/xhai-files.mjs";
 export { withJobSignal } from "./vendor/cloud/job-request.mjs";

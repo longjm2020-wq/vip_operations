@@ -1,6 +1,7 @@
 ﻿import { test, expect, type Page } from "@playwright/test";
 import { createServer, type Server } from "node:http";
-import { mkdtemp } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sharp from "sharp";
@@ -70,7 +71,7 @@ test.afterAll(async () => {
   engine?.stop();
   await new Promise<void>((r) => server?.close(() => r()));
 });
-async function fixture(page: Page, mode = "dark", permitted = true) {
+async function fixture(page: Page, mode = "dark", permitted = true, commerce = false) {
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(),
       url = new URL(request.url()),
@@ -105,7 +106,7 @@ async function fixture(page: Page, mode = "dark", permitted = true) {
         username: "creator",
         roleCodes: ["SUPER_ADMIN"],
         permissions: permitted
-          ? ["aigc.use", "aigc.manage", "analytics.read"]
+          ? ["aigc.use", "aigc.manage", "analytics.read", ...(commerce ? ["product.read"] : [])]
           : ["analytics.read"],
         csrfToken: "test-csrf",
       };
@@ -184,9 +185,8 @@ test("H3 settings reuse a saved connection and require confirmation before one p
   ).toBeVisible();
   await expect(drawer.getByLabel("xAI 官方视频 Key")).not.toBeVisible();
   await drawer.getByRole("button", { name: /^图片生成/ }).click();
-  await drawer
-    .getByLabel("TT Image 2.5 · 按量渠道 Key")
-    .fill("fixture-new-image-key");
+  await expect(drawer.getByLabel("TT Image 2.5 · 按量渠道 Key")).toHaveCount(0);
+  await expect(drawer.getByText(/AgentAI/).first()).toBeVisible();
   await drawer.getByRole("button", { name: /^图片生成/ }).click();
   await drawer.getByText("使用已保存的百炼语音连接", { exact: true }).click();
   await expect(drawer.getByLabel("百炼北京业务空间 ID")).toHaveValue(
@@ -199,10 +199,10 @@ test("H3 settings reuse a saved connection and require confirmation before one p
   expect(saved).toMatchObject({
     useSavedQwenConnection: true,
     bailianWorkspaceId: "ws-fixture12345678",
-    videoRelayBaseUrl: "https://relay.example.test",
-    xhaiBaseUrl: "https://images.example.test",
-    secrets: { XYLP_IMAGE_TT25_KEY: "fixture-new-image-key" },
+    secrets: {},
   });
+  expect(saved).not.toHaveProperty("videoRelayBaseUrl");
+  expect(saved).not.toHaveProperty("xhaiBaseUrl");
   expect(saved.secrets).not.toHaveProperty("XAI_API_KEY");
   await drawer.getByRole("button", { name: "验证 H3 视频连接" }).click();
   await expect(page.getByText(/刊例约 2 元，无免费额度/)).toBeVisible();
@@ -332,7 +332,7 @@ test("百炼音色可独立核验与保存，保留原 H3 视频连接", async (
   expect(checks).toEqual(["configured", "saved", "configured"]);
 });
 
-test("native blue studio supports all five entries and omits commercial navigation", async ({
+test("compact studio presents four creation entries and accessible project controls", async ({
   page,
 }) => {
   await fixture(page);
@@ -340,10 +340,15 @@ test("native blue studio supports all five entries and omits commercial navigati
   await expect(
     page.getByRole("heading", { name: "AIGC 创作空间" }),
   ).toBeVisible();
-  for (const title of ["短视频制作", "电商详情页制作", "数字人"])
+  const entries = page.getByRole("region", { name: "创作入口" });
+  await expect(entries.getByRole("button")).toHaveCount(4);
+  for (const title of ["短视频制作", "数字人口播", "电商详情页制作", "数字人"])
     await expect(
       page.getByRole("heading", { name: title, exact: true }),
     ).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "搜索项目" }).or(page.getByRole("textbox", { name: "搜索项目" }))).toBeVisible();
+  await expect(page.getByRole("button", { name: "回收站" })).toBeVisible();
+  expect(await entries.getByRole("button").first().evaluate(el => el.getBoundingClientRect().height)).toBeLessThan(110);
   await expect(page.getByRole("menuitem", { name: /AIGC/ })).toBeVisible();
   await expect(page.getByText(/积分账户|充值|购买会员|平台管理/)).toHaveCount(
     0,
@@ -365,8 +370,12 @@ test("native blue studio supports all five entries and omits commercial navigati
   const dark = await page
     .locator(".aigc-entry")
     .first()
-    .evaluate((el) => getComputedStyle(el).color);
-  expect(dark).toBe("rgb(238, 240, 246)");
+    .evaluate((el) => {
+      const style = getComputedStyle(el);
+      const red = (color: string) => Number(color.match(/\d+/u)?.[0]);
+      return { readableText: red(style.color) > 225, darkPanel: red(style.backgroundColor) < 45 };
+    });
+  expect(dark).toEqual({ readableText: true, darkPanel: true });
 });
 test("uploads and saves a real video project; reload and recycle preserve it", async ({
   page,
@@ -412,6 +421,81 @@ test("uploads and saves a real video project; reload and recycle preserve it", a
   ).toBeVisible();
   await page.getByRole("button", { name: "恢复项目", exact: true }).click();
 });
+test("the apparel entry opens and submits a mixed product batch", async ({ page }) => {
+  await fixture(page, "dark", true, true);
+  let received: any;
+  const batchId = randomUUID();
+  const presenterId = randomUUID();
+  const now = new Date().toISOString();
+  const products = [
+    { id: "11", styleNo: "XUTI-111", name: "XUTI-111", images: [{ id: "photo-11", url: "/photo-11" }] },
+    { id: "12", styleNo: "XUTI-222", name: "XUTI-222", images: [] },
+  ];
+  await page.route("**/api/v1/aigc/digital-human/lip-sync", route => route.fulfill({ json: { configured: true, jobs: [] } }));
+  await page.route("**/api/v1/aigc/commerce-video/**", async (route) => {
+    const endpoint = new URL(route.request().url()).pathname.split("/commerce-video/")[1];
+    if (endpoint === "options") return route.fulfill({ json: { available: true, presenters: [{ id: presenterId, name: "测试主播", voiceKind: "default" }] } });
+    if (endpoint === "products") return route.fulfill({ json: { products } });
+    if (endpoint === "jobs") return route.fulfill({ json: { jobs: [] } });
+    if (endpoint === "batches" && route.request().method() === "GET") return route.fulfill({ json: { batches: [] } });
+    if (endpoint === "batches" || endpoint === `batches/${batchId}`) {
+      if (route.request().method() === "POST") received = route.request().postDataJSON();
+      return route.fulfill({ json: {
+        id: batchId, createdAt: now, items: [
+          { productId: "11", styleNo: "XUTI-111", job: { id: batchId, state: "queued", styleNo: "XUTI-111", scenes: [], createdAt: now } },
+          { productId: "12", styleNo: "XUTI-222", message: "商品档案缺少已上传的实拍图" },
+        ],
+      } });
+    }
+    return route.fulfill({ status: 404, json: { error: "unknown fixture" } });
+  });
+  await page.goto("/aigc");
+  await page.getByRole("button", { name: /服装口播.*商品讲解/ }).click();
+  await expect(page.getByRole("heading", { name: "服装口播" })).toBeVisible();
+  await page.getByText("按款批量", { exact: true }).click();
+  const search = page.getByRole("combobox", { name: "批量选择商品" });
+  await search.fill("XUTI");
+  await page.getByRole("option", { name: "XUTI-111" }).click();
+  await search.fill("XUTI");
+  await page.getByRole("option", { name: "XUTI-222" }).click();
+  await page.getByRole("textbox", { name: "视频要求" }).fill("做竖屏口播，先看领口和版型");
+  await page.getByRole("button", { name: "提交批量制作" }).click();
+  const progress = page.getByRole("region", { name: "批量制作进度" });
+  await expect(progress.getByText("排队中")).toBeVisible();
+  await expect(progress.getByText("商品档案缺少已上传的实拍图")).toBeVisible();
+  expect(received).toMatchObject({ productIds: ["11", "12"], presenterId });
+});
+test("imports a share reference and keeps the current source when a replacement requires local upload", async ({ page }) => {
+  await fixture(page);
+  let submitted = 0;
+  await page.route("**/api/v1/aigc/assets/import-reference", async (route) => {
+    const body = route.request().postDataJSON();
+    if (++submitted === 2)
+      return route.fulfill({ status: 422, json: { error: "作品需要登录，请从本机上传原视频。" } });
+    expect(body.shareText).toBe("去抖音看 https://v.douyin.com/some-post/");
+    const asset = await engine.importPublicReference(user, body.projectId, async (file) => {
+      await writeFile(file, Buffer.from("browser fixture bytes"));
+      return { name: "公开参考片.mp4", mime: "video/mp4" };
+    }, new AbortController().signal);
+    return route.fulfill({ status: 201, json: asset });
+  });
+  await page.goto("/aigc");
+  await page.getByRole("button", { name: /01短视频制作|短视频制作.*参考拆解/ }).click();
+  await page.getByRole("button", { name: "导入分享链接" }).click();
+  await page.getByLabel("参考视频链接").fill("去抖音看 https://v.douyin.com/some-post/");
+  await page.getByRole("button", { name: "导入参考片" }).click();
+  await expect(page.getByText("公开参考片.mp4", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect(page.getByText("项目已保存", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("公开参考片.mp4", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "导入分享链接" }).click();
+  await page.getByLabel("参考视频链接").fill("https://www.rednote.com/explore/example");
+  await page.getByRole("button", { name: "导入参考片" }).click();
+  await expect(page.getByText("作品需要登录，请从本机上传原视频。")).toBeVisible();
+  await expect(page.getByText("公开参考片.mp4", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "替换素材" })).toBeEnabled();
+});
 test("ecommerce planning and digital drafts work without fake generated outputs", async ({
   page,
 }) => {
@@ -445,10 +529,13 @@ test("ecommerce planning and digital drafts work without fake generated outputs"
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".aigc-entry").first()).toBeVisible();
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > window.innerWidth + 1,
-  );
-  expect(overflow).toBe(false);
+  await expect.poll(() => page.evaluate(() => {
+    if (document.documentElement.scrollWidth <= window.innerWidth + 1) return [];
+    return [...document.querySelectorAll("body *")].flatMap((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.width > 0 && bounds.right > window.innerWidth + 1 ? [`${element.tagName}.${String(element.className).slice(0, 90)}`] : [];
+    }).slice(0, 20);
+  })).toEqual([]);
   await page.screenshot({
     path: ".local/aigc-mobile-preview.png",
     fullPage: true,

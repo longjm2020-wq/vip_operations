@@ -9,6 +9,7 @@ export const sourceFiles = [
   "apps/desktop/FolderCreation.cs",
   "apps/desktop/FolderAttachment.cs",
   "apps/desktop/FilePlanRunner.cs",
+  "apps/desktop/LocalMediaIndex.cs",
   "apps/desktop/WeCom.cs",
   "apps/desktop/DesktopShell.cs",
   "apps/desktop/app.manifest",

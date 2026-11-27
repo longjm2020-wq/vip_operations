@@ -4,6 +4,7 @@ import {
 } from "./vendor/cloud/compile-providers.mjs";
 import {
   imageCatalog,
+  imageRouteConfigured,
   keyframeImageRoute,
 } from "./vendor/cloud/image-provider.mjs";
 import {
@@ -11,7 +12,6 @@ import {
   selectVideoRoute,
   videoKey,
 } from "./vendor/cloud/video-providers.mjs";
-import { enhancementRoute } from "./vendor/cloud/video-enhance.mjs";
 import { RUNNINGHUB_DEPTH_WORKFLOW_ID } from "./vendor/cloud/runninghub-depth.mjs";
 import {
   FAL_LIP_SYNC_MODEL,
@@ -19,12 +19,14 @@ import {
 } from "./vendor/cloud/fal-lip-sync.mjs";
 
 const source = (label, url) => `${label} · ${new URL(url).origin}`;
+export function imageGenerationConfigured(config) {
+  return imageCatalog(config).configured;
+}
 /** Deliberate safe projection: engine configuration contains credentials. */
 export function aigcModelManagement(config, settings) {
   const compiler = selectCompiler(config, settings);
   const image = keyframeImageRoute(config);
   const video = selectVideoRoute(config, config.defaultVideoSelection);
-  const enhance = enhancementRoute(config.videoRelayBaseUrl);
   return [
     {
       id: "aigc_compile",
@@ -32,15 +34,13 @@ export function aigcModelManagement(config, settings) {
       selection: `${compiler.id}|${compiler.model}`,
       source: source(compiler.label, compiler.baseUrl),
       configured: !!compiler.apiKey,
-      choices: compileProviders(config).flatMap((p) =>
-        (p.models || []).map((m) => ({
-          value: `${p.id}|${m.id}`,
-          label: m.label,
+      choices: compileProviders(config).filter(p => p.id !== "openrouter" && p.model).map((p) => ({
+          value: `${p.id}|${p.model}`,
+          label: `${p.label} · ${p.model}`,
           source: source(p.label, p.baseUrl),
-          boundary: "脚本、分镜与视觉分析；星火线路仅限超级管理员。",
-          available: p.id === "xylp" ? !!m.configured : !!p.apiKey,
+          boundary: "脚本、分镜与视觉分析。",
+          available: !!p.apiKey,
         })),
-      ),
     },
     {
       id: "aigc_commerce_script",
@@ -55,14 +55,14 @@ export function aigcModelManagement(config, settings) {
       model: image.providerModel || image.model,
       selection: image.model,
       source: source(image.label, image.baseUrl),
-      configured: !!videoKey(config, image),
+      configured: imageRouteConfigured(config, image),
       choices: imageCatalog(config, "super_admin").models.map((m) => {
         const route = keyframeImageRoute(config, { modelId: m.id });
         return {
           value: m.id,
           label: m.label,
           source: source(route.label, route.baseUrl),
-          boundary: `最多 ${m.maxImages} 张参考图；${m.detail}。${route.protocol === "xhai-image" ? "星火线路仅限超级管理员。" : route.protocol === "agentai-image" ? "独立 AgentAI 连接与目录就绪后可用，图片固定单张 2K；未接入独立音频生成。" : ""}`,
+          boundary: `最多 ${m.maxImages} 张参考图。${m.detail}。独立 AgentAI 连接与目录就绪后可用，图片固定单张 2K。`,
           available: m.configured,
         };
       }),
@@ -91,19 +91,11 @@ export function aigcModelManagement(config, settings) {
                 value: `${p.id}|${m.id}`,
                 label: `${p.label} / ${m.label}`,
                 source: source(p.label, p.baseUrl),
-                boundary: `${m.note || "视频生成"}；${Math.min(...m.durations)}～${Math.max(...m.durations)} 秒；最多 ${m.maxImages} 张图片；画质 ${m.resolutions.join(" / ")}。${p.id === "bailian" ? "百炼按视频秒数及超额参考图片计费，实际金额以账单为准。" : p.id === "agentai" ? "AgentAI 独立连接；仅图片参考，实际费用按供应商回执记录，估价不作为实际账单。" : "官方 xAI / 星火线路仅限超级管理员。"}`,
+                boundary: `${m.note || "视频生成"}。${Math.min(...m.durations)}～${Math.max(...m.durations)} 秒，最多 ${m.maxImages} 张图片，画质 ${m.resolutions.join(" / ")}。${p.id === "bailian" ? "可按指定片段提交 CozyClay 灰模参考与整轨对白。百炼按秒和超额参考图计费，同框角色和口型须审片。" : p.id === "agentai" ? "AgentAI 仅接收图片参考，实际费用按供应商回执记录。" : "使用官方 xAI 视频。"}`,
                 available: !!videoKey(config, route),
               };
             }),
         ),
-    },
-    {
-      id: "aigc_enhance",
-      model: "video-enhance",
-      selection: "",
-      source: source(enhance.label, enhance.baseUrl),
-      configured: !!videoKey(config, enhance),
-      choices: [],
     },
     {
       id: "aigc_depth",

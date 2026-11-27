@@ -35,7 +35,14 @@ static partial class ShellPolicy {
         var parser=new JavaScriptSerializer { MaxJsonLength=4096, RecursionLimit=16 };
         var d=AssistantForm.D(parser.DeserializeObject(raw));
         string channel=AssistantForm.S(d,"channel"), action=AssistantForm.S(d,"action");
-        if(channel!="xuti-desktop"||!new[]{"status","pair","authorize","show-tasks","open-local-browser","theme"}.Contains(action)) throw new Exception("不支持的客户端请求");
+        bool localMedia=new[]{"media-index-open","media-index-page","media-index-preview","media-index-file","media-index-excerpt"}.Contains(action);
+        if(channel!="xuti-desktop"||(!localMedia&&!new[]{"status","pair","authorize","show-tasks","open-local-browser","theme"}.Contains(action))) throw new Exception("不支持的客户端请求");
+        if(localMedia) {
+            Guid mediaRequest;
+            if(!Guid.TryParseExact(AssistantForm.S(d,"id"),"D",out mediaRequest))throw new Exception("请求无效");
+            LocalMediaIndex.ValidateAction(d,action,source,current);
+            return d;
+        }
         if(action=="theme") {
             if(d.Keys.Any(k=>!new[]{"channel","action","value"}.Contains(k))||!new[]{"light","dark"}.Contains(AssistantForm.S(d,"value"))) throw new Exception("主题无效");
         } else {
@@ -71,10 +78,14 @@ static partial class ShellPolicy {
             }
             bool denied=false;try{Message("https://example.com",Origin,valid);}catch{denied=true;}if(!denied)throw new Exception("External page bridge accepted");
             DesktopRelease.SelfTest();
-            bool retiredActionDenied=false;
-            try{Message(Origin,Origin,"{\"channel\":\"xuti-desktop\",\"action\":\"director-capabilities\"}");}
-            catch{retiredActionDenied=true;}
-            if(!retiredActionDenied)throw new Exception("Retired bridge action accepted");
+            var media=j.Serialize(new{channel="xuti-desktop",action="media-index-open",id=Guid.NewGuid().ToString()});
+            Message(Origin+"/aigc",Origin+"/aigc?view=video",media);
+            denied=false;try{Message(Origin+"/aigc",Origin+"/my-workspace",media);}catch{denied=true;}
+            if(!denied)throw new Exception("Local media bridge escaped AIGC.");
+            var rawPath=j.Serialize(new{channel="xuti-desktop",action="media-index-open",id=Guid.NewGuid().ToString(),path="C:\\private"});
+            denied=false;try{Message(Origin+"/aigc",Origin+"/aigc",rawPath);}catch{denied=true;}
+            if(!denied)throw new Exception("Local media accepted a raw path.");
+            LocalMediaIndex.SelfTest();
             Console.WriteLine("Desktop origin, navigation, bridge and release validation: passed");return 0;
         } catch(Exception e){Console.WriteLine(e.Message);return 1;}
     }
@@ -195,6 +206,11 @@ sealed class DesktopShell : Form {
     readonly Label noticeText=new Label{Dock=DockStyle.Top,Height=100,Font=new Font("Microsoft YaHei UI",12)};
     readonly JavaScriptSerializer json=new JavaScriptSerializer();
     readonly List<BrowserWindow> browsers=new List<BrowserWindow>();
+    readonly Dictionary<string,LocalMediaIndex.Delivery> mediaDeliveries=new Dictionary<string,LocalMediaIndex.Delivery>();
+    readonly System.Windows.Forms.Timer mediaExpiry=new System.Windows.Forms.Timer { Interval=15000 };
+    LocalMediaIndex mediaIndex;
+    CancellationTokenSource mediaLifetime=new CancellationTokenSource();
+    bool mediaBusy;
     CoreWebView2Environment environment;
     Task<CoreWebView2Environment> localBrowserEnvironment;
     BrowserWindow localBrowser;
@@ -231,6 +247,7 @@ sealed class DesktopShell : Form {
         updateNotice.SizeChanged+=(s,e)=>PositionUpdateNotice();
         assistant.Changed+=RefreshUpdateNotice;
         updateTimer.Tick+=async(s,e)=>await CheckForReleaseAsync();
+        mediaExpiry.Tick+=(s,e)=>PurgeMediaDeliveries();
         assistant.SetupRequested+=()=>{var ignored=RequestSetup();};
         assistant.WorkspaceRequested+=()=>ShowWorkspace(null);
         Shown+=async(s,e)=>{assistant.Show();assistant.StartEngine();await Initialize();};
@@ -242,7 +259,7 @@ sealed class DesktopShell : Form {
             await Task.WhenAny(assistant.EndSession(),Task.Delay(3000));
             assistant.Shutdown();exiting=true;BeginInvoke(new Action(Close));
         };
-        FormClosed+=(s,e)=>{foreach(var b in browsers.ToArray())b.Close();assistant.Dispose();workspace.Dispose();};
+        FormClosed+=(s,e)=>{foreach(var b in browsers.ToArray())b.Close();ClearLocalMedia();mediaLifetime.Dispose();mediaExpiry.Dispose();assistant.Dispose();workspace.Dispose();};
         ShellStyle.Apply(this,false);
     }
     public static int CheckRuntime() {
@@ -416,6 +433,7 @@ sealed class DesktopShell : Form {
             core.Settings.IsGeneralAutofillEnabled=false;
             core.NavigationStarting+=(s,e)=>{
                 navigation++;
+                ClearLocalMedia();
                 if(!ShellPolicy.Trusted(e.Uri)){e.Cancel=true;if(e.IsUserInitiated&&ShellPolicy.WebAddress(e.Uri))OpenBrowser(e.Uri);return;}
                 pendingUrl=e.Uri;
             };
@@ -425,16 +443,20 @@ sealed class DesktopShell : Form {
             core.DownloadStarting+=(s,e)=>BrowserWindow.Download(this,e);
             core.ProcessFailed+=(s,e)=>ShowNotice("网页进程已停止，请关闭并重新打开小序。需要暂停或停止电脑任务时，点击「打开电脑任务」。");
             core.WebMessageReceived+=OnMessage;
+            core.SourceChanged+=(s,e)=>{if(!LocalMediaIndex.IsStudio(core.Source))ClearLocalMedia();};
+            core.AddWebResourceRequestedFilter(ShellPolicy.Origin+LocalMediaIndex.Route+"*",CoreWebView2WebResourceContext.All,CoreWebView2WebResourceRequestSourceKinds.Document);
+            core.WebResourceRequested+=OnLocalMediaResource;
             core.WebResourceResponseReceived+=async(s,e)=>{
                 Uri u;if(!Uri.TryCreate(e.Request.Uri,UriKind.Absolute,out u)||!ShellPolicy.Trusted(e.Request.Uri))return;
                 if((u.AbsolutePath=="/api/v1/auth/logout"&&e.Response.StatusCode<300)||(u.AbsolutePath=="/api/v1/auth/me"&&e.Response.StatusCode==401)) {
+                    ClearLocalMedia();
                     try{await assistant.Disconnect();}catch{}
                 }
             };
             // No native object, token, filesystem or execution API is injected into any page.
             await core.AddScriptToExecuteOnDocumentCreatedAsync(@"(() => {
                 if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return;
-                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'" + ShellPolicy.Version + @"',localBrowser:true,nativeUpdates:true}), writable:false});
+                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'" + ShellPolicy.Version + @"',localBrowser:true,nativeUpdates:true,localMediaIndex:true}), writable:false});
                 let lastTheme;
                 const theme = () => {
                     const value=document.documentElement.dataset.theme;
@@ -455,6 +477,11 @@ sealed class DesktopShell : Form {
             var data=ShellPolicy.Message(e.Source,workspace.CoreWebView2.Source,e.WebMessageAsJson);
             string action=AssistantForm.S(data,"action");id=AssistantForm.S(data,"id");
             if(action=="theme"){ApplyTheme(AssistantForm.S(data,"value")=="dark");return;}
+            if(action.StartsWith("media-index-",StringComparison.Ordinal)) {
+                var mediaResult=await HandleLocalMedia(action,data);
+                Reply(version,new{channel="xuti-desktop",id,ok=true,data=mediaResult});
+                return;
+            }
             if(action=="status") await assistant.RefreshStatus();
             if(action=="pair") {
                 await assistant.PairCode(AssistantForm.S(data,"code"));
@@ -473,6 +500,78 @@ sealed class DesktopShell : Form {
     }
     void Reply(long version,object value) {
         if(!exiting&&version==navigation&&ready&&ShellPolicy.Trusted(workspace.CoreWebView2.Source))workspace.CoreWebView2.PostWebMessageAsJson(json.Serialize(value));
+    }
+
+    void ClearLocalMedia() {
+        mediaLifetime.Cancel();mediaLifetime.Dispose();mediaLifetime=new CancellationTokenSource();mediaIndex=null;
+        foreach(var item in mediaDeliveries.Values)item.Dispose();
+        mediaDeliveries.Clear();mediaExpiry.Stop();
+    }
+
+    void PurgeMediaDeliveries() {
+        foreach(string key in mediaDeliveries.Where(pair=>pair.Value.Expires<DateTime.UtcNow).Select(pair=>pair.Key).ToArray()) {
+            mediaDeliveries[key].Dispose();mediaDeliveries.Remove(key);
+        }
+        if(mediaDeliveries.Count==0)mediaExpiry.Stop();
+    }
+
+    async Task<object> HandleLocalMedia(string action,Dictionary<string,object> data) {
+        if(action=="media-index-page") {
+            if(mediaIndex==null||!mediaIndex.Matches(AssistantForm.S(data,"indexId")))throw new InvalidOperationException("本机素材目录已关闭，请重新选择文件夹。");
+            return mediaIndex.Page(LocalMediaIndex.Integer(data,"offset",0,20000),AssistantForm.S(data,"search"));
+        }
+        if(mediaBusy)throw new InvalidOperationException("本机正在处理上一项素材，请稍后再试。");
+        mediaBusy=true;
+        var cancel=mediaLifetime.Token;
+        try {
+            if(action=="media-index-open") {
+                using(var picker=new FolderBrowserDialog { Description="选择 AIGC 素材文件夹。索引和预览留在本机。", ShowNewFolderButton=false }) {
+                    if(picker.ShowDialog(this)!=DialogResult.OK)return null;
+                    string selected=picker.SelectedPath;
+                    cancel.ThrowIfCancellationRequested();
+                    ClearLocalMedia();cancel=mediaLifetime.Token;
+                    var scanned=await Task.Run(()=>LocalMediaIndex.Scan(selected,cancel),cancel);
+                    cancel.ThrowIfCancellationRequested();mediaIndex=scanned;
+                    return mediaIndex.Page(0,"");
+                }
+            }
+            if(mediaIndex==null||!mediaIndex.Matches(AssistantForm.S(data,"indexId")))throw new InvalidOperationException("本机素材目录已关闭，请重新选择文件夹。");
+            var entry=mediaIndex.Find(AssistantForm.S(data,"assetId"));
+            bool original=action=="media-index-file", excerpt=action=="media-index-excerpt";
+            int maxBytes=original||excerpt?LocalMediaIndex.Integer(data,"maxBytes",1,LocalMediaIndex.MaxFileBytes):LocalMediaIndex.MaxFileBytes;
+            if(original&&entry.Bytes>maxBytes)throw new InvalidOperationException("该原片超过上传大小，请改用视频片段或选择更小的素材。");
+            if((original||excerpt)&&MessageBox.Show(this,
+                "将所选"+(excerpt?"视频片段":"文件")+"交给 AIGC 使用？\n\n"+entry.Name,
+                "确认选用本机素材",MessageBoxButtons.YesNo,MessageBoxIcon.Question,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return null;
+            int start=original?0:LocalMediaIndex.Integer(data,"startSeconds",0,86400);
+            var delivery=await Task.Run(()=>original?LocalMediaIndex.Original(entry,maxBytes):LocalMediaIndex.Prepare(entry,start,excerpt,maxBytes,cancel),cancel);
+            if(cancel.IsCancellationRequested){delivery.Dispose();cancel.ThrowIfCancellationRequested();}
+            PurgeMediaDeliveries();
+            if(mediaDeliveries.Count>=6){delivery.Dispose();throw new InvalidOperationException("本机已有待读取的预览或素材，请稍后再试。");}
+            mediaDeliveries.Add(delivery.Token,delivery);mediaExpiry.Start();
+            return new { url=LocalMediaIndex.Route+delivery.Token, name=delivery.Name, mime=delivery.Mime, bytes=delivery.Length };
+        } finally {mediaBusy=false;}
+    }
+
+    void OnLocalMediaResource(object sender,CoreWebView2WebResourceRequestedEventArgs args) {
+        Uri address;
+        if(!ShellPolicy.Trusted(args.Request.Uri) || !Uri.TryCreate(args.Request.Uri,UriKind.Absolute,out address) ||
+           !address.AbsolutePath.StartsWith(LocalMediaIndex.Route,StringComparison.Ordinal))return;
+        string token=address.AbsolutePath.Substring(LocalMediaIndex.Route.Length);
+        var core=workspace.CoreWebView2;
+        PurgeMediaDeliveries();
+        LocalMediaIndex.Delivery item;
+        if(args.Request.Method!="GET" || address.Query.Length>0 || !LocalMediaIndex.IsStudio(core.Source) || !mediaDeliveries.TryGetValue(token,out item)) {
+            args.Response=environment.CreateWebResourceResponse(new MemoryStream(),404,"Not Found","Cache-Control: no-store\r\n");return;
+        }
+        mediaDeliveries.Remove(token);
+        using(item) {
+            long size=item.Length;
+            Stream stream=item.Take();
+            try {
+                args.Response=environment.CreateWebResourceResponse(stream,200,"OK","Content-Type: "+item.Mime+"\r\nContent-Length: "+size+"\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n");
+            } catch{stream.Dispose();throw;}
+        }
     }
 }
 

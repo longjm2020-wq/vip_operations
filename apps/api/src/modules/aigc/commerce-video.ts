@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Studio } from "../../../../../packages/aigc-engine/index.mjs";
 import {
@@ -6,6 +7,7 @@ import {
   one,
   rows,
   type Row,
+  type Tx,
 } from "../../../../../packages/database/src/index.js";
 import { HttpException } from "@nestjs/common";
 import { aiFetch } from "../../ai-metering.js";
@@ -58,6 +60,14 @@ const jobInput = z
     maxSpeechCny: z.number().positive().multipleOf(0.01).max(20).optional(),
   })
   .strict();
+const batchInput = jobInput
+  .omit({ productId: true, imageIds: true })
+  .extend({
+    productIds: z.array(id).min(2).max(10).refine(
+      (ids) => new Set(ids).size === ids.length,
+      "同一批次不能重复选择款号",
+    ),
+  });
 const editInput = z
   .object({ requestId: z.uuid(), imageId: photoId.nullable() })
   .strict();
@@ -83,6 +93,13 @@ type Scene = {
   end?: number;
 };
 type Product = Awaited<ReturnType<typeof commerceProduct>>;
+type JobInput = z.infer<typeof jobInput>;
+type BatchItem = {
+  productId: string;
+  styleNo?: string;
+  jobId?: string;
+  message?: string;
+};
 
 function productCard(product: Product) {
   return {
@@ -134,6 +151,113 @@ async function ownedJob(actor: Actor, jobId: string) {
   );
   if (!job) fail("NOT_FOUND", "找不到该口播任务", 404);
   return job;
+}
+
+async function readyPresenter(studio: Studio, actor: Actor, input: Pick<JobInput, "presenterId" | "maxSpeechCny">) {
+  const options = await commercePresenterOptions(studio, actor);
+  if (!studio.config.openrouterApiKey || !options.available)
+    fail("COMMERCE_NOT_READY", "请先在服务设置验证脚本与数字人服务", 503);
+  const presenter = options.presenters.find((p) => p.id === input.presenterId);
+  if (!presenter)
+    fail("PRESENTER_NOT_FOUND", "请选择当前账号可用的已授权角色", 422);
+  if (presenter.voiceKind === "cloned" && !input.maxSpeechCny)
+    fail("COMMERCE_SPEECH_BUDGET", "请为克隆音色设置本次语音合成费用上限", 422);
+  return presenter;
+}
+
+async function lockQueue(tx: Tx, actor: Actor) {
+  await one(tx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))::text", `commerce-video:${actor.id}`);
+}
+
+async function pendingCount(tx: Tx, actor: Actor) {
+  const pending = await one(tx, `SELECT count(*)::int n FROM public.commerce_videos
+    WHERE user_id=$1::bigint AND state IN ('queued','writing','speaking','editing')`, actor.id);
+  return pending!.n as number;
+}
+
+async function insertJob(tx: Tx, actor: Actor, input: JobInput, presenterName: string, styleNo: string, fingerprint: string) {
+  await tx.$executeRawUnsafe(
+    `INSERT INTO public.commerce_videos (id,user_id,product_id,presenter_id,presenter_name,style_no,prompt,image_ids,max_speech_cny,request_hash)
+     VALUES ($1::uuid,$2::bigint,$3::bigint,$4::uuid,$5,$6,$7,$8::jsonb,$9,$10) ON CONFLICT (id) DO NOTHING`,
+    input.requestId, actor.id, input.productId, input.presenterId, presenterName, styleNo,
+    input.prompt, JSON.stringify(input.imageIds), input.maxSpeechCny ?? null, fingerprint,
+  );
+  const saved = await one(tx, "SELECT * FROM public.commerce_videos WHERE id=$1::uuid AND user_id=$2::bigint", input.requestId, actor.id);
+  if (!saved || saved.request_hash !== fingerprint)
+    fail("IDEMPOTENCY_CONFLICT", "请求内容已改变，请重新提交");
+  return saved;
+}
+
+function findBatch(tx: Tx, actor: Actor, batch: string) {
+  return one(tx, "SELECT * FROM public.commerce_video_batches WHERE id=$1::uuid AND user_id=$2::bigint", batch, actor.id);
+}
+
+async function batchView(actor: Actor, batch: Row) {
+  const items = batch.items as BatchItem[];
+  const ids = items.flatMap((item) => item.jobId ? [item.jobId] : []);
+  const jobs = ids.length
+    ? await rows(db, `SELECT * FROM public.commerce_videos WHERE user_id=$1::bigint
+        AND id IN (SELECT jsonb_array_elements_text($2::jsonb)::uuid)`, actor.id, JSON.stringify(ids))
+    : [];
+  const byId = new Map(jobs.map((job) => [job.id, view(job)]));
+  return {
+    id: batch.id,
+    createdAt: new Date(batch.created_at).toISOString(),
+    items: items.map(({ jobId, ...item }) => ({ ...item, job: jobId ? byId.get(jobId) : undefined })),
+  };
+}
+
+async function enqueueBatch(studio: Studio, actor: Actor, input: z.infer<typeof batchInput>) {
+  const fingerprint = hash(canonical(input));
+  const check = (batch: Row) => {
+    if (batch.request_hash !== fingerprint)
+      fail("IDEMPOTENCY_CONFLICT", "批次内容已改变，请重新提交");
+    return batch;
+  };
+  const prior = await findBatch(db, actor, input.requestId);
+  if (prior) return check(prior);
+
+  const presenter = await readyPresenter(studio, actor, input);
+  const items: Array<BatchItem & { imageId?: string }> = [];
+  for (const productId of input.productIds) {
+    try {
+      const product = await commerceProduct(actor, productId);
+      const imageId = product.images[0]?.id;
+      items.push({
+        productId, styleNo: product.styleNo, imageId,
+        ...(imageId ? {} : { message: "商品档案缺少已上传的实拍图" }),
+      });
+    } catch (error) {
+      if (!(error instanceof HttpException) || ![403, 404].includes(error.getStatus())) throw error;
+      items.push({ productId, message: "找不到当前账号可查看的款号" });
+    }
+  }
+  return db.$transaction(async (tx: Tx) => {
+    await lockQueue(tx, actor);
+    const current = await findBatch(tx, actor, input.requestId);
+    if (current) return check(current);
+    const planned = items.filter((item) => item.imageId).length;
+    if (planned > 0 && (await pendingCount(tx, actor)) + planned > 10)
+      fail("COMMERCE_QUEUE", "账号最多可同时排队 10 条口播，请等待上一批办理", 429);
+    const results: BatchItem[] = [];
+    for (const { imageId, ...item } of items) {
+      if (imageId && item.styleNo) {
+        const job: JobInput = {
+          requestId: randomUUID(), productId: item.productId,
+          presenterId: input.presenterId, prompt: input.prompt,
+          maxSpeechCny: input.maxSpeechCny, imageIds: [imageId],
+        };
+        await insertJob(tx, actor, job, presenter.name, item.styleNo, hash(canonical(job)));
+        item.jobId = job.requestId;
+      }
+      results.push(item);
+    }
+    const created = await one(tx, `INSERT INTO public.commerce_video_batches (id,user_id,request_hash,items)
+      VALUES ($1::uuid,$2::bigint,$3,$4::jsonb) ON CONFLICT (id) DO NOTHING RETURNING *`,
+      input.requestId, actor.id, fingerprint, JSON.stringify(results));
+    if (!created) fail("IDEMPOTENCY_CONFLICT", "批次编号已使用，请重新提交");
+    return created;
+  }, { timeout: 15_000 });
 }
 
 export async function handleCommerceVideo(
@@ -215,6 +339,21 @@ export async function handleCommerceVideo(
     );
     return res.json({ jobs: jobs.map(view) });
   }
+  if (suffix === "/batches" && req.method === "GET") {
+    const batches = await rows(db, `SELECT id, created_at, jsonb_array_length(items) AS count
+      FROM public.commerce_video_batches WHERE user_id=$1::bigint ORDER BY created_at DESC LIMIT 12`, actor.id);
+    return res.json({ batches: batches.map((batch) => ({ id: batch.id, createdAt: new Date(batch.created_at).toISOString(), count: batch.count })) });
+  }
+  if (suffix === "/batches" && req.method === "POST") {
+    const batch = await enqueueBatch(studio, actor, parse(batchInput, await readBody()));
+    return res.status(202).json(await batchView(actor, batch));
+  }
+  const batchRoute = /^\/batches\/([\w-]+)$/.exec(suffix);
+  if (batchRoute && req.method === "GET") {
+    const batch = await findBatch(db, actor, parse(z.uuid(), batchRoute[1]));
+    if (!batch) fail("NOT_FOUND", "找不到该批量口播任务", 404);
+    return res.json(await batchView(actor, batch));
+  }
   if (suffix === "/jobs" && req.method === "POST") {
     const input = parse(jobInput, await readBody());
     const fingerprint = hash(canonical(input));
@@ -229,23 +368,10 @@ export async function handleCommerceVideo(
         fail("IDEMPOTENCY_CONFLICT", "请求内容已改变，请重新提交");
       return res.json(view(old));
     }
-    const [product, options] = await Promise.all([
+    const [product, presenter] = await Promise.all([
       commerceProduct(actor, input.productId),
-      commercePresenterOptions(studio, actor),
+      readyPresenter(studio, actor, input),
     ]);
-    if (!studio.config.openrouterApiKey || !options.available)
-      fail("COMMERCE_NOT_READY", "请先在服务设置验证脚本与数字人服务", 503);
-    const presenter = options.presenters.find(
-      (p) => p.id === input.presenterId,
-    );
-    if (!presenter)
-      fail("PRESENTER_NOT_FOUND", "请选择当前账号可用的已授权角色", 422);
-    if (presenter.voiceKind === "cloned" && !input.maxSpeechCny)
-      fail(
-        "COMMERCE_SPEECH_BUDGET",
-        "请为克隆音色设置本次语音合成费用上限",
-        422,
-      );
     const selected = input.imageIds.length
       ? [...new Set(input.imageIds)]
       : product.images.slice(0, 1).map((image) => image.id);
@@ -254,42 +380,18 @@ export async function handleCommerceVideo(
       selected.some((id) => !product.images.some((image) => image.id === id))
     )
       fail("COMMERCE_IMAGE", "请选择至少一张当前款号的已上传商品实拍图", 422);
-    const job = await db.$transaction(async (tx) => {
-      await one(
-        tx,
-        "SELECT pg_advisory_xact_lock(hashtextextended($1,0))::text",
-        `commerce-video:${actor.id}`,
-      );
-      const pending = await one(
-        tx,
-        "SELECT count(*)::int n FROM public.commerce_videos WHERE user_id=$1::bigint AND state IN ('queued','writing','speaking','editing')",
-        actor.id,
-      );
-      if (pending!.n >= 4)
+    const job = await db.$transaction(async (tx: Tx) => {
+      await lockQueue(tx, actor);
+      const retry = await one(tx, "SELECT * FROM public.commerce_videos WHERE id=$1::uuid AND user_id=$2::bigint", input.requestId, actor.id);
+      if (retry) {
+        if (retry.request_hash !== fingerprint)
+          fail("IDEMPOTENCY_CONFLICT", "请求内容已改变，请重新提交");
+        return retry;
+      }
+      if (await pendingCount(tx, actor) >= 4)
         fail("COMMERCE_QUEUE", "已有 4 条口播视频处理中，请稍后再提交", 429);
-      await tx.$executeRawUnsafe(
-        `INSERT INTO public.commerce_videos (id,user_id,product_id,presenter_id,presenter_name,style_no,prompt,image_ids,max_speech_cny,request_hash)
-         VALUES ($1::uuid,$2::bigint,$3::bigint,$4::uuid,$5,$6,$7,$8::jsonb,$9,$10) ON CONFLICT (id) DO NOTHING`,
-        input.requestId,
-        actor.id,
-        input.productId,
-        input.presenterId,
-        presenter.name,
-        product.styleNo,
-        input.prompt,
-        JSON.stringify(selected),
-        input.maxSpeechCny ?? null,
-        fingerprint,
-      );
-      return one(
-        tx,
-        "SELECT * FROM public.commerce_videos WHERE id=$1::uuid AND user_id=$2::bigint",
-        input.requestId,
-        actor.id,
-      );
+      return insertJob(tx, actor, { ...input, imageIds: selected }, presenter.name, product.styleNo, fingerprint);
     });
-    if (!job || job.request_hash !== fingerprint)
-      fail("IDEMPOTENCY_CONFLICT", "请求内容已改变，请重新提交");
     return res.status(202).json(view(job));
   }
   const jobRoute = /^\/jobs\/([\w-]+)(?:\/scenes\/(\d+))?$/.exec(suffix);
@@ -425,6 +527,12 @@ export async function processCommerceVideo(
     const product = await commerceProduct(actor, String(job.product_id));
     if (!active()) return;
     if (phase === "queued") {
+      for (const imageId of job.image_ids as string[]) {
+        const photo = product.images.find((image) => image.id === imageId);
+        if (!photo) throw Error("商品实拍图已变更，请补图后重试");
+        await commerceProductImage(photo.source, product.tableId);
+      }
+      if (!active()) return;
       const claimed = await db.$executeRawUnsafe(
         "UPDATE public.commerce_videos SET state='writing',updated_at=now() WHERE id=$1::uuid AND state='queued'",
         job.id,

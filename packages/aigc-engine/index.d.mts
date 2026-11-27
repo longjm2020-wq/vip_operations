@@ -18,6 +18,12 @@ export interface Studio {
   start(): void;
   stop(): void;
   syncUsers(users: StudioUser[]): Promise<void>;
+  importPublicReference(
+    user: StudioUser,
+    projectId: string,
+    download: (tempPath: string) => Promise<{ name: string; mime: string }>,
+    signal: AbortSignal,
+  ): Promise<{ path: string; name: string; size: number; kind: string; mime: string }>;
   handle(
     request: IncomingMessage,
     response: ServerResponse,

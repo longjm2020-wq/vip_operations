@@ -21,24 +21,10 @@ import { BailianVoiceConnection } from "./bailian-voice-connection";
 import "./settings.css";
 const secretLabels: Record<string, string> = {
   BAILIAN_VIDEO_API_KEY: "百炼 MiniMax H3 视频 API Key",
-  VIDEO_RELAY_API_KEY: "玄宇令牌 · 视频及兼容图像 Key",
-  XYLP_IMAGE_TT25_KEY: "TT Image 2.5 · 按量渠道 Key",
-  XYLP_IMAGE_BANANA_PRO_KEY: "纳米香蕉 Pro · 图像渠道 Key",
-  XHAI_API_KEY: "星火 AIGC Key",
   XAI_API_KEY: "xAI 官方视频 Key",
   RUNNINGHUB_API_KEY: "RunningHub 深度参考 Key",
   OPENTALKING_GATEWAY_KEY: "OpenTalking 网关 Key",
   FAL_LIP_SYNC_API_KEY: "fal API Key",
-  XYLP_VIDEO_H3_OMNI_KEY: "海螺 H3 视频渠道 Key",
-  XYLP_VIDEO_SD20_OMNI_KEY: "SD 2.0 视频渠道 Key",
-  XYLP_VIDEO_SD25_OMNI_KEY: "SD 2.5 视频渠道 Key",
-  XYLP_VIDEO_VIDU_Q3_KEY: "Vidu Q3 视频渠道 Key",
-  XYLP_VIDEO_GK35_KEY: "GK-video-3.5 视频渠道 Key",
-  XYLP_VIDEO_OMNI11_KEY: "Omni 1.1 视频渠道 Key",
-  XYLP_VIDEO_ENHANCE_KEY: "视频增强渠道 Key",
-  XYLP_CHAT_ASTRA_KEY: "TT-6 Astra 编译渠道 Key",
-  XYLP_CHAT_SOL6_KEY: "TT-6 Sol 编译渠道 Key",
-  XYLP_CHAT_SOL56_KEY: "TT-5.6 Sol 编译渠道 Key",
 };
 export function ServiceSettings({
   onSaved,
@@ -106,8 +92,6 @@ export function ServiceSettings({
           revision: config.revision,
           bailianWorkspaceId: config.bailianWorkspaceId || "",
           useSavedQwenConnection: reuseQwen,
-          videoRelayBaseUrl: config.videoRelayBaseUrl || "",
-          xhaiBaseUrl: config.xhaiBaseUrl || "",
           opentalkingBaseUrl: config.opentalkingBaseUrl || "",
           runninghubWorkflowId: config.runninghubWorkflowId || "",
           secrets: keys,
@@ -201,26 +185,6 @@ export function ServiceSettings({
     );
   };
   const check = config.bailianVideoCheck;
-  const videoKeys = [
-    "XAI_API_KEY",
-    "XYLP_VIDEO_H3_OMNI_KEY",
-    "XYLP_VIDEO_SD20_OMNI_KEY",
-    "XYLP_VIDEO_SD25_OMNI_KEY",
-    "XYLP_VIDEO_VIDU_Q3_KEY",
-    "XYLP_VIDEO_GK35_KEY",
-    "XYLP_VIDEO_OMNI11_KEY",
-  ];
-  const imageKeys = [
-    "VIDEO_RELAY_API_KEY",
-    "XYLP_IMAGE_TT25_KEY",
-    "XYLP_IMAGE_BANANA_PRO_KEY",
-    "XHAI_API_KEY",
-  ];
-  const scriptKeys = [
-    "XYLP_CHAT_ASTRA_KEY",
-    "XYLP_CHAT_SOL6_KEY",
-    "XYLP_CHAT_SOL56_KEY",
-  ];
   return (
     <div className="aigc-service-settings">
       <Tabs
@@ -434,91 +398,29 @@ export function ServiceSettings({
                     },
                     {
                       key: "images",
-                      label: label("图片生成", "玄宇令牌 / 星火 AIGC"),
-                      extra: keyStatus(imageKeys),
+                      label: label("图片生成", "AgentAI"),
                       children: (
-                        <>
-                          <div className="aigc-connection-provider">
-                            <h4>玄宇令牌</h4>
-                            <p className="aigc-connection-note">
-                              此地址也供视频增强、脚本渠道和历史视频任务使用。
-                            </p>
-                            {field(
-                              "videoRelayBaseUrl",
-                              "玄宇令牌服务地址",
-                              "https://api.lk888.ai",
-                            )}
-                            {[
-                              "XYLP_IMAGE_TT25_KEY",
-                              "XYLP_IMAGE_BANANA_PRO_KEY",
-                              "VIDEO_RELAY_API_KEY",
-                            ].map(secretField)}
-                          </div>
-                          <div className="aigc-connection-provider">
-                            <h4>星火 AIGC</h4>
-                            <p className="aigc-connection-note">
-                              图片与脚本共用此连接，也用于已提交的星火视频任务。
-                            </p>
-                            {field(
-                              "xhaiBaseUrl",
-                              "星火 AIGC 服务地址",
-                              "https://xhai.token6688.com",
-                            )}
-                            {secretField("XHAI_API_KEY")}
-                          </div>
-                        </>
+                        <p className="aigc-connection-note">
+                          在 <Link to="/settings/ai">AI 模型管理</Link> 保存 AgentAI 连接并同步模型目录。
+                        </p>
                       ),
                     },
                     {
-                      key: "enhance",
-                      label: label(
-                        "视频增强与工作流",
-                        "清晰度增强 / RunningHub 深度参考",
-                      ),
-                      extra: keyStatus([
-                        "XYLP_VIDEO_ENHANCE_KEY",
-                        "RUNNINGHUB_API_KEY",
-                      ]),
+                      key: "depth",
+                      label: label("深度参考", "RunningHub 工作流"),
+                      extra: keyStatus(["RUNNINGHUB_API_KEY"]),
                       children: (
                         <>
-                          <div className="aigc-connection-provider">
-                            <h4>视频增强</h4>
-                            <p className="aigc-connection-note">
-                              使用「图片生成」分组中的玄宇令牌服务地址。
-                            </p>
-                            {secretField("XYLP_VIDEO_ENHANCE_KEY")}
-                          </div>
-                          <div className="aigc-connection-provider">
-                            <h4>RunningHub 深度参考</h4>
-                            {field(
-                              "runninghubWorkflowId",
-                              "RunningHub 工作流 ID",
-                              "选填",
-                            )}
-                            {secretField("RUNNINGHUB_API_KEY")}
-                          </div>
+                          {field("runninghubWorkflowId", "RunningHub 工作流 ID", "选填")}
+                          {secretField("RUNNINGHUB_API_KEY")}
                         </>
                       ),
                     },
                     {
                       key: "scripts",
-                      label: label("脚本与视觉分析", "专用编译渠道（可选）"),
-                      extra: scriptKeys.some(
-                        (key) => config.secrets?.[key] || keys[key],
-                      ) ? (
-                        keyStatus(scriptKeys)
-                      ) : (
-                        <Tag>可选配置</Tag>
-                      ),
+                      label: label("脚本与视觉分析", "共享 OpenRouter"),
                       children: (
-                        <>
-                          <p className="aigc-connection-note">
-                            通用智能服务在{" "}
-                            <Link to="/settings/ai">AI 模型管理</Link>{" "}
-                            配置；以下是玄宇编译专用密钥，地址与「图片生成」分组共用。
-                          </p>
-                          {scriptKeys.map(secretField)}
-                        </>
+                        <p className="aigc-connection-note">在 <Link to="/settings/ai">AI 模型管理</Link> 配置共享连接和默认模型。</p>
                       ),
                     },
                     {
@@ -566,17 +468,9 @@ export function ServiceSettings({
                     },
                     {
                       key: "legacy",
-                      label: label("历史视频渠道", "仅用于已提交旧任务的查询"),
-                      extra: <Tag>历史保留</Tag>,
-                      children: (
-                        <>
-                          <p className="aigc-connection-note">
-                            新视频统一使用百炼
-                            H3。保留以下旧连接供原任务继续查询；共享地址与密钥在「图片生成」分组维护。
-                          </p>
-                          {videoKeys.map(secretField)}
-                        </>
-                      ),
+                      label: label("历史 xAI 视频", "用于已提交的 xAI 任务"),
+                      extra: keyStatus(["XAI_API_KEY"]),
+                      children: secretField("XAI_API_KEY"),
                     },
                   ]}
                 />

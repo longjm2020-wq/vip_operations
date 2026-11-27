@@ -37,7 +37,7 @@ export function selectVideoRoute(
   selection: { providerId: string; modelId: string; resolution?: string },
 ): VideoRoute;
 export function validateVideoInput(route: VideoRoute, input: VideoInput): void;
-export function preflightXhaiVideo(
+export function preflightAgentAiVideo(
   config: unknown,
   route: VideoRoute,
   input: VideoInput,
@@ -48,10 +48,6 @@ export function submitVideo(
   input: VideoInput,
   preflight?: unknown,
 ): Promise<string>;
-export class XhaiVideoAdjustmentError extends Error {
-  taskId: string;
-  constructor(taskId: string, message: string);
-}
 export function pollVideo(
   config: unknown,
   route: { protocol: string; model: Pick<VideoModel, "model"> } & Partial<
@@ -59,11 +55,6 @@ export function pollVideo(
   >,
   id: string,
 ): Promise<{ pending: boolean; url?: string; state: string }>;
-export function uploadXhaiImages(
-  baseUrl: string,
-  apiKey: string,
-  sources: string[],
-): Promise<string[]>;
 export function withJobSignal<T>(
   signal: AbortSignal,
   work: () => Promise<T>,

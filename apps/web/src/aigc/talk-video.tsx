@@ -97,6 +97,11 @@ type Job = {
   downloadUrl?: string;
   createdAt: string;
 };
+type Batch = {
+  id: string;
+  createdAt: string;
+  items: Array<{ productId: string; styleNo?: string; job?: Job; message?: string }>;
+};
 
 const labels: Record<JobState, string> = {
   queued: "排队中",
@@ -141,6 +146,8 @@ export function TalkVideo() {
   const linkedCommerce = Boolean(
     params.has("product") ||
     params.has("job") ||
+    params.has("batch") ||
+    params.get("scope") === "batch" ||
     params.has("prompt") ||
     location.state?.talkVideoPrompt,
   );
@@ -207,7 +214,7 @@ function TalkVideoWorkspace({
         <p>
           {portrait
             ? "上传人物照片和原声录音，生成对口型视频。"
-            : "选一款衣服，用一句话生成带字幕的竖屏视频。"}
+            : "选款并填写拍摄要求，生成带字幕的竖屏视频。"}
         </p>
       </header>
       {canUseCommerce && (
@@ -254,6 +261,9 @@ function CommerceTalkVideo({
   const taskListKey = ["commerce-video", account, "jobs"];
   const productId = params.get("product") || undefined;
   const jobId = params.get("job");
+  const batchId = params.get("batch");
+  const batchMode = params.get("scope") === "batch" || Boolean(batchId);
+  const [batchProducts, setBatchProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState(() => {
     const chatPrompt: unknown = location.state?.talkVideoPrompt;
@@ -292,6 +302,19 @@ function CommerceTalkVideo({
     queryFn: ({ signal }) =>
       studioApi(`${path}/jobs`, "GET", undefined, { signal }),
   });
+  const batchKey = ["commerce-video", account, "batch", batchId];
+  const batchesKey = ["commerce-video", account, "batches"];
+  const batch = useQuery<Batch>({
+    queryKey: batchKey,
+    queryFn: ({ signal }) => studioApi(`${path}/batches/${encodeURIComponent(batchId!)}`, "GET", undefined, { signal }),
+    enabled: Boolean(batchId),
+    refetchInterval: ({ state }) => state.data?.items.some(({ job }) => isActive(job?.state)) ? 4000 : false,
+  });
+  const batchHistory = useQuery<{ batches: Array<{ id: string; createdAt: string; count: number }> }>({
+    queryKey: batchesKey,
+    queryFn: ({ signal }) => studioApi(`${path}/batches`, "GET", undefined, { signal }),
+    enabled: batchMode,
+  });
   const job = useQuery<Job>({
     queryKey: jobKey(account, jobId),
     queryFn: ({ signal }) =>
@@ -306,6 +329,7 @@ function CommerceTalkVideo({
       isActive(query.state.data?.state) ? 4000 : false,
   });
   const foundProducts = products.data?.products || [];
+  const batchProductOptions = [...new Map([...batchProducts, ...foundProducts].map((item) => [item.id, item])).values()];
   const pickerProducts =
     product.data &&
     !foundProducts.some((value) => value.id === product.data?.id)
@@ -328,9 +352,8 @@ function CommerceTalkVideo({
   );
   const canSubmit = Boolean(
     options.data?.available &&
-    product.data &&
+    (batchMode ? batchProducts.length >= 2 : product.data && selectedPhotos.length) &&
     selectedPresenter &&
-    selectedPhotos.length &&
     draft.trim().length >= 3 &&
     (!needsSpeechBudget ||
       (maxSpeechCny != null && maxSpeechCny > 0 && maxSpeechCny <= 20)),
@@ -362,15 +385,25 @@ function CommerceTalkVideo({
     });
   }
 
+  function openBatch(id: string) {
+    setParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.set("scope", "batch");
+      next.set("batch", id);
+      next.delete("job");
+      next.delete("prompt");
+      return next;
+    });
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!canSubmit || postingNow.current || !productId || !selectedPresenter)
+    if (!canSubmit || postingNow.current || !selectedPresenter || (!batchMode && !productId))
       return;
     const body = {
-      productId,
+      ...(batchMode ? { productIds: batchProducts.map((item) => item.id) } : { productId, imageIds: selectedPhotos }),
       presenterId: selectedPresenter.id,
       prompt: draft.trim(),
-      imageIds: selectedPhotos,
       ...(needsSpeechBudget && { maxSpeechCny }),
     };
     const fingerprint = JSON.stringify(body);
@@ -381,11 +414,16 @@ function CommerceTalkVideo({
     setPosting(true);
     setError("");
     try {
-      const created: Job = await studioApi(`${path}/jobs`, "POST", {
-        ...body,
-        requestId: request.current.id,
-      });
-      openJob(created);
+      const payload = { ...body, requestId: request.current.id };
+      if (batchMode) {
+        const created: Batch = await studioApi(`${path}/batches`, "POST", payload);
+        client.setQueryData(["commerce-video", account, "batch", created.id], created);
+        openBatch(created.id);
+        void client.invalidateQueries({ queryKey: batchesKey });
+      } else {
+        const created: Job = await studioApi(`${path}/jobs`, "POST", payload);
+        openJob(created);
+      }
       request.current = null;
       void client.invalidateQueries({ queryKey: taskListKey });
     } catch (failure) {
@@ -455,6 +493,28 @@ function CommerceTalkVideo({
         />
       )}
       <form className="talk-video-composer" onSubmit={submit}>
+        <Segmented
+          className="talk-video-scope"
+          aria-label="口播任务范围"
+          value={batchMode ? "batch" : "single"}
+          options={[{ value: "single", label: "单款" }, { value: "batch", label: "按款批量" }]}
+          disabled={posting}
+          onChange={(value) => {
+            setError("");
+            setSearch("");
+            setParams((previous) => {
+              const next = new URLSearchParams(previous);
+              if (value === "batch") {
+                next.set("scope", "batch");
+                next.delete("job");
+              } else {
+                next.delete("scope");
+                next.delete("batch");
+              }
+              return next;
+            });
+          }}
+        />
         <Input.TextArea
           aria-label="视频要求"
           value={draft}
@@ -469,7 +529,28 @@ function CommerceTalkVideo({
           disabled={posting}
         />
         <div className="talk-video-fields">
-          <Select
+          {batchMode ? (
+            <Select
+              className="talk-video-batch-picker"
+              aria-label="批量选择商品"
+              mode="multiple"
+              maxCount={10}
+              virtual={false}
+              showSearch
+              filterOption={false}
+              loading={products.isFetching}
+              disabled={posting}
+              placeholder="搜索并选 2 至 10 个款号"
+              value={batchProducts.map((item) => item.id)}
+              onSearch={setSearch}
+              onChange={(ids) => setBatchProducts(ids.flatMap((id: string) => {
+                const item = batchProductOptions.find((product) => product.id === id);
+                return item ? [item] : [];
+              }))}
+              options={batchProductOptions.map((item) => ({ value: item.id, label: productLabel(item) }))}
+              notFoundContent={products.isError ? shortError(products.error) : search ? "没有找到匹配的款式" : "输入款号"}
+            />
+          ) : <Select
             aria-label="商品"
             showSearch
             allowClear
@@ -491,7 +572,7 @@ function CommerceTalkVideo({
                   ? "没有找到匹配的款式"
                   : "输入款号"
             }
-          />
+          />}
           {presenters.length > 0 && (
             <Select
               aria-label="主播"
@@ -514,7 +595,7 @@ function CommerceTalkVideo({
               {presenters.length ? "管理主播" : "设置主播"}
             </Button>
           )}
-          {productPhotos.length > 0 && (
+          {!batchMode && productPhotos.length > 0 && (
             <details className="talk-video-photo-picker">
               <summary>商品图 {selectedPhotos.length} 张</summary>
               <div aria-label="选择商品图" className="talk-video-photos">
@@ -550,7 +631,7 @@ function CommerceTalkVideo({
           )}
           {needsSpeechBudget && (
             <InputNumber
-              aria-label="克隆配音预算上限（元）"
+              aria-label={batchMode ? "每款克隆配音预算上限（元）" : "克隆配音预算上限（元）"}
               placeholder="配音预算上限"
               min={0.01}
               max={20}
@@ -569,22 +650,27 @@ function CommerceTalkVideo({
             loading={posting}
             disabled={!canSubmit}
           >
-            生成视频
+            {batchMode ? "提交批量制作" : "生成视频"}
           </Button>
         </div>
-        {product.isError && (
+        {!batchMode && product.isError && (
           <p className="talk-video-state" role="status">
             {shortError(product.error)}
           </p>
         )}
-        {product.data && !productPhotos.length && (
+        {!batchMode && product.data && !productPhotos.length && (
           <p className="talk-video-state" role="status">
             请先在商品档案里添加这款衣服的实拍图。
           </p>
         )}
-        {productPhotos.length > 0 && !selectedPhotos.length && (
+        {!batchMode && productPhotos.length > 0 && !selectedPhotos.length && (
           <p className="talk-video-state" role="status">
             至少选择一张商品图。
+          </p>
+        )}
+        {batchMode && (
+          <p className="talk-video-state">
+            每款独立制作，使用首张可用商品图。缺图的款号会单独记录。{needsSpeechBudget ? "配音预算按每款计算。" : ""}
           </p>
         )}
         {options.data?.available && (
@@ -615,6 +701,31 @@ function CommerceTalkVideo({
           </p>
         )}
       </form>
+      {batch.isError && <Alert type="error" showIcon title={shortError(batch.error)} />}
+      {batch.data && (
+        <section className="talk-video-details talk-video-batch" aria-label="批量制作进度">
+          <h3>批量制作 · {batch.data.items.length} 款</h3>
+          <ul>
+            {batch.data.items.map(({ productId, styleNo, job: item, message }) => (
+              <li key={productId}>
+                <span>{styleNo || `商品 ${productId}`}</span>
+                <span>{item ? labels[item.state] : message}</span>
+                {item && <Button type="text" size="small" onClick={() => openJob(item)}>查看</Button>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {Boolean(batchHistory.data?.batches.length) && (
+        <details className="talk-video-details talk-video-recent">
+          <summary>最近批次</summary>
+          {batchHistory.data?.batches.map((item) => (
+            <Button key={item.id} type="text" onClick={() => openBatch(item.id)}>
+              {new Date(item.createdAt).toLocaleString()} · {item.count} 款
+            </Button>
+          ))}
+        </details>
+      )}
       {job.isError && (
         <Alert
           className="talk-video-recent"

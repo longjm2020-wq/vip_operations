@@ -6,8 +6,8 @@ import { fail, assertNoPendingRequests, releaseUnsubmitted } from "./access.mjs"
 import { cleanProjectCast } from "./asset-library.mjs";
 import { cleanSceneSelection } from "../shared/scene-catalog.mjs";
 import { projectWithCast } from "../shared/project-cast.mjs";
+import { cleanCozyClayBinding } from "../shared/cozyclay.mjs";
 import { archiveDetailWorks } from "./detail-works.mjs";
-import { cleanEnhancement } from "./generation-enhancement.mjs";
 import { assertDetailProjectIdle, detailProjectAssetPaths } from "./detail-projects.mjs";
 
 function now() {
@@ -75,6 +75,7 @@ function projectAssetPaths(project) {
     ...(assets.sceneImages ?? []).map((item) => item?.path),
     assets.customInput?.path,
     assets.reusableTemplate?.path,
+    ...["project", "greybox", "firstFrame", "lastFrame", "dialogueAudio"].map(key => project?.cozyclay?.[key]?.path),
     ...(project?.cast?.roles || []).flatMap(r => r.images || []).map(f => f.path),
     ...(project?.cast?.products || []).flatMap(p => p.images || []).map(f => f.path),
   ].filter((value) => typeof value === "string" && value));
@@ -85,6 +86,7 @@ function withoutProjectAssets(project, paths) {
   const keep = (item) => !item || !paths.has(item.path);
   return {
     ...project,
+    ...(project.cozyclay && ["project", "greybox", "firstFrame", "lastFrame", "dialogueAudio"].some(key => !keep(project.cozyclay[key])) ? { cozyclay: undefined } : {}),
     ...(project.cast ? { cast: { roles: project.cast.roles.map(r => ({ ...r, images: r.images.filter(keep) })), products: project.cast.products.map(p => ({ ...p, images: p.images.filter(keep) })) } } : {}),
     assets: {
       ...assets,
@@ -493,12 +495,18 @@ export class CloudStore {
         if (!["reference", "smart", "custom", "keywords"].includes(project.sceneMode) || !["complete", "relative"].includes(project.replicationMode) || !["auto", "2:3", "3:2", "1:1", "9:16", "16:9"].includes(project.videoAspectRatio)) fail("项目设置无效");
         saved = { id: project.id, ownerId, name: String(project.name || "新项目").slice(0, 120), createdAt: existing?.createdAt || timestamp, updatedAt: timestamp, status: existing?.status || "draft", replicationMode: project.replicationMode, sceneMode: project.sceneMode, sceneSelection: cleanSceneSelection(project.sceneSelection), videoAspectRatio: project.videoAspectRatio, resolvedVideoAspectRatio: existing?.resolvedVideoAspectRatio, platform: "grok", modelMeasurements: measurements(project.modelMeasurements), productMeasurements: measurements(project.productMeasurements), assets: { video: file(project.assets?.video, ["video"]), modelImages: files(project.assets?.modelImages, "model"), productImages: files(project.assets?.productImages, "product"), sceneImages: files(project.assets?.sceneImages, "scene"), customInput: file(project.assets?.customInput, ["text"]), reusableTemplate: file(project.assets?.reusableTemplate, ["template", "output"]) }, saveReusableTemplate: project.saveReusableTemplate === true, notes: String(project.notes || "").slice(0, 10000), outputDir: `云端项目/${project.id}/输出`, imageSelection: project.imageSelection ? { modelId: String(project.imageSelection.modelId) } : undefined, videoSelection: project.videoSelection ? { providerId: String(project.videoSelection.providerId), modelId: String(project.videoSelection.modelId), resolution: String(project.videoSelection.resolution) } : undefined, compileTaskId: existing?.compileTaskId, sourceAssetsPurgedAt: existing?.sourceAssetsPurgedAt };
         saved.assets.referenceVideos = files(project.assets?.referenceVideos || [], "referenceVideo");
-        saved.videoEnhancement = cleanEnhancement(project.videoEnhancement);
         saved.assets.referenceAudios = files(project.assets?.referenceAudios || [], "referenceAudio");
         const depthReferences = saved.assets.referenceVideos.filter(f => f.mediaInfo?.referenceType === "depth");
         if (depthReferences.some(f => f.mediaInfo.sourceAssetId !== saved.assets.video?.path)) fail("深度参考对应的原片已变化，请先移除旧深度参考", 409);
         if (depthReferences.length && saved.assets.referenceVideos.length !== 1) fail("原片深度参考不能与自定义视频同时使用，请先移除其中一种", 400);
         if (project.cast !== undefined) saved = projectWithCast(saved, cleanProjectCast(project.cast, file));
+        const cozyclay = project.cozyclay === undefined ? existing?.cozyclay : cleanCozyClayBinding(project.cozyclay, (value, kind) => {
+          if (!value) return undefined;
+          const a = data.assets[value.path];
+          if (a?.projectId !== project.id || a?.source !== "upload") fail("预演素材不属于当前项目", 404);
+          return file(value, [kind]);
+        });
+        if (cozyclay) saved.cozyclay = cozyclay;
         for (const id of projectAssetPaths(saved)) {
           const asset = data.assets[id];
           if (asset?.source === "library-draft") {

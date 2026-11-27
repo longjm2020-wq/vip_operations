@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  canIndexLocalMedia,
   desktopClientRequest,
   isDesktopClient,
+  openLocalMediaIndex,
+  prepareLocalMediaExcerpt,
+  readLocalMediaFile,
 } from "../../apps/web/src/desktop-client.js";
 
-function fixture() {
+function fixture(localMediaIndex = false) {
   const messages = new Set<(event: MessageEvent) => void>();
   const leaves = new Set<() => void>();
   const sent: Record<string, string>[] = [];
@@ -16,7 +20,10 @@ function fixture() {
       messages.delete(fn),
   };
   vi.stubGlobal("window", {
-    xutiDesktop: { version: "1.1.0" },
+    xutiDesktop: {
+      version: "1.1.0",
+      ...(localMediaIndex ? { localMediaIndex: true } : {}),
+    },
     chrome: { webview: bridge },
     addEventListener: (_e: string, fn: () => void) => leaves.add(fn),
     removeEventListener: (_e: string, fn: () => void) => leaves.delete(fn),
@@ -33,6 +40,98 @@ function fixture() {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe("desktop local media index", () => {
+  function respond(f: ReturnType<typeof fixture>, data: unknown) {
+    f.reply({ channel: "xuti-desktop", id: f.sent.at(-1)?.id, ok: true, data });
+  }
+
+  it("requires a current desktop bridge and returns local metadata from the folder picker", async () => {
+    fixture();
+    expect(canIndexLocalMedia()).toBe(false);
+    await expect(openLocalMediaIndex()).rejects.toThrow("更新");
+
+    const f = fixture(true);
+    const open = openLocalMediaIndex();
+    expect(f.sent[0]).toMatchObject({
+      channel: "xuti-desktop",
+      action: "media-index-open",
+    });
+    expect(f.sent[0]).not.toHaveProperty("path");
+    const page = {
+      indexId: "a".repeat(32),
+      folderName: "素材",
+      total: 1,
+      skipped: 0,
+      truncated: false,
+      items: [
+        {
+          id: "b".repeat(32),
+          name: "clip.mov",
+          relativePath: "01\\clip.mov",
+          kind: "video",
+          bytes: 64 * 1024 ** 3,
+          modifiedAt: "2026-11-28T00:00:00Z",
+        },
+      ],
+    };
+    respond(f, page);
+    await expect(open).resolves.toEqual(page);
+  });
+
+  it("fetches only the bounded one-use native route after selection and preserves native cancellation", async () => {
+    const f = fixture(true);
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "video/mp4", "content-length": "3" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const url = "/__xuti-local-media/" + "c".repeat(32);
+    const delivery = {
+      url,
+      name: "clip-片段.mp4",
+      mime: "video/mp4",
+      bytes: 3,
+    };
+
+    const declined = readLocalMediaFile(
+      "a".repeat(32),
+      "b".repeat(32),
+      50 * 1024 ** 2,
+    );
+    respond(f, null);
+    await expect(declined).resolves.toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+
+    const invalid = readLocalMediaFile("a".repeat(32), "b".repeat(32), 1);
+    respond(f, { ...delivery, url: "https://external.example/clip.mp4" });
+    await expect(invalid).rejects.toThrow("返回无效");
+    expect(fetch).not.toHaveBeenCalled();
+
+    const selected = prepareLocalMediaExcerpt(
+      "a".repeat(32),
+      "b".repeat(32),
+      12,
+      50 * 1024 ** 2,
+    );
+    expect(f.sent.at(-1)).toMatchObject({
+      action: "media-index-excerpt",
+      startSeconds: 12,
+      maxBytes: 50 * 1024 ** 2,
+    });
+    respond(f, delivery);
+    await expect(selected).resolves.toMatchObject({
+      name: "clip-片段.mp4",
+      type: "video/mp4",
+      size: 3,
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      url,
+      expect.objectContaining({ credentials: "omit", redirect: "error" }),
+    );
+  });
 });
 describe("desktop client connection bridge", () => {
   it("does not offer native operations in ordinary browsers", async () => {

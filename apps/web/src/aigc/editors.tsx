@@ -22,6 +22,9 @@ import {
 } from "@ant-design/icons";
 import { AssetInput, Media, TaskList } from "./components";
 import { assetUrl, studioApi, stateText, type Item } from "./api";
+import { CozyClayShotEditor } from "./cozyclay-shot";
+import { PublicReferenceInput } from "./public-reference-input";
+import { LocalReferencePicker } from "./local-media-picker";
 
 type EditorProps = {
   initial: Item;
@@ -42,16 +45,36 @@ export function VideoEditor({
   const { message } = App.useApp();
   const [draft, setDraft] = useState(initial);
   const [busy, setBusy] = useState("");
+  const [referenceImporting, setReferenceImporting] = useState(false);
+  const [referenceUploading, setReferenceUploading] = useState(false);
+  const [localImporting, setLocalImporting] = useState(false);
+  const referenceBusy = referenceImporting || referenceUploading || localImporting;
   const patch = (values: Item) => {
     setDraft((p: Item) => ({ ...p, ...values }));
     onDirty(true);
   };
-  const save = async () => {
-    const value = await studioApi("/projects", "PUT", draft);
+  const patchAssets = (values: Item) => {
+    setDraft((p: Item) => ({ ...p, assets: { ...p.assets, ...values } }));
+    onDirty(true);
+  };
+  const save = async (changes = draft) => {
+    const value = await studioApi("/projects", "PUT", changes);
     setDraft(value);
     onDirty(false);
     refresh();
     return value;
+  };
+  const saveCozyclay = async (cozyclay: Item | null, generate: boolean) => {
+    try {
+      await save({ ...draft, cozyclay });
+      if (generate) await studioApi("/tasks/generate", "POST", { projectId: draft.id, cozyclay: true });
+      void message.success(generate ? "绑定片段已加入生成队列" : "镜头绑定已保存");
+      refresh();
+      return true;
+    } catch (error) {
+      void message.error((error as Error).message);
+      return false;
+    }
   };
   const run = async (action: string) => {
     setBusy(action);
@@ -148,44 +171,53 @@ export function VideoEditor({
             </Form.Item>
           </div>
           <div className="aigc-upload-grid">
-            <AssetInput
-              label="参考视频"
-              kind="video"
-              projectId={draft.id}
-              files={assets.video ? [assets.video] : []}
-              single
-              maximum={status.maxUploadBytes / 1024 / 1024}
-              onChange={(files) =>
-                patch({ assets: { ...assets, video: files[0] } })
-              }
-            />
-            <AssetInput
+            <Space orientation="vertical" size="small">
+              <AssetInput
+                label="参考视频"
+                kind="video"
+                projectId={draft.id}
+                files={assets.video ? [assets.video] : []}
+                single
+                maximum={status.maxUploadBytes / 1024 / 1024}
+                disabled={active || Boolean(busy) || referenceImporting || localImporting}
+                onUploading={setReferenceUploading}
+                onChange={(files) => patchAssets({ video: files[0] })}
+              />
+              <PublicReferenceInput
+                projectId={draft.id}
+                disabled={active || Boolean(busy) || referenceUploading || localImporting}
+                onBusy={setReferenceImporting}
+                onImport={(asset) => patchAssets({ video: asset })}
+              />
+              <LocalReferencePicker
+                projectId={draft.id}
+                maxBytes={status.maxUploadBytes || 20 * 1024 * 1024}
+                disabled={active || Boolean(busy) || referenceUploading || referenceImporting}
+                onBusy={setLocalImporting}
+                onImport={(asset) => patchAssets({ video: asset })}
+              />
+            </Space>
+            {!draft.cast && <AssetInput
               label="人物原图"
               kind="model"
               projectId={draft.id}
               files={assets.modelImages}
-              onChange={(modelImages) =>
-                patch({ assets: { ...assets, modelImages } })
-              }
-            />
-            <AssetInput
+              onChange={(modelImages) => patchAssets({ modelImages })}
+            />}
+            {!draft.cast && <AssetInput
               label="商品原图"
               kind="product"
               projectId={draft.id}
               files={assets.productImages}
-              onChange={(productImages) =>
-                patch({ assets: { ...assets, productImages } })
-              }
-            />
+              onChange={(productImages) => patchAssets({ productImages })}
+            />}
             {draft.sceneMode === "custom" && (
               <AssetInput
                 label="场景图片"
                 kind="scene"
                 projectId={draft.id}
                 files={assets.sceneImages}
-                onChange={(sceneImages) =>
-                  patch({ assets: { ...assets, sceneImages } })
-                }
+                onChange={(sceneImages) => patchAssets({ sceneImages })}
               />
             )}
           </div>
@@ -268,6 +300,16 @@ export function VideoEditor({
               />
             </Form.Item>
           </div>
+          <CozyClayShotEditor
+            key={draft.id}
+            project={draft}
+            model={model}
+            active={active}
+            compileId={projectTasks.find(t => t.type === "compile" && t.stage === "completed")?.id}
+            onCast={cast => patch({ cast })}
+            onPending={() => onDirty(true)}
+            onSave={saveCozyclay}
+          />
           <Form.Item label="创作说明">
             <Input.TextArea
               rows={4}
@@ -373,7 +415,7 @@ export function VideoEditor({
             <Button
               icon={<SaveOutlined />}
               loading={busy === "save"}
-              disabled={active}
+              disabled={active || referenceBusy}
               onClick={() => run("save")}
             >
               保存项目
@@ -382,7 +424,7 @@ export function VideoEditor({
               type="primary"
               icon={<PlayCircleOutlined />}
               loading={busy === "compile"}
-              disabled={active || !status.compile}
+              disabled={active || referenceBusy || !status.compile}
               onClick={() => run("compile")}
             >
               拆解参考视频
@@ -391,6 +433,7 @@ export function VideoEditor({
               loading={busy === "generate"}
               disabled={
                 active ||
+                referenceBusy ||
                 !model?.configured ||
                 (!draft.compileTaskId &&
                   !projectTasks.some(

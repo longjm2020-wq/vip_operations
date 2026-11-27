@@ -187,7 +187,7 @@ export class VisualReviewService {
         const startedAt = now(), preparationStarted = Date.now();
         const prepared = await this.prepare(job, project, target, unit);
         if (!prepared.images.length) throw new Error("缺少可读取的原图，无法核对");
-        const images = await this.prepareImages(job, provider, prepared.images);
+        const images = prepared.images;
         const prompt = visualReviewPrompt({ project, artifacts: job.payload.artifacts, target, unit, samples: prepared.samples, views: prepared.views || [] }) + (previous ? "\n上次报告未满足机器校验合同。这是唯一一次自动复查：重新看原图，只输出完整JSON，所有必需编号、原图数字编号和sample_ids严格使用上方清单，不以默认通过补齐缺项。" : "");
         record = { key, target, samples: prepared.samples.map(({ dataUrl, ...s }) => s), views: prepared.views || [], ...(target.kind === "frame" ? { detailPolicy: FRAME_DETAIL_POLICY } : {}), status: "inflight", startedAt, attempt: previous ? (previous.attempt || 1) + 1 : 1,
           metrics: { originalImages: prepared.originalImages ?? prepared.images.length - prepared.samples.length, sampleImages: prepared.samples.length, detailImages: (prepared.views || []).filter(v => v.crop).length, preparationMs: Date.now() - preparationStarted, promptCharacters: prompt.length },

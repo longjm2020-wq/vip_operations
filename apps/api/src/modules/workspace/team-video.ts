@@ -8,11 +8,9 @@ import {
   videoKey,
   selectVideoRoute,
   validateVideoInput,
-  preflightXhaiVideo,
+  preflightAgentAiVideo,
   submitVideo,
-  XhaiVideoAdjustmentError,
   pollVideo,
-  uploadXhaiImages,
   withJobSignal,
 } from "../../../../../packages/aigc-engine/team-video.mjs";
 import {
@@ -111,7 +109,7 @@ export const videoGenerationTool = {
   function: {
     name: "generate_video",
     description:
-      "使用已配置的 AIGC 视频模型生成真实短片，最长30秒。需要本任务授权的1至4张参考图（具体数量/时长/画幅见视频目录；Seedance 2.5 特价按次固定30秒）。返回后台任务ID，必须等待真实文件完成才能交付；不改变用户指定模型、时长或画幅。没有参考图时可先由图像成员生成。",
+      "使用已配置的 AIGC 视频模型生成真实短片，最长30秒。需要本任务授权的1至4张参考图，具体数量、时长和画幅见视频目录。返回后台任务ID，必须等待真实文件完成才能交付；不改变用户指定模型、时长或画幅。没有参考图时可先由图像成员生成。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -364,13 +362,7 @@ export async function generateTeamVideo(
       referenceImages: references,
     };
     validateVideoInput(route, payload);
-    if (route.protocol === "xhai")
-      payload.referenceImages = await uploadXhaiImages(
-        route.baseUrl,
-        videoKey(config, route)!,
-        references,
-      );
-    const preflight = await preflightXhaiVideo(config, route, payload);
+    const preflight = await preflightAgentAiVideo(config, route, payload);
     await progress(15, "提交视频生成");
     let remote: string;
     let adjusted = false;
@@ -384,8 +376,7 @@ export async function generateTeamVideo(
         error.parameterMismatch === true &&
         "taskId" in error &&
         typeof error.taskId === "string";
-      if (!(error instanceof XhaiVideoAdjustmentError) && !agentaiAdjusted)
-        throw error;
+      if (!agentaiAdjusted) throw error;
       remote = (error as Error & { taskId: string }).taskId;
       adjusted = true;
     }

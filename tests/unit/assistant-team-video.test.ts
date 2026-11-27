@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import type { Context } from "../../apps/api/src/core.js";
-import { XhaiVideoAdjustmentError } from "../../packages/aigc-engine/team-video.mjs";
 import { videoGenerationSchema } from "../../packages/contracts/src/assistant-agent.js";
 const fixture = vi.hoisted(() => ({
   config: { videoSecrets: { TEST_KEY: "fixture-only", AGENTAI_API_KEY: "" } },
@@ -67,19 +66,11 @@ vi.mock("../../apps/api/src/modules/workspace/agent-models.js", () => ({
   modelRef: (id: string) => "engine/" + id.replaceAll("/", "-"),
 }));
 vi.mock("../../packages/aigc-engine/team-video.mjs", () => ({
-  XhaiVideoAdjustmentError: class extends Error {
-    constructor(
-      public taskId: string,
-      message: string,
-    ) {
-      super(message);
-    }
-  },
   videoProviders: () => [
     {
       id: "fixture",
       label: "测试视频",
-      protocol: "media",
+      protocol: "agentai",
       keyEnv: "TEST_KEY",
       baseUrl: "https://example.com",
       models: [
@@ -100,7 +91,7 @@ vi.mock("../../packages/aigc-engine/team-video.mjs", () => ({
   selectVideoRoute: () => ({
     id: "fixture",
     label: "测试视频",
-    protocol: "media",
+    protocol: "agentai",
     keyEnv: "TEST_KEY",
     baseUrl: "https://example.com",
     resolution: "720p",
@@ -116,10 +107,9 @@ vi.mock("../../packages/aigc-engine/team-video.mjs", () => ({
     },
   }),
   validateVideoInput: vi.fn(),
-  preflightXhaiVideo: async () => undefined,
+  preflightAgentAiVideo: async () => undefined,
   submitVideo: (...args: unknown[]) => fixture.submit(...args),
   pollVideo: (...args: unknown[]) => fixture.poll(...args),
-  uploadXhaiImages: vi.fn(),
   withJobSignal: (_s: AbortSignal, work: () => Promise<unknown>) => work(),
 }));
 import {
@@ -328,7 +318,10 @@ describe("team video model adapter", () => {
     expect(fixture.save.mock.calls[0][4]).toContain("remote-1");
     expect(fixture.poll).toHaveBeenCalledTimes(1);
     fixture.submit.mockRejectedValueOnce(
-      new XhaiVideoAdjustmentError("paid-adjusted", "供应商调整了参数"),
+      Object.assign(new Error("供应商调整了参数"), {
+        taskId: "paid-adjusted",
+        parameterMismatch: true,
+      }),
     );
     fixture.poll.mockClear();
     await expect(

@@ -61,7 +61,7 @@ export const detailDraft = (framework = "detail-default") => ({
   outputRatios: { detail_page: "3:4", main_image: "1:1" },
   platform: "tmall",
   language: "zh-CN",
-  imageModelId: "tt-image-2",
+  imageModelId: "agentai-gt-image-2.6-sunburst",
   frameworkId: framework,
   brand: { name: "", intro: "", tone: "", story: "" },
   person: { name: "", identityNotes: "" },

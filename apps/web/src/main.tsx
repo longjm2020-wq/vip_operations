@@ -86,7 +86,7 @@ const ProjectDetailPage = lazyPage(() => import("./projects").then(module => ({ 
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
-const coreFeatureSummary = "小序与 AI 员工 · 公司知识库 · 智选模型与用量 · 实时语音 · 网页搜索与电脑操作 · 文档与图片 · 服装口播与音色复刻 · 经营分析与商品决策 · 聚水潭库存 · 协作表格 · AIGC";
+const coreFeatureSummary = "小序与 AI 员工 · 公司知识库 · 智选模型与用量 · 实时语音 · 网页搜索与电脑操作 · 文档与图片 · 批量服装口播与音色复刻 · 经营分析与商品决策 · 聚水潭库存 · 协作表格 · AIGC";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -449,7 +449,6 @@ function Workspace({ user }: { user: Row }) {
           >
             <Routes>
               <Route path="/my-workspace" element={<PersonalWorkspacePage key={user.id} />} />
-              <Route path="/my-workspace/director" element={<Navigate to="/my-workspace" replace />} />
               <Route path="/aigc" element={<AigcPage key={user.id} />} />
               <Route path="/settings/ai" element={<CompassAISettingsPage />} />
               <Route path="/help" element={<ManualPage />} />

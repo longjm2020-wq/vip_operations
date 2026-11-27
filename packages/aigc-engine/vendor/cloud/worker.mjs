@@ -22,14 +22,14 @@ import { compileRevision, KERNEL_CAPABILITIES } from "./kernel-source.mjs";
 import { generationProject, referenceSnapshot } from "./project-references.mjs";
 import { alignVideoDuration, planVideoDurations, supportedVideoDurations } from "./video-duration.mjs";
 import { prepareBailianImages } from "./bailian-video.mjs";
-import { videoCatalog, selectVideoRoute, videoKey, videoReferenceCount, validateVideoInput, preflightXhaiVideo, XhaiVideoAdjustmentError, submitVideo, pollVideo } from "./video-providers.mjs";
+import { assertActiveVideoRoute, videoCatalog, selectVideoRoute, videoKey, videoReferenceCount, validateVideoInput, preflightAgentAiVideo, submitVideo, pollVideo } from "./video-providers.mjs";
 import { keyframeImageRoute, assertImageAccess } from "./image-provider.mjs";
-import { uploadXhaiImages } from "./xhai-files.mjs";
 import { KeyframeService, checkedKeyframe } from "./keyframes.mjs";
 import { createKeyframeGate, hasKeyframeApproval, lockedVideoPrompt, referenceFiles } from "./keyframe-contract.mjs";
 import { prepareVideoPrompt } from "./video-prompt.mjs";
 import { projectMediaReferences, referenceDownloadUrl } from "./media-references.mjs";
-import { GenerationEnhancement, reserveEnhancement, releaseEnhancements } from "./generation-enhancement.mjs";
+import { prepareCozyClayGeneration } from "./cozyclay-generation.mjs";
+import { reconcileRetiredEnhancements, releaseEnhancements } from "./generation-enhancement.mjs";
 import { FidelityService, FIDELITY_VERSION } from "./fidelity.mjs";
 import { VisualReviewService } from "./visual-review.mjs";
 import { prepareDetailViews, detailReferenceBudgets } from "./visual-detail.mjs";
@@ -91,7 +91,6 @@ function noProviderConfig(provider) {
   const messages = {
     openrouter: "拆解服务尚未就绪；请在系统设置 → AI 模型设置启用并验证 OpenRouter。",
     openai: "尚未配置 OPENAI_API_KEY；请在 Railway 的 Variables 中添加后重试。",
-    xhai: "尚未配置星火 AIGC Key；请在 AIGC 服务设置中保存后重试。",
     xai: "尚未配置 xAI Key；请在 AIGC 服务设置中保存后重试。",
   };
   return new AttentionError(messages[provider] ?? "尚未配置模型服务；请检查 AIGC 服务设置。");
@@ -284,11 +283,10 @@ export class CloudWorker {
     this.config = config;
     this.prepareVisualImage = createVisualImagePool(2);
     this.processJob = processJob || ((job) => this.#process(job));
-    this.visual = new VisualReviewService({ store, compiler: (id, snapshot, ownerId) => this.#requireCompileProvider(id, snapshot, ownerId), prepare: (job, project, target, unit) => this.#prepareVisualReview(job, project, target, unit), prepareImages: (job, provider, images) => this.#prepareXhaiCompileImages(job, provider, images), createResponse: (p, instructions, images) => this.#createCompileResponse(p, instructions, images, 7000), getResponse: (p, id) => this.#getCompileResponse(p, id), sampleBatches: unit => Math.ceil(reviewSampleTimes(unit).length / 12), wake: () => this.wake() });
+    this.visual = new VisualReviewService({ store, compiler: (id, snapshot, ownerId) => this.#requireCompileProvider(id, snapshot, ownerId), prepare: (job, project, target, unit) => this.#prepareVisualReview(job, project, target, unit), createResponse: (p, instructions, images) => this.#createCompileResponse(p, instructions, images, 7000), getResponse: (p, id) => this.#getCompileResponse(p, id), sampleBatches: unit => Math.ceil(reviewSampleTimes(unit).length / 12), wake: () => this.wake() });
     this.fidelity = new FidelityService(store, this.visual);
-    this.enhancement = new GenerationEnhancement({ store, config, download: url => this.#downloadVideo(url) });
     this.keyframes = new KeyframeService({ store, config, visual: this.visual, referenceDataUrls: (project, route) => this.#referenceDataUrls(project, route) });
-    this.scenes = new SceneRecommendations({ store, compiler: (id, snapshot, userId) => this.#requireCompileProvider(id, snapshot, userId), prepare: p => this.#prepareCompileInput(p, true), prepareImages: (job, provider, images) => this.#prepareXhaiCompileImages(job, provider, images), createResponse: (p, instructions, images) => this.#createCompileResponse(p, instructions, images), getResponse: (p, id) => this.#getCompileResponse(p, id), parseResponse: r => parseJsonOutput(responseOutputText(r)), wake: () => this.wake() });
+    this.scenes = new SceneRecommendations({ store, compiler: (id, snapshot, userId) => this.#requireCompileProvider(id, snapshot, userId), prepare: p => this.#prepareCompileInput(p, true), createResponse: (p, instructions, images) => this.#createCompileResponse(p, instructions, images), getResponse: (p, id) => this.#getCompileResponse(p, id), parseResponse: r => parseJsonOutput(responseOutputText(r)), wake: () => this.wake() });
     this.timer = null;
     this.busy = false;
     this.activeJobs = new Map();
@@ -365,10 +363,7 @@ export class CloudWorker {
       model: provider.model,
       openrouter: Boolean(this.config.openrouterApiKey),
       openai: Boolean(this.config.openaiApiKey),
-      missingDetail: provider.id === "xhai" ? "请配置 XHAI_API_KEY"
-        : provider.id === "openrouter"
-        ? "需要在 Railway Variables 配置 OPENROUTER_API_KEY"
-        : provider.id === "xylp" ? "请配置 VIDEO_RELAY_API_KEY 或编译专用密钥环境变量" : "需要在 Railway Variables 配置 OPENAI_API_KEY",
+      missingDetail: provider.id === "openrouter" ? "请在系统设置启用并验证 OpenRouter" : "请配置 OpenAI API Key",
     };
   }
 
@@ -447,7 +442,19 @@ export class CloudWorker {
     } catch (error) { return { durations: [], basis: error.message, issue: error.message }; }
   }
 
-  async startGeneration(projectId) {
+  #latestCompile(data, projectId) {
+    return Object.values(data.jobs).filter(job => job.type === "compile" && job.projectId === projectId && job.status === "completed" && job.payload?.artifacts)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  }
+
+  cozyclayUnits(projectId) {
+    const project = projectFor(this.store.data, projectId);
+    const artifacts = this.#latestCompile(this.store.data, projectId)?.payload.artifacts;
+    if (!artifacts || artifacts.sourceFingerprint !== stableFingerprint(project)) return [];
+    return artifacts.units.map(unit => ({ id: unit.id, durationSeconds: unit.duration_s, roleIds: unit.character_ids }));
+  }
+
+  async startGeneration(projectId, { cozyclay = false } = {}) {
     const task = await this.store.mutate((data) => {
       const project = projectFor(data, projectId);
       if (project.status === "ended") throw new Error("项目已结束；如需重做，请新建项目");
@@ -455,13 +462,14 @@ export class CloudWorker {
       assertVideoAccess(data, project.ownerId, route);
       if (!videoKey(this.config, route)) throw new Error(`${route.label} 尚未配置 API 密钥`);
       if (activeProjectTask(data, projectId)) throw new Error("该项目已有正在执行的云端任务");
-      const compileJob = Object.values(data.jobs).filter((job) => job.type === "compile" && job.projectId === projectId && job.status === "completed" && job.payload?.artifacts).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      const compileJob = this.#latestCompile(data, projectId);
       if (!compileJob) throw new Error("尚未找到有效的 B/C 编译结果，请先完成拆解编译");
       if (compileJob.payload.artifacts.sourceFingerprint !== stableFingerprint(project)) throw new Error("素材或内核规则已变化，请重新编译商品锁定清单后再生成视频");
       // Records created before runId existed get upgraded here too. This keeps
       // an older completed compile and its newly started generation in one
       // project card instead of splitting the same workflow into two rows.
-      return this.#enqueueGeneration(data, project, compileJob.payload.artifacts, this.#ensureRunId(data, compileJob));
+      const artifacts = cozyclay ? prepareCozyClayGeneration(this.store, project, route, compileJob.payload.artifacts) : compileJob.payload.artifacts;
+      return this.#enqueueGeneration(data, project, artifacts, this.#ensureRunId(data, compileJob));
     });
     this.wake();
     return task;
@@ -526,15 +534,15 @@ export class CloudWorker {
     if (imageRoute) assertImageAccess(data, project.ownerId, imageRoute);
     const aspectRatio = project.resolvedVideoAspectRatio || (project.videoAspectRatio === "auto" ? "9:16" : project.videoAspectRatio);
     const imageCount = videoReferenceCount(videoRoute, referenceFiles(project).length);
-    const media = projectMediaReferences(this.store, project, videoRoute);
+    const mediaProject = artifacts.cozyclay ? { ...project, assets: artifacts.referenceSnapshot.assets } : project;
+    const media = projectMediaReferences(this.store, mediaProject, videoRoute);
     for (const unit of artifacts.units) validateVideoInput(videoRoute, { duration: unit.duration_s, aspectRatio, referenceImages: Array(imageCount).fill("planned-image") });
     const taskId = randomUUID();
     const visualReview = this.visual.settings(project.ownerId);
     const reserved = data.platform ? { platform: clone(data.platform) } : { platform: undefined };
-    const enhancement = reserveEnhancement(reserved, this.config, project, taskId, artifacts.units);
     if (!firstFrame) for (const unit of artifacts.units) reserve(reserved, { id: `${taskId}:video:${unit.id}`, userId: project.ownerId, jobId: taskId, quote: operationPlan(data, project.ownerId, "video", videoRoute, { durations: [unit.duration_s], imageCount, aspectRatio, referenceVideoSeconds: media.referenceVideoSeconds, referenceAudioCount: media.referenceAudioCount }), label: `${videoRoute.model.label} · ${unit.id}` });
     const task = {
-      id: taskId, ownerId: project.ownerId, projectId: project.id, runId, type: "generate", title: `${project.name} · ${videoRoute.model.label} 生成`,
+      id: taskId, ownerId: project.ownerId, projectId: project.id, runId, type: "generate", title: `${project.name} · ${videoRoute.model.label}${artifacts.cozyclay ? ` · 预演片段 ${artifacts.cozyclay.unitId}` : " 生成"}`,
       stage: firstFrame ? "attention" : "queued", progress: 0, createdAt: timestamp, startedAt: timestamp, updatedAt: timestamp,
       currentItem: firstFrame ? "先生成或上传关键帧，图片备齐后自动扫描" : "多图参考已入队，准备扫描原图与脚本",
       logs: [{ at: timestamp, level: "info", message: firstFrame ? `已建立 ${videoRoute.model.label} 队列；关键帧就绪后自动视觉扫描，通过后可开始视频。` : `已建立 ${videoRoute.model.label} 队列；直接使用当前人物、商品和场景参考图，不生成关键帧。` }], outputFiles: [],
@@ -546,7 +554,7 @@ export class CloudWorker {
     project.updatedAt = timestamp;
     data.jobs[task.id] = {
       id: task.id, taskId: task.id, ownerId: project.ownerId, projectId: project.id, runId, type: "generate", status: firstFrame ? "paused" : "queued", attempts: 0, nextRunAt: Date.now(), createdAt: timestamp, updatedAt: timestamp,
-      payload: { runId, artifacts: clone(artifacts), videoRoute, ...(enhancement ? { enhancement } : {}), fidelityVersion: FIDELITY_VERSION, ...(visualReview ? { visualReview } : {}), ...(firstFrame ? { keyframeGate: { ...createKeyframeGate(artifacts), imageRoute } } : { referenceOnly: true }), index: 0, checkpoints: {} },
+      payload: { runId, artifacts: clone(artifacts), videoRoute, fidelityVersion: FIDELITY_VERSION, ...(visualReview ? { visualReview } : {}), ...(firstFrame ? { keyframeGate: { ...createKeyframeGate(artifacts), imageRoute } } : { referenceOnly: true }), index: 0, checkpoints: {} },
     };
     if (data.platform) data.platform = reserved.platform;
     return task;
@@ -895,20 +903,6 @@ export class CloudWorker {
     }, this.config.aiFetch ? (url, options) => this.config.aiFetch("aigc_compile", url, options) : fetch);
   }
 
-  async #prepareXhaiCompileImages(job, provider, imageItems) {
-    if (provider.id !== "xhai") return imageItems;
-    const fingerprint = createHash("sha256").update(imageItems.map(item => item.dataUrl).join("\n")).digest("hex");
-    const cached = job.payload?.xhaiCompileUploads;
-    const urls = cached?.fingerprint === fingerprint
-      ? cached.urls
-      : await uploadXhaiImages(provider.baseUrl, provider.apiKey, imageItems.map(item => item.dataUrl));
-    if (!cached || cached.fingerprint !== fingerprint) await this.store.mutate(data => {
-      const current = data.jobs[job.id];
-      if (current?.status === "running") current.payload.xhaiCompileUploads = { fingerprint, urls };
-    });
-    return imageItems.map((item, index) => ({ ...item, dataUrl: urls[index] }));
-  }
-
   async #getCompileResponse(provider, id) {
     if (!provider.supportsResponsePolling) {
       throw new AttentionError(`${provider.label} 不支持按响应编号轮询；该任务不会自动重新提交，以避免重复计费。`);
@@ -971,7 +965,7 @@ export class CloudWorker {
     await this.#updateTask(job.taskId, { stage: "uploading", progress: 22, currentItem: "正在压缩并整理项目专属分析素材" }, { level: "info", message: `仅向 ${compiler.label} 发送压缩后的必要人物、商品、场景和视频关键帧；原文件保留在私有云端存储。` });
     const prepared = await this.#prepareCompileInput(project);
     if (!prepared.imageItems.length) throw new AttentionError("没有可提交的分析图片；请重新上传人物和商品图。 ");
-    const compileImages = await this.#prepareXhaiCompileImages(job, compiler, prepared.imageItems);
+    const compileImages = prepared.imageItems;
     const ratio = project.videoAspectRatio === "auto" ? resolveAspect(prepared.videoInfo?.width, prepared.videoInfo?.height) : project.videoAspectRatio;
     const sourceDurationSeconds = prepared.videoInfo?.duration ?? prepared.reusableTemplate?.source_duration_s ?? prepared.reusableTemplate?.target_duration_s;
     if (sourceDurationSeconds != null && (!Number.isFinite(sourceDurationSeconds) || sourceDurationSeconds < 1 || Math.floor(sourceDurationSeconds) > this.config.maxVideoSecondsPerProject)) throw new AttentionError("参考视频时长无效或超过项目预算上限，未提交编译。");
@@ -988,7 +982,7 @@ export class CloudWorker {
       : `正在等待 ${compiler.label} 的完整 B/C 回包；浏览器关闭不会中断云端 worker。若服务在回包前重启，任务将停在安全检查点而不会自动重复扣费。`;
     await this.#updateTask(job.taskId, { stage: "analyzing", progress: 38, currentItem: `${compiler.label} 正在拆解并生成 B/C JSON` }, { level: "info", message: requestMessage });
 
-    const requestPayload = { ...job.payload, ...(compiler.id === "xhai" ? { xhaiCompileUploads: { fingerprint: createHash("sha256").update(prepared.imageItems.map(item => item.dataUrl).join("\n")).digest("hex"), urls: compileImages.map(item => item.dataUrl) } } : {}), kernelContract: clone(COMPILE_KERNEL), sourceFingerprint: fingerprint, resolvedVideoAspectRatio: ratio, sourceDurationSeconds, videoModel, videoProfile: { provider: videoRoute.id, model: videoModel.model, resolution: videoRoute.resolution, input_mode: videoModel.inputMode || "references", execution_surface: "api" } };
+    const requestPayload = { ...job.payload, kernelContract: clone(COMPILE_KERNEL), sourceFingerprint: fingerprint, resolvedVideoAspectRatio: ratio, sourceDurationSeconds, videoModel, videoProfile: { provider: videoRoute.id, model: videoModel.model, resolution: videoRoute.resolution, input_mode: videoModel.inputMode || "references", execution_surface: "api" } };
     if (job.payload?.compileSubmission?.state === "inflight") throw new AttentionError("上次编译提交结果不明，请先核实供应商账务，任务不会自动重提");
     const canSubmit = await this.store.mutate(data => {
       const current = data.jobs[job.id];
@@ -1228,7 +1222,7 @@ export class CloudWorker {
     const index = Number(job.payload?.index || 0);
     if (!units.length) throw new AttentionError("找不到 B/C 编译产物；请先重新完成编译。 ");
     if (index >= units.length) {
-      if (!await this.enhancement.advance(job)) return;
+      if (job.payload?.enhancement) await this.store.mutate(data => reconcileRetiredEnhancements(data, job.id));
       if (this.visual.enabled(job)) {
         // The default delivery path ends here: pre-generation and keyframe
         // checks are sufficient to proceed, but are NOT a video quality claim.
@@ -1244,6 +1238,8 @@ export class CloudWorker {
     // Legacy jobs with an existing request always belong to xAI, regardless of
     // later project edits. New jobs retain the complete non-secret route.
     const route = job.payload?.videoRoute || selectVideoRoute({ ...this.config, videoProviders: [], xaiBaseUrl: "https://api.x.ai/v1" });
+    try { assertActiveVideoRoute(route); }
+    catch (error) { throw new AttentionError(error.message); }
     const label = route.model.label;
     if (job.payload?.videoSubmission?.state === "mismatch") throw new AttentionError(`${route.label} 任务 ${job.providerRequestId || "未知"} 的提交回执显示参数变化；已保留任务编号，须人工核对，不能自动归档或重复提交。`);
     if (job.providerRequestId) {
@@ -1364,26 +1360,12 @@ export class CloudWorker {
       input.referenceImages = preparedImages.urls;
       job = this.store.getJob(job.id);
     }
-    let xhaiReferenceUploads = job.payload?.xhaiReferenceUploads;
-    let xhaiPreflight;
+    let preflight;
     if (route.protocol === "agentai") {
-      try { xhaiPreflight = await preflightXhaiVideo(this.config, route, input); }
+      try { preflight = await preflightAgentAiVideo(this.config, route, input); }
       catch (error) { throw new AttentionError(`AgentAI 免费估价未能确认本次视频参数，视频未提交：${error.message}`); }
     }
-    if (route.protocol === "xhai") {
-      const fingerprint = createHash("sha256").update(references.join("\n")).digest("hex");
-      const cached = xhaiReferenceUploads?.[unit.id];
-      input.referenceImages = cached?.fingerprint === fingerprint
-        ? cached.urls
-        : await uploadXhaiImages(route.baseUrl, videoKey(this.config, route), references);
-      if (!cached || cached.fingerprint !== fingerprint) {
-        xhaiReferenceUploads = { ...xhaiReferenceUploads, [unit.id]: { fingerprint, urls: input.referenceImages } };
-        await this.store.mutate(data => { if (data.jobs[job.id]?.status === "running") data.jobs[job.id].payload.xhaiReferenceUploads = xhaiReferenceUploads; });
-      }
-      try { xhaiPreflight = await preflightXhaiVideo(this.config, route, input); }
-      catch (error) { throw new AttentionError(`星火 AIGC 免费估价未能确认本次视频参数，视频未提交：${error.message}`); }
-    }
-    const submitted = { ...job.payload, ...(xhaiReferenceUploads ? { xhaiReferenceUploads } : {}), videoRoute: route, lastSubmittedUnit: unit.id, videoSubmission: { state: "inflight", startedAt: now() } };
+    const submitted = { ...job.payload, videoRoute: route, lastSubmittedUnit: unit.id, videoSubmission: { state: "inflight", startedAt: now() } };
     const canSubmit = await this.store.mutate(data => {
       const current = data.jobs[job.id];
       if (current.status !== "running") return false;
@@ -1397,9 +1379,9 @@ export class CloudWorker {
     if (!canSubmit) return;
     if (this.store.getJob(job.id)?.status === "cancelled") return;
     let requestId;
-    try { requestId = await submitVideo(this.config, route, input, xhaiPreflight); }
+    try { requestId = await submitVideo(this.config, route, input, preflight); }
     catch (error) {
-      if (error instanceof XhaiVideoAdjustmentError || (route.protocol === "agentai" && error.parameterMismatch && error.taskId)) {
+      if (route.protocol === "agentai" && error.parameterMismatch && error.taskId) {
         await this.store.mutate(data => {
           const current = data.jobs[job.id];
           if (!current) return;
@@ -1426,24 +1408,27 @@ export class CloudWorker {
       const current = data.jobs[job.id];
       if (!current || current.status === "cancelled") return;
       const projectNow = projectFor(data, project.id);
+      const previsUnitId = current.payload.artifacts.cozyclay?.unitId;
       if (this.visual.enabled(current)) current.payload.visualReview.completedKeys = this.visual.summary(current, { ...projectNow, ...current.payload.artifacts.referenceSnapshot }).records.map(r => r.key);
-      taskPatch(task, { stage: "completed", progress: 100, currentItem: "所有视频均已保存到云端", finishedAt: now(), visualReviewRequired: false, outputReviewRequired: false }, { level: "success", message: "云端生成完成：视频和 C 模板已归档到本项目作品库。" });
+      taskPatch(task, { stage: "completed", progress: 100, currentItem: previsUnitId ? "预演片段已生成 · 待人工核对" : "所有视频均已保存到云端", finishedAt: now(), visualReviewRequired: false, outputReviewRequired: false }, { level: "success", message: previsUnitId ? "本次仅生成绑定片段。请核对角色、商品轨迹及各句口型，项目原始素材保留供继续编辑。" : "云端生成完成：视频和 C 模板已归档到本项目作品库。" });
       current.status = "completed";
       current.providerRequestId = undefined;
-      projectNow.status = "completed";
+      projectNow.status = previsUnitId ? "compiled" : "completed";
       projectNow.updatedAt = now();
       const cFile = current.payload?.artifacts?.cFile;
       const videos = clone(task.outputFiles.filter((item) => item.mime?.startsWith("video/") || /\.mp4$/i.test(item.name)));
-      const existing = data.appState.works.find((item) => item.projectId === project.id && !item.deletedAt);
+      const existing = data.appState.works.find((item) => item.projectId === project.id && !item.deletedAt && item.previsUnitId === previsUnitId);
       const work = {
-        id: existing?.id || randomUUID(), projectId: project.id, title: project.name, createdAt: existing?.createdAt || now(), updatedAt: now(),
-        cover: videos[0], videos, reusableTemplate: projectNow.saveReusableTemplate ? cFile : undefined, sourceProjectName: project.name,
+        id: existing?.id || randomUUID(), projectId: project.id, title: previsUnitId ? `${project.name} · 预演片段 ${previsUnitId}` : project.name, createdAt: existing?.createdAt || now(), updatedAt: now(),
+        cover: videos[0], videos, reusableTemplate: projectNow.saveReusableTemplate && !previsUnitId ? cFile : undefined, sourceProjectName: project.name,
+        ...(previsUnitId ? { previsUnitId } : {}),
         videoAspectRatio: projectNow.videoAspectRatio, resolvedVideoAspectRatio: projectNow.resolvedVideoAspectRatio,
       };
       if (existing) data.appState.works[data.appState.works.indexOf(existing)] = work;
       else data.appState.works.unshift(work);
     });
 
+    if (job.payload.artifacts.cozyclay) return;
     const cleanup = await this.store.purgeCompletedProjectSources(project.id);
     if (!cleanup.completed) return;
     const deferredDetail = cleanup.deferred

@@ -22,6 +22,7 @@
 .talk-video-modes {
   margin-bottom: 12px;
 }
+.talk-video-scope { margin-bottom: 10px; }
 
 .talk-video-composer,
 .talk-video-result {
@@ -431,4 +432,19 @@
     inset-inline-start: 0;
     inset-inline-end: auto;
   }
+}
+.talk-video-fields .talk-video-batch-picker {
+  flex: 1 1 250px;
+  min-width: 180px;
+}
+.talk-video-batch h3 { margin: 0 0 10px; }
+.talk-video-batch ul { list-style: none; padding: 0; margin: 0; }
+.talk-video-batch li {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) minmax(0, 2fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 34px;
+  padding: 5px 0;
+  border-top: 1px solid var(--app-border);
 }

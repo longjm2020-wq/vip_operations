@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { fail, operationPlan, reserve, markSubmitted, settle } from "./access.mjs";
-import { imageModel, keyframeImageRoute, keyframeImageBody, submitKeyframe, pollKeyframe } from "./image-provider.mjs";
+import { DEFAULT_IMAGE_MODEL, imageModel, imageModelAvailable, imageRouteAvailable, imageRouteConfigured, keyframeImageRoute, keyframeImageBody, dryRunKeyframe, submitKeyframe, pollKeyframe } from "./image-provider.mjs";
 import { listDetailAssetGroups } from "./detail-asset-library.mjs";
 import { isMainImageModule, MAX_DETAIL_MODULES, requestedMainImageCount, resizeMainImages } from "../shared/detail-main-images.mjs";
 import { archiveDetailWorks } from "./detail-works.mjs";
@@ -53,6 +53,8 @@ function cleanProject(store, user, input, previous) {
   if (!project || typeof project.name !== "string" || !project.name.trim() || project.name.length > 100 || !["autonomous", "template_clone"].includes(project.mode)) fail("项目名称或模式无效");
   if (!Array.isArray(project.outputTypes) || !project.outputTypes.length || project.outputTypes.some(type => !["detail_page", "main_image"].includes(type))) fail("请选择详情页或主图");
   if (project.outputRatios !== undefined && (!project.outputRatios || typeof project.outputRatios !== "object" || Array.isArray(project.outputRatios))) fail("图片比例设置无效");
+  if (!project.imageModelId || (previous?.imageModelId === project.imageModelId && !imageModelAvailable(project.imageModelId)))
+    project.imageModelId = DEFAULT_IMAGE_MODEL;
   const model = imageModel({ model: project.imageModelId });
   project.outputRatios = Object.fromEntries(Object.keys(DEFAULT_DETAIL_RATIOS).map(type => {
     const ratio = project.outputRatios?.[type] ?? detailOutputRatio(previous || {}, type);
@@ -88,7 +90,12 @@ export function listDetailAssets(store, user) {
   for (const entry of listDetailAssetGroups(store, user)) for (const image of entry.images) if (!result[entry.kind].some(item => item.path === image.path)) result[entry.kind].push({ path: image.path, name: image.name, createdAt: entry.createdAt });
   return result;
 }
-export function getDetailProject(store, user, id) { const project = structuredClone(owned(store, user, id)); project.jobs = project.jobs.map(item => store.data.detailJobs?.[item.id] || item); return project; }
+export function getDetailProject(store, user, id) {
+  const project = structuredClone(owned(store, user, id));
+  if (!imageModelAvailable(project.imageModelId)) project.imageModelId = DEFAULT_IMAGE_MODEL;
+  project.jobs = project.jobs.map(item => store.data.detailJobs?.[item.id] || item);
+  return project;
+}
 export async function saveDetailProject(store, user, input, id) {
   return store.mutate(data => {
     const scopedStore = { data };
@@ -161,7 +168,7 @@ const absoluteClaims = /最(?:好|高|低|强|优|佳|新)|第一|顶级|国家�
 export function compileDetailPrompts(project, rules = defaultKeywords) {
   const issues = [];
   const product = project.product || {}, person = project.person || {}, brand = project.brand || {};
-  const model = imageModel({ model: project.imageModelId });
+  const model = imageModel({ model: imageModelAvailable(project.imageModelId) ? project.imageModelId : DEFAULT_IMAGE_MODEL });
   for (const type of project.outputTypes) if (!model.aspects.includes(detailOutputRatio(project, type))) issues.push({ level: "fail", field: `outputRatios.${type}`, message: `${type === "detail_page" ? "详情页" : "主图"}比例不受当前图片模型支持，请重新选择` });
   if (!product.name?.trim()) issues.push({ level: "fail", field: "product.name", message: "请填写产品名称" });
   if (!project.assets?.product?.length) issues.push({ level: "fail", field: "assets.product", message: "请上传产品原图" });
@@ -210,8 +217,8 @@ export async function queueDetailImages(store, config, user, id, onlyModuleId) {
   const project = owned(store, user, id);
   const compiled = compileDetailPrompts(project, detailRules(store.data));
   if (!compiled.valid) fail(compiled.issues.filter(issue => issue.level === "fail").map(issue => issue.message).join("；"));
-  const route = keyframeImageRoute(config, { modelId: project.imageModelId || "tt-image-2.5-token" });
-  if (!config.videoSecrets?.[route.keyEnv]) fail("所选图像模型尚未配置对应服务密钥，无法生成", 409);
+  const route = keyframeImageRoute(config, { modelId: project.imageModelId });
+  if (!imageRouteConfigured(config, route)) fail("所选图像模型尚未连接，请同步 AgentAI 模型目录后重试", 409);
   operationPlan(store.data, user.id, "keyframe", route);
   const units = onlyModuleId ? compiled.units.filter(unit => unit.moduleId === onlyModuleId) : compiled.units;
   if (!units.length) fail("没有可生成的模块");
@@ -230,6 +237,17 @@ export async function processDetailJobs(store, config) {
     if (!job) return;
     const project = store.data.detailProjects?.[job.projectId];
     if (!project || project.ownerId !== job.ownerId) { await store.mutate(data => { data.detailJobs[job.id].status = "failed"; data.jobs[job.id].status = "failed"; }); return; }
+    if (!imageModelAvailable(job.imageModelId) || (job.route && !imageRouteAvailable(job.route))) {
+      await store.mutate(data => {
+        const saved = data.detailJobs[job.id];
+        if (!["pending", "submitted"].includes(saved.status)) return;
+        const submitted = saved.status === "submitted";
+        saved.status = submitted ? "uncertain" : "failed";
+        saved.error = submitted ? "原图片服务已下线，请保留任务号并核对原请求。" : "原图片模型已下线，请改选当前图片模型后生成。";
+        data.jobs[job.id].status = submitted ? "paused" : "failed";
+      });
+      return;
+    }
     const route = keyframeImageRoute(config, { modelId: job.imageModelId });
     if (job.status === "pending") {
       try {
@@ -238,6 +256,7 @@ export async function processDetailJobs(store, config) {
       const images = [];
       for (const id of ids) { const asset = await store.readAsset(id); const buffer = await sharp(asset.buffer).rotate().resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer(); images.push(`data:image/jpeg;base64,${buffer.toString("base64")}`); }
       const body = keyframeImageBody(route, { prompt: `${job.unit.positive_prompt}\n排除：${job.unit.negative_prompt}`, images, aspectRatio: job.unit.output_ratio });
+      await dryRunKeyframe(config, route, body);
       const quote = operationPlan(store.data, job.ownerId, "keyframe", route);
       await store.mutate(data => { reserve(data, { id: job.id, userId: job.ownerId, jobId: job.id, quote, label: `详情页 ${job.unit.id}` }); markSubmitted(data, job.id); data.detailJobs[job.id].status = "inflight"; data.detailJobs[job.id].route = route; data.jobs[job.id].status = "running"; });
       try { const taskId = await submitKeyframe(config, route, body); await store.mutate(data => { data.detailJobs[job.id].taskId = taskId; data.detailJobs[job.id].status = "submitted"; data.jobs[job.id].status = "waiting_provider"; data.jobs[job.id].providerRequestId = taskId; }); }

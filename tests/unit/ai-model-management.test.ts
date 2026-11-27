@@ -983,17 +983,16 @@ describe("AI model administration and real routing", () => {
       model: `openrouter|${vision}`,
       revision: 0,
     });
-    await saveAiFeatureModel(admin(), {
-      feature: "aigc_image",
-      model: "tt-image-2.5-token",
-      revision: 0,
-    });
+    await expect(saveAiFeatureModel(admin(), {
+      feature: "aigc_image", model: "tt-image-2.5-token", revision: 0,
+    })).rejects.toMatchObject(errorCode("AI_MODEL_UNAVAILABLE"));
     const config = await engineConfig();
     expect(config.managedCompiler).toEqual({
       providerId: "openrouter",
       model: vision,
     });
-    expect(config.keyframeImageModel).toBe("tt-image-2.5-token");
+    expect(config).not.toHaveProperty("keyframeImageModel");
+    expect(config.videoSecrets).not.toHaveProperty("XYLP_IMAGE_TT25_KEY");
     await expect(
       saveAiFeatureModel(admin(), {
         feature: "aigc_compile",

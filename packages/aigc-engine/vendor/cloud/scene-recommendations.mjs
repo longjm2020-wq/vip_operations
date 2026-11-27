@@ -23,7 +23,7 @@ export function normalizeRecommendations(value) {
 }
 
 export class SceneRecommendations {
-  constructor({ store, compiler, prepare, prepareImages, createResponse, getResponse, parseResponse, wake }) { Object.assign(this, { store, compiler, prepare, prepareImages, createResponse, getResponse, parseResponse, wake }); }
+  constructor({ store, compiler, prepare, createResponse, getResponse, parseResponse, wake }) { Object.assign(this, { store, compiler, prepare, createResponse, getResponse, parseResponse, wake }); }
   view(projectId) {
     const project = this.store.getAppState().projects.find(p => p.id === projectId);
     if (!project) throw new Error("项目不存在");
@@ -66,7 +66,7 @@ export class SceneRecommendations {
     if (!response) {
       if (job.payload.compileSubmission?.state === "inflight") throw new Error("场景推荐请求结果待核实，不会自动重复提交；请联系管理员");
       const prepared = await this.prepare(job.payload.inputProject);
-      const imageItems = await this.prepareImages(job, provider, prepared.imageItems);
+      const imageItems = prepared.imageItems;
       const ready = await this.store.mutate(data => {
         const current = data.jobs[job.id];
         if (current.status !== "running") return false;

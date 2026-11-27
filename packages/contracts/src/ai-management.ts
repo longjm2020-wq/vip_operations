@@ -100,7 +100,7 @@ export const aiFeatures = [
     group: "AIGC",
     href: "/aigc",
     boundary:
-      "分析主动上传的素材并生成脚本、分镜与视觉检查；已提交任务保留原模型。",
+      "分析主动上传或从公开链接成功导入的参考片和项目素材，生成脚本、分镜和视觉检查。导入只登记素材，首次拆解使用当前配置，已提交任务保留原模型并按实际响应计量。",
     kind: "aigc_compile",
   },
   {
@@ -142,16 +142,8 @@ export const aiFeatures = [
     group: "AIGC",
     href: "/aigc",
     boundary:
-      "通过百炼 MiniMax H3 或指定的 AgentAI 图片参考视频型号生成视频；新任务采用所选线路，已提交任务保留原路由。AgentAI 按实际模型参数估价，以智能调度综合成功率、耗时和价格选择可用渠道并容灾；不自动重复提交收费任务。",
+      "通过百炼 MiniMax H3 或指定 AgentAI 型号生成视频。CozyClay 绑定片段由 H3 使用灰模参考和整轨对白，双人身份和口型须审片。以供应商实际回执记录用量，原请求编号保留，结果待核实时不自动重试。",
     kind: "aigc_video",
-  },
-  {
-    id: "aigc_enhance",
-    name: "AIGC 视频增强",
-    group: "AIGC",
-    href: "/aigc",
-    boundary: "使用已配置的增强流程处理视频，能力由服务配置与工作流决定。",
-    kind: "external",
   },
   {
     id: "aigc_depth",

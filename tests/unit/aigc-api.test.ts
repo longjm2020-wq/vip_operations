@@ -82,7 +82,7 @@ const detail = () => ({
   mode: "autonomous",
   outputTypes: ["main_image"],
   outputRatios: { detail_page: "3:4", main_image: "1:1" },
-  imageModelId: "banana-pro",
+  imageModelId: "agentai-gt-image-2.6-sunburst",
   frameworkId: "main-six",
   brand: {},
   person: {},
@@ -130,6 +130,36 @@ async function ready() {
   }
   throw Error("AIGC did not start");
 }
+
+it("preserves exact CozyClay project bytes for its owner and scopes the segment list", async () => {
+  await ready();
+  const project = draft();
+  expect((await request("/projects", "PUT", project)).status).toBe(200);
+  const source = JSON.stringify({
+    app: "cozyclay",
+    kind: "project",
+    version: 5,
+    scenes: {
+      scenes: [{
+        id: "scene-one", name: "场景",
+        shotDocument: { frameCount: 120, shots: [{ id: "shot-one", startFrame: 0, endFrame: 96 }] },
+      }],
+    },
+  });
+  const form = new FormData();
+  form.set("projectId", project.id);
+  form.set("kind", "cozyclayProject");
+  form.set("file", new File([source], "场景.cclayproject", { type: "application/octet-stream" }));
+  const uploaded = await request("/assets", "POST", form);
+  expect(uploaded.status).toBe(201);
+  expect(uploaded.data.mediaInfo.cozyclay.shots[0].id).toBe("shot-one");
+  const download = `/assets/${uploaded.data.path}?download=1`;
+  expect((await request(download)).data).toEqual(Buffer.from(source));
+  expect((await request(download, "GET", undefined, "other")).status).toBe(404);
+  expect(await request(`/projects/${project.id}/previs-units`)).toEqual({ status: 200, data: [] });
+  expect((await request(`/projects/${project.id}/previs-units`, "GET", undefined, "other")).status).toBe(404);
+});
+
 beforeAll(async () => {
   vi.stubEnv("APP_ORIGIN", "http://aigc.test");
   vi.stubEnv("COMPASS_MAIL_KEY", "1".repeat(64));
@@ -267,15 +297,13 @@ it("persists all three project types and isolates projects, assets and tasks", a
 it("encrypts and masks provider credentials, detects stale edits", async () => {
   const input = {
     revision: 1,
-    videoRelayBaseUrl: "https://provider.test",
-    xhaiBaseUrl: "",
-    opentalkingBaseUrl: "",
+    opentalkingBaseUrl: "https://provider.test",
     runninghubWorkflowId: "",
-    secrets: { VIDEO_RELAY_API_KEY: "test-only-never-a-real-key" },
+    secrets: { RUNNINGHUB_API_KEY: "test-only-never-a-real-key" },
   };
   const saved = await request("/services", "PUT", input);
   expect(saved.status).toBe(200);
-  expect(saved.data.secrets.VIDEO_RELAY_API_KEY).toBe(true);
+  expect(saved.data.secrets.RUNNINGHUB_API_KEY).toBe(true);
   expect(JSON.stringify(saved.data)).not.toContain("test-only-never");
   const row = (
     await fixture.db!.query<any>("SELECT secrets_encrypted FROM aigc_settings")
@@ -287,10 +315,15 @@ it("encrypts and masks provider credentials, detects stale edits", async () => {
       await request("/services", "PUT", {
         ...input,
         revision: 2,
-        videoRelayBaseUrl: "https://user:password@provider.test",
+        opentalkingBaseUrl: "https://user:password@provider.test",
       })
     ).status,
   ).toBe(400);
+  const retired = await request("/services", "PUT", {
+    ...input, revision: 2, secrets: { XHAI_API_KEY: "retired", VIDEO_RELAY_API_KEY: "retired" },
+  });
+  expect(retired.status).toBe(400);
+  expect(saved.data.secrets).not.toHaveProperty("XHAI_API_KEY");
 });
 it("copies the saved Bailian connection without exposing credentials and verifies one durable video task", async () => {
   const { encryptSecret } =
@@ -483,6 +516,14 @@ it("blocks duplicate uncertain video checks but lets rejected credentials be cor
     );
   }
 });
+it("public reference import requires CSRF and a project owned by the caller", async () => {
+  const project = (await request("/projects", "PUT", draft())).data;
+  const reference = { projectId: project.id, shareText: "file:///private.mp4" };
+  expect((await request("/assets/import-reference", "POST", reference, "missing")).status).toBe(401);
+  expect((await request("/assets/import-reference", "POST", reference, "owner", "wrong")).status).toBe(403);
+  expect((await request("/assets/import-reference", "POST", reference, "other")).status).toBe(404);
+  expect((await request("/assets/import-reference", "POST", reference)).status).toBe(400);
+});
 it("only one scheduler holds the lease, and persisted projects survive engine restart", async () => {
   const contender = new StudioDatabase("test");
   expect(await contender.acquire(() => {})).toBe(false);
@@ -531,12 +572,11 @@ it("real detail workflow saves provider IDs, resumes polling, archives output an
   const config: any = {
     dataDir: dir,
     videoSecrets: {
-      VIDEO_RELAY_API_KEY: "fixture",
-      XYLP_IMAGE_BANANA_PRO_KEY: "fixture",
+      AGENTAI_API_KEY: "fixture",
     },
-    videoRelayBaseUrl: "https://provider.test",
+    agentaiModels: JSON.parse(await read("tests/fixtures/agentai-media-models.json", "utf8")).models,
     videoProviders: [],
-    publicVideoProvider: "xylp",
+    publicVideoProvider: "bailian",
     workerConcurrency: 1,
     workerPollMs: 1000,
     maxUploadBytes: 20 * 1024 * 1024,
@@ -584,21 +624,27 @@ it("real detail workflow saves provider IDs, resumes polling, archives output an
     queueDetailImages(engine.store, config, users[0], project.id),
   ).rejects.toThrow("已有生成任务");
   let submitted = 0;
+  let loseInvokeResponse = false;
   const nativeFetch = globalThis.fetch;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: any, options: any) => {
       const href = String(url);
-      if (href.endsWith("/v1/media/generate")) {
+      if (href.endsWith("/v1/files"))
+        return Response.json({ url: "https://assets.test/reference.jpg" });
+      if (href.endsWith("/v1/pricing-estimate"))
+        return Response.json({ effective_total_rmb: 1, max_effective_total_rmb: 2, required_freeze_rmb: 2, channels: [{ lane: "fixture", is_delivery_head: true }] });
+      if (href.endsWith("/api/v1/model-runtime/invoke")) {
         submitted++;
         expect(options.headers.Authorization).toBe("Bearer fixture");
+        if (loseInvokeResponse) throw Error("upstream timeout");
         return Response.json({ task_id: "provider-1" });
       }
-      if (href.includes("/v1/media/status"))
+      if (href.endsWith("/v1/tasks/provider-1"))
         return Response.json({
           is_final: true,
-          state: "success",
-          result_url: "https://provider.test/result.png",
+          status: "completed",
+          output_url: "https://assets.test/result.png",
         });
       if (href.endsWith("result.png"))
         return new Response(png, { headers: { "content-type": "image/png" } });
@@ -620,12 +666,7 @@ it("real detail workflow saves provider IDs, resumes polling, archives output an
       "done",
     );
     await queueDetailImages(engine.store, config, users[0], project.id);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw Error("upstream timeout");
-      }),
-    );
+    loseInvokeResponse = true;
     await processDetailJobs(engine.store, config);
     expect(
       Object.values<any>(engine.store.data.detailJobs).some(

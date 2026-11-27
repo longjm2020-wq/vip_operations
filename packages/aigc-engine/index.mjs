@@ -1,5 +1,6 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { readFile, rename, stat, unlink } from "node:fs/promises";
+import { inspectCozyClayProject } from "./vendor/shared/cozyclay.mjs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import Busboy from "busboy";
@@ -10,16 +11,14 @@ import { CloudWorker, MAX_WORKER_CONCURRENCY } from "./vendor/cloud/worker.mjs";
 import { initialKernel } from "./vendor/cloud/kernel.mjs";
 import { videoProviders, selectVideoRoute } from "./vendor/cloud/video-providers.mjs";
 import { quoteVideo } from "./vendor/cloud/video-pricing.mjs";
-import { imageCatalog, keyframeImageRoute, assertImageSelection } from "./vendor/cloud/image-provider.mjs";
+import { imageCatalog, defaultImageModel, imageModelAvailable, keyframeImageRoute, assertImageSelection } from "./vendor/cloud/image-provider.mjs";
 import { checkedKeyframe } from "./vendor/cloud/keyframes.mjs";
 import { InternalAccess, fail, requireRole } from "./vendor/cloud/access.mjs";
 import { catalogFor, selectionForSave, projectForClient, taskForClient, reviewForClient, customerText } from "./vendor/cloud/customer-view.mjs";
-import { enhancementQuote, enhancementDownloadOwner } from "./vendor/cloud/generation-enhancement.mjs";
 import { videoPoster } from "./vendor/cloud/video-poster.mjs";
 import { AssetLibrary } from "./vendor/cloud/asset-library.mjs";
 import { listDetailAssetGroups, saveDetailAssetGroup, useDetailAssetGroup, removeDetailAssetGroup } from "./vendor/cloud/detail-asset-library.mjs";
 import { compilerCatalog, saveCompilerSettings, publicCompiler } from "./vendor/cloud/compile-providers.mjs";
-import { enhancementCatalog, createEnhancement, refreshEnhancement } from "./vendor/cloud/video-enhance.mjs";
 import { detailRules, saveDetailRules, listDetailAssets, listDetailProjects, getDetailProject, saveDetailProject, listDetailFrameworks, saveDetailFramework, saveDetailVersion, restoreDetailVersion, planDetailProject, compileDetailPrompts, analyzeDetailTemplate, queueDetailImages, processDetailJobs } from "./vendor/cloud/detail-workspace.mjs";
 import { listDetailProjectSummaries, listDetailTaskRuns, changeDetailProjectState } from "./vendor/cloud/detail-projects.mjs";
 import { submissionStatus } from "./vendor/cloud/submission-status.mjs";
@@ -42,6 +41,8 @@ export async function createStudio({ config, persistence, users = [] }) {
   const depthJobs = new DepthJobs(store, config); await depthJobs.init();
   const digitalHuman = new DigitalHumanService(store, config); await digitalHuman.init();
   const timers = [];
+  const assetCommits = new Map();
+  const publicImports = new Set();
   let stopped = true;
   function start() {
     stopped = false; worker.start();
@@ -92,6 +93,42 @@ async function readKeyframeForm(request) {
   // Large project originals use the streaming route; keyframes are bounded.
   const content = await readBody(request, 20 * 1024 * 1024 + 64 * 1024);
   return new Request("http://localhost/keyframe-upload", { method: "POST", headers: { "content-type": contentType }, body: content }).formData();
+}
+
+function commitAssetUpload(asset, validate) {
+  const previous = assetCommits.get(asset.ownerId) || Promise.resolve();
+  const commit = previous.catch(() => {}).then(async () => {
+    const { size } = await stat(asset.tempPath);
+    const total = Object.values(store.data.assets)
+      .filter(a => a.ownerId === asset.ownerId && ["upload", "library-draft"].includes(a.source))
+      .reduce((sum, a) => sum + a.size, 0);
+    if (total + size > 1024 * 1024 * 1024) fail("当前账号临时素材已超过 1GB，请先完成已有项目释放素材", 413);
+    validate?.();
+    return store.putAssetFromUpload(asset);
+  });
+  assetCommits.set(asset.ownerId, commit);
+  return commit.finally(() => {
+    if (assetCommits.get(asset.ownerId) === commit) assetCommits.delete(asset.ownerId);
+  });
+}
+
+async function importPublicReference(user, projectId, download, signal) {
+  owned(user, "projects", projectId);
+  if (publicImports.has(user.id) || publicImports.size >= 3)
+    fail("已有参考片正在导入，请稍后再试", 429);
+  platform.throttle(`public-reference-import:${user.id}`, 10, 10 * 60 * 1000);
+  const tempPath = store.createUploadTempPath();
+  publicImports.add(user.id);
+  try {
+    const { name, mime } = await download(tempPath);
+    return await commitAssetUpload({ tempPath, name, mime, kind: "video", projectId, ownerId: user.id, source: "upload" }, () => {
+      signal.throwIfAborted();
+      owned(user, "projects", projectId);
+    });
+  } finally {
+    publicImports.delete(user.id);
+    await unlink(tempPath).catch(() => undefined);
+  }
 }
 
 async function receiveAssetUpload(request, user, source = "upload") {
@@ -175,11 +212,18 @@ async function receiveAssetUpload(request, user, source = "upload") {
 
     const kind = String(fields.kind || "");
     if (source === "library-draft" && (!["model", "product"].includes(kind) || fields.projectId)) fail("资产库只接受人物或商品图片");
-    if (!["video", "referenceVideo", "referenceAudio", "model", "product", "scene", "template", "text"].includes(kind)) throw Object.assign(new Error("素材类型或文件不正确"), { statusCode: 400 });
+    if (!["video", "referenceVideo", "referenceAudio", "model", "product", "scene", "template", "text", "cozyclayProject"].includes(kind)) throw Object.assign(new Error("素材类型或文件不正确"), { statusCode: 400 });
     if (!assetAllowed(kind, fileInfo)) throw Object.assign(new Error("该素材类型不受支持，请上传视频、JPG/PNG/WebP 或 TXT/MD/JSON 文件"), { statusCode: 415 });
     if (kind === "template" && (await stat(tempPath)).size > 5 * 1024 * 1024) fail("C 模板文件须在 5MB 以内", 413);
     if (fields.projectId) owned(user, "projects", fields.projectId);
     let mediaInfo;
+    if (kind === "cozyclayProject") {
+      owned(user, "projects", fields.projectId);
+      if ((await stat(tempPath)).size > 2 * 1024 * 1024) fail("CozyClay 工程文件须在 2MB 以内", 413);
+      try {
+        mediaInfo = { mime: "application/octet-stream", cozyclay: inspectCozyClayProject(await readFile(tempPath, "utf8")) };
+      } catch (error) { fail(error.message); }
+    }
     if (["referenceVideo", "referenceAudio"].includes(kind)) {
       const project = owned(user, "projects", fields.projectId);
       const route = selectVideoRoute(config, project.videoSelection);
@@ -193,9 +237,7 @@ async function receiveAssetUpload(request, user, source = "upload") {
         validateReferenceFiles(route.model, type, [{ name: fileInfo.name, size, mediaInfo }]);
       } catch (error) { fail(error.message, 400); }
     }
-    const total = Object.values(store.data.assets).filter(a => a.ownerId === user.id && ["upload", "library-draft"].includes(a.source)).reduce((sum, a) => sum + a.size, 0);
-    if (total + (await stat(tempPath)).size > 1024 * 1024 * 1024) fail("当前账号临时素材已超过 1GB，请先完成已有项目释放素材", 413);
-    return store.putAssetFromUpload({
+    return await commitAssetUpload({
       tempPath,
       name: fileInfo.name,
       kind,
@@ -214,6 +256,7 @@ async function receiveAssetUpload(request, user, source = "upload") {
 function assetAllowed(kind, file) {
   const mime = String(file.type || "").toLowerCase();
   const name = String(file.name || "").toLowerCase();
+  if (kind === "cozyclayProject") return name.endsWith(".cclayproject");
   if (kind === "referenceVideo") return /\.(mp4|mov)$/i.test(name);
   if (kind === "referenceAudio") return /\.(mp3|wav)$/i.test(name);
   if (kind === "video") return mime.startsWith("video/") || /\.(mp4|mov|webm|m4v)$/i.test(name);
@@ -353,12 +396,6 @@ async function handleApi(request, response, url) {
   const { pathname } = url;
   const taskAccess = pathname.match(/^\/api\/tasks\/([^/]+)\//);
   if (taskAccess && !['compile','generate'].includes(taskAccess[1])) owned(request.aigcUser, 'tasks', decodeURIComponent(taskAccess[1]));
-  const enhancementSource = pathname.match(/^\/api\/enhancement-source\/([a-zA-Z0-9_-]+)$/);
-  if (enhancementSource && ["GET", "HEAD"].includes(request.method)) {
-    const ownerId = enhancementDownloadOwner(store, config, enhancementSource[1], url.searchParams);
-    if (!ownerId) return error(response, 404, "超分源文件链接已失效");
-    return handleAsset(request, response, enhancementSource[1], false, { id: ownerId });
-  }
   const mediaDownload = pathname.match(/^\/api\/generation-reference\/([a-zA-Z0-9_-]+)$/);
   if (mediaDownload && ["GET", "HEAD"].includes(request.method)) {
     const ownerId = referenceDownloadOwner(store, config, mediaDownload[1], url.searchParams);
@@ -433,13 +470,6 @@ async function handleApi(request, response, url) {
       return json(response, 200, { ...result, ok: true, billableTaskCreated: false });
     } catch (issue) { return error(response, 503, issue.message); }
   }
-  if (pathname === "/api/admin/video-enhancements") {
-    requireRole(user, ["super_admin"]);
-    if (request.method === "GET") return json(response, 200, { catalog: enhancementCatalog(config), tasks: Object.values(store.data.videoEnhancements || {}).filter(item => item.ownerId === user.id).slice(-30).reverse() });
-    if (request.method === "POST") return json(response, 202, await createEnhancement(store, config, user, await readJson(request)));
-  }
-  const enhancementMatch = pathname.match(/^\/api\/admin\/video-enhancements\/([^/]+)$/);
-  if (enhancementMatch && request.method === "GET") { requireRole(user, ["super_admin"]); return json(response, 200, await refreshEnhancement(store, config, decodeURIComponent(enhancementMatch[1]), user.id)); }
   if (pathname === "/api/asset-library" && request.method === "GET") return json(response, 200, assetLibrary.list(user, Object.fromEntries(url.searchParams)));
   if (pathname === "/api/asset-library" && request.method === "POST") {
     const body = await readJson(request);
@@ -542,7 +572,17 @@ async function handleApi(request, response, url) {
   const revisionMatch = pathname.match(/^\/api\/kernel\/revisions\/([^/]+)$/);
   if (revisionMatch && request.method === "PATCH") { requireRole(user, ["super_admin"]); const body = await readJson(request); return json(response, 200, await store.updateKernelRevisionSummary(decodeURIComponent(revisionMatch[1]), String(body.summary || ""))); }
 
-  if (pathname === "/api/projects" && request.method === "PUT") { const project = await readJson(request); project.videoSelection = selectionForSave(user, config, project.videoSelection); if (!project.imageSelection?.modelId) project.imageSelection = { modelId: imageCatalog(config, user.role).defaultModelId }; if (project.imageSelection?.modelId) assertImageSelection(user, keyframeImageRoute(config, project.imageSelection)); if (selectVideoRoute(config, project.videoSelection).model.inputMode === "first-frame") { const imageRoute = keyframeImageRoute(config, project.imageSelection); assertImageSelection(user, imageRoute); project.imageSelection = { modelId: imageRoute.model }; } return json(response, 200, projectForClient(await store.saveProject(project, user.id), user, config)); }
+  if (pathname === "/api/projects" && request.method === "PUT") {
+    const project = await readJson(request);
+    project.videoSelection = selectionForSave(user, config, project.videoSelection);
+    const existing = store.data.appState.projects.find(p => p.id === project.id && p.ownerId === user.id);
+    const requested = project.imageSelection?.modelId;
+    const migrate = requested === existing?.imageSelection?.modelId && !imageModelAvailable(requested);
+    const imageRoute = keyframeImageRoute(config, { modelId: !requested || migrate ? defaultImageModel(config) : requested });
+    assertImageSelection(user, imageRoute);
+    project.imageSelection = { modelId: imageRoute.model };
+    return json(response, 200, projectForClient(await store.saveProject(project, user.id), user, config));
+  }
   const projectActionMatch = pathname.match(/^\/api\/projects\/([^/]+)\/(trash|restore)$/);
   if (projectActionMatch && request.method === "POST") {
     const id = decodeURIComponent(projectActionMatch[1]);
@@ -553,6 +593,12 @@ async function handleApi(request, response, url) {
   if (endProjectMatch && request.method === "POST") return json(response, 200, projectForClient(await worker.endProject(decodeURIComponent(endProjectMatch[1]), user.id), user, config));
   const projectMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
   if (projectMatch && request.method === "DELETE") return json(response, 200, await store.deleteProject(decodeURIComponent(projectMatch[1]), user.id));
+  const cozyclayUnits = pathname.match(/^\/api\/projects\/([^/]+)\/previs-units$/);
+  if (cozyclayUnits && request.method === "GET") {
+    const projectId = decodeURIComponent(cozyclayUnits[1]);
+    owned(user, "projects", projectId);
+    return json(response, 200, worker.cozyclayUnits(projectId));
+  }
   if (pathname === "/api/settings" && request.method === "PUT") return json(response, 200, await store.saveSettings(await readJson(request), user.id));
 
   if (pathname === "/api/assets" && request.method === "POST") return json(response, 201, await receiveAssetUpload(request, user));
@@ -581,7 +627,7 @@ async function handleApi(request, response, url) {
     if (request.method === "POST") { const body = await readJson(request); return json(response, 200, await worker.scenes.start(projectId, body.pricingVersion)); }
   }
   if (pathname === "/api/tasks/compile" && request.method === "POST") { const body = await readJson(request); owned(user, "projects", body.projectId); return json(response, 201, taskForClient(await worker.startCompile(String(body.projectId || ""), undefined, { compileOnly: true }), user, config)); }
-  if (pathname === "/api/tasks/generate" && request.method === "POST") { const body = await readJson(request); owned(user, "projects", body.projectId); return json(response, 201, taskForClient(await worker.startGeneration(String(body.projectId || "")), user, config)); }
+  if (pathname === "/api/tasks/generate" && request.method === "POST") { const body = await readJson(request); owned(user, "projects", body.projectId); return json(response, 201, taskForClient(await worker.startGeneration(String(body.projectId || ""), { cozyclay: body.cozyclay === true }), user, config)); }
   const anyTask = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/|$)/);
   if (anyTask) owned(user, "tasks", decodeURIComponent(anyTask[1]));
   const fidelityMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/fidelity$/);
@@ -645,7 +691,7 @@ async function handleApi(request, response, url) {
 }
 
 
-  return { store, config, worker, digitalHuman, start, stop,
+  return { store, config, worker, digitalHuman, start, stop, importPublicReference,
     syncUsers: users => platform.syncUsers(users),
     handle: async (request, response, url, user) => {
       request.aigcUser = user;

@@ -120,10 +120,10 @@ function compactParts(project, unit, frameIndex, productLock, model, hasReviewed
 }
 
 export function prepareVideoPrompt(project, unit, frameIndex, productLock, model = {}, hasReviewedFrame = true) {
-  const mediaInstructions = mediaReferenceInstructions(project);
+  const mediaInstructions = [mediaReferenceInstructions(project), unit.cozyclayDirection].filter(Boolean).join("\n");
   const {header,adapt,...roleBinding}=modelRoleBinding(project,unit,model,hasReviewedFrame);
   const bind=text=>adapt([header,text].filter(Boolean).join("\n"));
-  const original = bind(lockedVideoPrompt(project, unit, frameIndex, productLock, model.inputMode, hasReviewedFrame) + mediaInstructions);
+  const original = bind([lockedVideoPrompt(project, unit, frameIndex, productLock, model.inputMode, hasReviewedFrame), mediaInstructions].filter(Boolean).join("\n"));
   const result = (prompt, format, imageBasedObservations = false, notation = {}) => ({ prompt, format, imageBasedObservations, notation, roleBinding, version: VIDEO_PROMPT_VERSION, original: size(original), ...size(prompt) });
   if (fits(original, model)) return result(original, "full");
   const { sections, observations, phrases } = compactParts(project, unit, frameIndex, productLock, model, hasReviewedFrame);
