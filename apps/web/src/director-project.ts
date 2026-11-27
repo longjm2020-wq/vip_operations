@@ -6,6 +6,7 @@ import type {
   DirectorShot,
 } from "../../../packages/contracts/src/director";
 import { inferDirectorRole } from "../../../packages/contracts/src/director-intent";
+export { directorRoleNames as roleNames } from "../../../packages/contracts/src/director-import-roles";
 import { api, csrf } from "./api";
 import {
   localDirectorRequest,
@@ -18,14 +19,6 @@ export const directorPath = "/my-workspace/director/projects";
 const libraryPath = "/my-workspace/assistant/files";
 export const directorFileUrl = (id: string) =>
   `/api/v1${libraryPath}/${encodeURIComponent(id)}/content`;
-export const roleNames = {
-  product: "商品素材",
-  portrait: "授权肖像",
-  voiceSample: "授权音色",
-  narration: "正式配音",
-  reference: "参考片",
-  document: "文字资料",
-} satisfies Record<DirectorAsset["role"], string>;
 export const effectNames = {
   none: "无",
   fade: "淡入淡出",
@@ -97,7 +90,8 @@ export function localDirectorAsset(
   brief?: string,
   onlyOfKind = false,
 ): DirectorAsset {
-  const mime = `${asset.kind}/${asset.name.split(".").at(-1)?.toLowerCase() || "unknown"}`;
+  const ext = asset.name.split(".").at(-1)?.toLowerCase() || "";
+  const mime = asset.kind === "document" ? (localDocumentMimes[ext] ?? "application/octet-stream") : `${asset.kind}/${ext || "unknown"}`;
   return {
     id: crypto.randomUUID(),
     source: "local",
@@ -106,13 +100,20 @@ export function localDirectorAsset(
     name: asset.name,
     mime,
     durationMs: asset.durationMs,
-    role: inferDirectorRole(asset.name, mime, brief, onlyOfKind),
+    role: asset.folderRole ?? inferDirectorRole(asset.name, mime, brief, onlyOfKind),
   };
 }
 
+const localDocumentMimes: Record<string, string> = {
+  txt: "text/plain", srt: "text/plain", md: "text/markdown", pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+
 export async function uploadDirectorFile(file: File): Promise<AgentFile> {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", file, file.name);
   const response = await fetch(`/api/v1${libraryPath}`, {
     method: "POST",
     credentials: "include",

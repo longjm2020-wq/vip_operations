@@ -30,6 +30,7 @@ import {
   generateDirectorStoryboard,
   suggestDirectorShot,
 } from "./director-model.js";
+import { importDirectorReferenceLink } from "./director-reference-link.js";
 
 @Controller("api/v1/my-workspace/director/projects")
 export class DirectorController {
@@ -106,6 +107,13 @@ export class DirectorController {
     @Body() body: unknown,
   ) {
     return suggestDirectorShot(context(r), id, body);
+  }
+  @Post(":id/reference-link") importReference(
+    @Req() r: AuthRequest,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
+    return importDirectorReferenceLink(context(r), id, body);
   }
   @Post(":id/reference") analyze(
     @Req() r: AuthRequest,

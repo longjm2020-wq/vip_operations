@@ -18,9 +18,10 @@ sealed class DirectorAsset {
     public long bytes;
     public int? durationMs;
     public bool hasAudio;
-    public object Public() {
+    public object Public(string folderRole=null) {
         var data=new Dictionary<string,object>{{"id",id},{"name",name},{"kind",kind},{"bytes",bytes}};
         if(durationMs.HasValue)data["durationMs"]=durationMs.Value;
+        if(folderRole!=null)data["folderRole"]=folderRole;
         return data;
     }
 }
@@ -91,6 +92,7 @@ static class DirectorMedia {
     }
     internal static InvalidOperationException Error(string text) { return new InvalidOperationException(text); }
     internal static string[] Inputs = {".jpg",".jpeg",".png",".webp",".bmp",".mp4",".mov",".m4v",".webm",".mkv",".avi",".wav",".mp3",".m4a",".aac",".flac",".ogg"};
+    internal static readonly string[] Documents={".txt",".md",".srt",".pdf",".docx",".pptx",".xlsx"};
     internal static string Format(string ext) {
         switch(ext) {
             case ".jpg": case ".jpeg": return "jpeg_pipe";
@@ -103,6 +105,7 @@ static class DirectorMedia {
         }
     }
     internal static string Kind(string ext) {
+        if(Documents.Contains(ext))return "document";
         return new[]{".jpg",".jpeg",".png",".webp",".bmp"}.Contains(ext)?"image":
             new[]{".mp4",".mov",".m4v",".webm",".mkv",".avi"}.Contains(ext)?"video":"audio";
     }
@@ -174,7 +177,7 @@ static class DirectorMedia {
         var dir=AssetDir(project,id);var meta=Path.Combine(dir,"asset.json");
         if(!File.Exists(meta))throw Error("此版本引用的本机素材不可用，请在这台电脑重新导入。");
         var a=Json().Deserialize<DirectorAsset>(File.ReadAllText(meta));
-        if(a.id!=id || !Inputs.Contains(a.ext))throw Error("本机素材不完整，请重新导入。");
+        if(a.id!=id || a.kind!=Kind(a.ext) || (!Inputs.Contains(a.ext) && !(a.localPath!=null && Documents.Contains(a.ext))))throw Error("本机素材不完整，请重新导入。");
         if(a.localPath==null) {
             if(!File.Exists(Path.Combine(dir,"source"+a.ext)))throw Error("本机素材不完整，请重新导入。");
         } else {
@@ -201,7 +204,8 @@ static class DirectorMedia {
     }
     internal static DirectorAsset ImportLocal(string project,string file,string ffmpeg,CancellationToken stop) {
         stop.ThrowIfCancellationRequested();
-        string name=Path.GetFileName(file),ext=Path.GetExtension(name).ToLowerInvariant();Format(ext);
+        string name=Path.GetFileName(file),ext=Path.GetExtension(name).ToLowerInvariant();
+        if(!Documents.Contains(ext))Format(ext);
         if(name.Length>220 || name.IndexOfAny(Path.GetInvalidFileNameChars())>=0)throw Error("素材名称无效。");
         using(var source=new DirectorLocalSource(file)) {
             string hash=LocalHash(project,source),id=LocalId(hash),dest=AssetDir(project,id);
@@ -210,7 +214,7 @@ static class DirectorMedia {
             string parent=Path.GetDirectoryName(dest);Directory.CreateDirectory(parent);
             string temp=Directory.CreateDirectory(Path.Combine(parent,"import-"+Guid.NewGuid().ToString("N"))).FullName;
             try {
-                Probe(a,source.path,ffmpeg,temp,stop);
+                if(a.kind!="document")Probe(a,source.path,ffmpeg,temp,stop);
                 if(a.durationMs>86400000)throw Error("单份音视频时长超过 24 小时，请按片段导入。");
                 return PublishAsset(project,temp,dest,a);
             } finally {if(Directory.Exists(temp))Directory.Delete(temp,true);}

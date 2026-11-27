@@ -64,7 +64,7 @@ export async function inspectAudio(content: Buffer, ext: string) {
   }
 }
 
-export async function inspectVideo(content: Buffer) {
+export async function inspectVideo(content: Buffer, requireVideoTrack = false) {
   const dir = await mkdtemp(join(tmpdir(), "xuti-inspect-"));
   try {
     const input = join(dir, "source.mp4");
@@ -90,6 +90,11 @@ export async function inspectVideo(content: Buffer) {
       : 0;
     if (!duration || duration > 1800)
       throw Error("请选择30分钟以内、时长可读取的视频");
+    if (requireVideoTrack) {
+      const inputStreams = log.split("Stream mapping:", 1)[0].split(/\r?\n/);
+      if (!inputStreams.some(line => /Stream .*Video:/.test(line) && !line.includes("(attached pic)")))
+        throw Error("文件中没有可用于拆解的视频画面");
+    }
     const dimensions = log.match(/Stream .*Video:.*?\b(\d{2,5})x(\d{2,5})\b/);
     return {
       duration,

@@ -125,7 +125,7 @@ static class DirectorTest {
             file.Write(new byte[]{0,0,0,0,102,114,101,101},0,8); // Extends the final MP4 free box through EOF.
             file.SetLength(logicalSize);
         }
-        File.WriteAllText(Path.Combine(pack,"notes.txt"),"Unsupported text file");
+        File.WriteAllText(Path.Combine(pack,"notes.dat"),"Unsupported binary file");
         File.WriteAllBytes(Path.Combine(pack,"broken.mp4"),new byte[0]);
         int visited=0;
         var imported=DirectorStudio.ImportSelection(project,new string[0],pack,500,new HashSet<string>(),ffmpeg,CancellationToken.None,()=>visited++);
@@ -161,6 +161,47 @@ static class DirectorTest {
         Check(imported.assets.Count==500 && (bool)reply["overLimit"] && ((System.Collections.IList)reply["assets"]).Count==500,
               "Expected one complete 500-asset pick response with an explicit capacity notice");
     }
+    static void PackRoles(string temp,string project,string png,string wav,string movie,string ffmpeg) {
+        string pack=Directory.CreateDirectory(Path.Combine(temp,"template-pack")).FullName;
+        string document=Path.Combine(temp,"notes.txt");
+        File.WriteAllText(document,"Disposable product notes");
+        var types=new[]{
+            new[]{"商品素材","product",movie},new[]{"授权肖像","portrait",png},new[]{"授权音色","voiceSample",wav},
+            new[]{"正式配音","narration",wav},new[]{"参考片","reference",movie},new[]{"文字资料","document",document}
+        };
+        foreach(var t in types) {
+            string dir=Directory.CreateDirectory(Path.Combine(pack,t[0],"内部拍摄目录")).FullName;
+            File.Copy(t[2],Path.Combine(dir,t[1]+Path.GetExtension(t[2])));
+        }
+        // The innermost named folder wins; an incompatible video under portraits is skipped.
+        string overrideDir=Directory.CreateDirectory(Path.Combine(pack,"授权肖像","商品素材")).FullName;
+        File.Copy(movie,Path.Combine(overrideDir,"nested.mp4"));
+        File.Copy(movie,Path.Combine(pack,"授权肖像","wrong.mp4"));
+        string neutralDir=Directory.CreateDirectory(Path.Combine(pack,"普通目录")).FullName;
+        File.Copy(png,Path.Combine(neutralDir,"other.png"));
+        var pick=DirectorStudio.ImportSelection(project,new string[0],pack,500,new HashSet<string>(),ffmpeg,CancellationToken.None);
+        var json=DirectorMedia.Json();
+        var assets=pick.assets.Select(a=>json.Deserialize<Dictionary<string,object>>(json.Serialize(a))).ToArray();
+        Check(assets.Length==8 && pick.skippedFiles==1 && pick.problems.Single().Contains("wrong.mp4"),"Folder role mismatch blocked valid files or was lost");
+        foreach(var t in types) {
+            var row=assets.Single(a=>(string)a["name"]==t[1]+Path.GetExtension(t[2]));
+            Check((string)row["folderRole"]==t[1] && !row.ContainsKey("authorized"),"Folder role or authorization was wrong");
+        }
+        Check((string)assets.Single(a=>(string)a["name"]=="nested.mp4")["folderRole"]=="product" &&
+            !assets.Single(a=>(string)a["name"]=="other.png").ContainsKey("folderRole"),"Nested folder override or unclassified folder fallback failed");
+        Check(!json.Serialize(assets).Contains("内部拍摄目录"),"Private directory name leaked from the native picker");
+        var chosen=DirectorStudio.ImportSelection(project,new[]{movie,png},null,1,new HashSet<string>(),ffmpeg,CancellationToken.None,null,"portrait");
+        Check(chosen.assets.Count==1 && chosen.skippedFiles==1 && !chosen.overLimit &&
+            (string)json.Deserialize<Dictionary<string,object>>(json.Serialize(chosen.assets[0]))["folderRole"]=="portrait",
+            "A mismatched individual selection used a slot or lost its explicit role");
+        var doc=assets.Single(a=>(string)a["kind"]=="document");
+        string id=(string)doc["id"];
+        bool frameDenied=false,renderDenied=false;
+        try{DirectorStudio.Frame(project,id,0,null);}catch(InvalidOperationException){frameDenied=true;}
+        try{new DirectorPlan{aspect="9:16",shots=new[]{new DirectorShot{id=Guid.NewGuid().ToString(),visualId=id,durationMs=1000,effect="none"}}}.Validate(project);}catch(InvalidOperationException){renderDenied=true;}
+        Check(frameDenied && renderDenied,"Document was accepted as a frame or render source");
+        Console.WriteLine("Verified all six folder roles, nested and unlabelled folders, document isolation, and mismatched-file skipping.");
+    }
     public static int Run() {
         string temp=Directory.CreateDirectory(Path.Combine(Path.GetTempPath(),"xuti-"+Path.GetRandomFileName())).FullName;
         try {
@@ -180,6 +221,7 @@ static class DirectorTest {
             Func<string,DirectorAsset> add=file=>{using(var input=File.OpenRead(file))return DirectorMedia.Import(project,Guid.NewGuid().ToString(),Path.GetFileName(file),input,ff,CancellationToken.None);};
             var photo=add(png);var voice=add(wav);var clip=LocalPack(temp,project,movie,wav,ff);
             PackCapacity(temp,project,png);
+            PackRoles(temp,project,png,wav,movie,ff);
             bool deniedOther=false;
             try{DirectorMedia.Asset(studio.Project(Guid.NewGuid().ToString(),projectId),photo.id);}catch(InvalidOperationException){deniedOther=true;}
             Check(deniedOther,"Another owner's paired device accessed this asset");

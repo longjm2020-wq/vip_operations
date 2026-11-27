@@ -1,5 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import JSZip from "jszip";
 import sharp from "sharp";
 import type { AssistantMessage } from "../../packages/contracts/src/personal-assistant.js";
 import {
@@ -62,8 +65,9 @@ async function mockDirector(
   options?: {
     storyboardGate?: Promise<void>;
     assistantReady?: boolean;
-    pickedAssets?: { id: string; name: string; kind: string; bytes: number; durationMs?: number }[];
+    pickedAssets?: { id: string; name: string; kind: string; bytes: number; durationMs?: number; folderRole?: string }[];
     linkedImport?: boolean;
+    folderRoleImport?: boolean;
     pickSummary?: { skippedFolders: number; skippedFiles: number; problems: string[]; duplicates: number; overLimit: boolean };
     previewFrame?: string;
   },
@@ -88,6 +92,7 @@ async function mockDirector(
   };
   const calls: { method: string; action: string; body: any }[] = [];
   const nativeActions: { action: string; payload: any }[] = [];
+  const uploadedFiles: string[] = [];
   let nativeState = "idle";
   if (native) {
     await page.exposeFunction(
@@ -104,7 +109,7 @@ async function mockDirector(
             deviceId,
           };
         if (action === "director-capabilities")
-          return { ffmpeg: true, installation: "", localReferenceImport: options?.linkedImport };
+          return { ffmpeg: true, installation: "", localReferenceImport: options?.linkedImport, folderRoleImport: options?.folderRoleImport };
         if (action === "director-read-frame")
           return { mime: "image/jpeg", base64: options?.previewFrame || "" };
         if (action === "director-pick") {
@@ -185,15 +190,20 @@ async function mockDirector(
   await page.route("**/api/v1/my-workspace/assistant/files", async (route) => {
     if (route.request().method() !== "POST")
       return route.fulfill({ json: { data: [] } });
-    const payload = route.request().postDataBuffer()?.toString("utf8") || "";
-    const isReference = payload.includes("参考短片.mp4");
+    const request = route.request();
+    const form = await new Response(new Uint8Array(request.postDataBuffer()!), {
+      headers: { "content-type": request.headers()["content-type"] },
+    }).formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) throw Error("上传请求缺少文件");
+    uploadedFiles.push(file.name);
     return route.fulfill({
       json: {
         data: {
-          id: isReference ? referenceId : fileId,
-          name: isReference ? "参考短片.mp4" : "春款.jpg",
-          mime: isReference ? "video/mp4" : "image/jpeg",
-          size: 32,
+          id: file.name === "参考短片.mp4" ? referenceId : file.name === "春款.jpg" ? fileId : randomUUID(),
+          name: file.name,
+          mime: file.type,
+          size: file.size,
           source: "upload",
           createdAt: timestamp,
         },
@@ -217,6 +227,8 @@ async function mockDirector(
       expect(body.revision).toBe(project.revision);
       project = { ...project, ...body, revision: project.revision + 1 };
       data = project;
+    } else if (action.endsWith("/reference-link")) {
+      data = { id: referenceId, name: "春款作品.mp4", mime: "video/mp4", size: 1024, source: "upload", createdAt: timestamp };
     } else if (action.endsWith("/reference")) {
       expect(body.revision).toBe(project.revision);
       const analysis = {
@@ -290,7 +302,7 @@ async function mockDirector(
     } else data = project;
     await route.fulfill({ json: { data } });
   });
-  return { calls, nativeActions, assistant, project: () => project };
+  return { calls, nativeActions, uploadedFiles, assistant, project: () => project };
 }
 
 async function mockDirectorAssistant(page: Page, ready = true) {
@@ -481,6 +493,11 @@ test("旧 Windows 导演台继续使用原来的选文件桥接", async ({ page 
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "取消" }).click();
   await more.click();
+  const folderChooser = page.waitForEvent("filechooser");
+  await page.getByRole("menuitem", { name: "按模板上传文件夹" }).click();
+  const folderInput = (await folderChooser).element();
+  expect(await folderInput.getAttribute("webkitdirectory")).not.toBeNull();
+  await more.click();
   const choosing = page.waitForEvent("filechooser");
   await page.getByRole("menuitem", { name: "上传到工作台" }).click();
   const chooser = await choosing;
@@ -489,6 +506,168 @@ test("旧 Windows 导演台继续使用原来的选文件桥接", async ({ page 
   await page.getByRole("button", { name: "导入本机文件", exact: true }).click();
   await expect(page.getByText(/已加入 1 份本机素材/)).toBeVisible();
   expect(fixture.nativeActions.find((a) => a.action === "director-pick")?.payload).toEqual({ projectId: id, kind: "files" });
+});
+
+const roleImportSamples = [
+  { label: "商品素材", role: "product", name: "品牌参考片.mp4", mimeType: "video/mp4" },
+  { label: "授权肖像", role: "portrait", name: "A001.jpg", mimeType: "image/jpeg" },
+  { label: "授权音色", role: "voiceSample", name: "正式旁白.wav", mimeType: "audio/wav" },
+  { label: "正式配音", role: "narration", name: "音色样本.mp3", mimeType: "audio/mpeg" },
+  { label: "参考片", role: "reference", name: "B001.mp4", mimeType: "video/mp4" },
+  { label: "文字资料", role: "document", name: "说明.txt", mimeType: "text/plain" },
+] as const;
+
+test("网页从六个用途入口导入，略过不匹配的文件并保存人工指定用途", async ({ page }) => {
+  const fixture = await mockDirector(page);
+  await page.goto(`${path}?project=${id}`);
+  const library = page.getByRole("region", { name: "素材库" });
+  for (const sample of roleImportSamples) {
+    const picker = page.waitForEvent("filechooser");
+    await library.getByRole("button", { name: `导入${sample.label}`, exact: true }).click();
+    const files: { name: string; mimeType: string; buffer: Buffer }[] = [
+      { name: sample.name, mimeType: sample.mimeType, buffer: Buffer.from("fixture") },
+    ];
+    if (sample.role === "portrait") {
+      files.push({ name: "错误的肖像.mp3", mimeType: "audio/mpeg", buffer: Buffer.from("fixture") });
+    }
+    await (await picker).setFiles(files);
+    await expect(library.getByRole("button", { name: new RegExp(sample.name) })).toContainText(sample.label);
+  }
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect.poll(() => fixture.project().assets.map(({ name, role }) => ({ name, role })))
+    .toEqual(roleImportSamples.map(({ name, role }) => ({ name, role })));
+  expect(fixture.uploadedFiles).not.toContain("错误的肖像.mp3");
+  await page.reload();
+  for (const { name, role } of roleImportSamples.filter((item) => ["portrait", "voiceSample"].includes(item.role))) {
+    const restored = library.getByRole("button", { name: new RegExp(name) });
+    await expect(restored).toContainText("待确认授权");
+    expect(fixture.project().assets.find((item) => item.role === role)?.authorized).toBeFalsy();
+  }
+});
+
+test("下载六目录模板，选择真实目录时按目录用途导入嵌套文件", async ({ page }, testInfo) => {
+  const fixture = await mockDirector(page);
+  await page.goto(`${path}?project=${id}`);
+  await page.getByRole("button", { name: "文件夹模板", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "素材文件夹模板" });
+  await expect(dialog).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("六类文件夹模板.png"), animations: "disabled" });
+  const download = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "下载模板" }).click();
+  const template = await download;
+  expect(template.suggestedFilename()).toMatch(/\.zip$/i);
+  const zip = await JSZip.loadAsync(await readFile((await template.path())!));
+  const folders = Object.values(zip.files).filter((entry) => entry.dir);
+  const root = testInfo.outputPath("春季素材包");
+  async function addFile(relativePath: string) {
+    const file = join(root, relativePath);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, "fixture");
+  }
+  for (const { label, name } of roleImportSamples) {
+    const directory = folders.find((entry) => entry.name.split("/").at(-2) === label);
+    expect(directory, `模板目录 ${label}`).toBeDefined();
+    await addFile(join(directory!.name, "第一批", name));
+  }
+  await addFile("授权肖像/错误音频.mp3");
+  await addFile("其他/同行参考片.mp4");
+  await page.keyboard.press("Escape");
+  const picker = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "上传文件夹", exact: true }).click();
+  await (await picker).setFiles(root);
+  await expect(page.getByText("7 / 500", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("按模板导入后的素材.png"), animations: "disabled" });
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect.poll(() => fixture.project().assets.length).toBe(7);
+  const assets = fixture.project().assets;
+  for (const { role, name } of roleImportSamples) {
+    expect(assets.find((asset) => asset.name === name)?.role, name).toBe(role);
+  }
+  expect(assets.find((asset) => asset.name === "同行参考片.mp4")?.role).toBe("reference");
+  expect(assets.some((asset) => asset.authorized)).toBe(false);
+  expect(fixture.uploadedFiles).not.toContain("错误音频.mp3");
+});
+
+test("桌面分类导入与本机模板导入保留角色，文字资料走工作台", async ({ page }) => {
+  const localFile = (name: string, kind: string, folderRole?: string) =>
+    ({ id: randomUUID(), name, kind, bytes: 512, folderRole });
+  const picked = [localFile("A001.jpg", "image"), localFile("不兼容.mp3", "audio")];
+  const fixture = await mockDirector(page, {}, true, {
+    linkedImport: true, folderRoleImport: true, pickedAssets: picked,
+  });
+  await page.goto(`${path}?project=${id}`);
+  const library = page.getByRole("region", { name: "素材库" });
+  await library.getByRole("button", { name: "导入授权肖像", exact: true }).click();
+  await expect(library.getByRole("button", { name: /A001\.jpg/ })).toContainText("待确认授权");
+  picked.splice(0, picked.length,
+    localFile("正式旁白.wav", "audio", "voiceSample"),
+    localFile("商品视频.mp4", "video", "reference"),
+    localFile("商品照片.jpg", "image", "reference"),
+  );
+  await library.getByRole("button", { name: "导入本机文件夹", exact: true }).click();
+  await expect(library.getByRole("button", { name: /正式旁白\.wav/ })).toContainText("待确认授权");
+  const chooser = page.waitForEvent("filechooser");
+  await library.getByRole("button", { name: "导入文字资料", exact: true }).click();
+  await (await chooser).setFiles({ name: "台本.txt", mimeType: "text/plain", buffer: Buffer.from("镜头一") });
+  await expect(library.getByRole("button", { name: /台本\.txt/ })).toContainText("文字资料");
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect.poll(() => fixture.project().assets.map(({ name, role, source }) => [name, role, source])).toEqual([
+    ["A001.jpg", "portrait", "local"], ["正式旁白.wav", "voiceSample", "local"],
+    ["商品视频.mp4", "reference", "local"], ["台本.txt", "document", "library"],
+  ]);
+  expect(fixture.uploadedFiles).toEqual(["台本.txt"]);
+  expect(fixture.nativeActions.filter((item) => item.action === "director-pick").map((item) => item.payload.kind))
+    .toEqual(["files", "folder"]);
+});
+
+test("作品分享链接取不到视频时可更正，重试后先保存参考片再拆解", async ({ page }) => {
+  const fixture = await mockDirector(page);
+  const failMessage = "该作品未返回可用视频，请更换链接。";
+  await page.route("**/reference-link", (route) =>
+    route.fulfill({ status: 422, json: { error: { message: failMessage } } }), { times: 1 });
+  await page.goto(`${path}?project=${id}`);
+  await page.getByRole("button", { name: "粘贴作品链接" }).click();
+  const dialog = page.getByRole("dialog", { name: "从作品链接拆解参考片" });
+  const input = dialog.getByRole("textbox", { name: "作品分享链接或分享文案" });
+  const analyze = dialog.getByRole("button", { name: "解析并拆解" });
+  await input.fill("https://video.example.com/unavailable");
+  await analyze.click();
+  await expect(dialog.getByText(failMessage)).toBeVisible();
+  await expect(input).toBeEditable();
+  expect(fixture.project().assets).toHaveLength(0);
+  expect(fixture.calls.some((entry) => entry.action.endsWith("/reference"))).toBe(false);
+  const link = "https://video.example.com/view/123";
+  await input.fill(`春季面料短片\n复制浏览这条作品：${link}`);
+  await analyze.click();
+  await expect(dialog).toBeHidden();
+  await expect.poll(() => fixture.project().referenceAnalysis?.summary).toBe("先展示轮廓，再切细节。");
+  const changed = fixture.calls.filter((entry) => entry.method !== "GET");
+  expect(changed.map((entry) => entry.action)).toEqual([`/${id}/reference-link`, `/${id}`, `/${id}/reference`]);
+  expect(JSON.stringify(changed[0].body)).toContain(link);
+  const reference = fixture.project().assets[0];
+  expect(reference).toMatchObject({ fileId: referenceId, role: "reference", name: "春款作品.mp4" });
+  expect(fixture.project().referenceAnalysis?.assetId).toBe(reference.id);
+  await page.reload();
+  await expect(page.getByRole("region", { name: "素材库" }).getByRole("button", { name: /春款作品\.mp4/ })).toContainText("参考片");
+});
+
+test("作品已入库时即使拆解服务暂不可用也可从项目重试", async ({ page }) => {
+  const fixture = await mockDirector(page);
+  await page.route("**/reference", (route) =>
+    route.fulfill({ status: 503, json: { error: { message: "拆解服务暂不可用" } } }), { times: 1 });
+  await page.goto(`${path}?project=${id}`);
+  await page.getByRole("button", { name: "粘贴作品链接" }).click();
+  const dialog = page.getByRole("dialog", { name: "从作品链接拆解参考片" });
+  await dialog.getByRole("textbox", { name: "作品分享链接或分享文案" }).fill("https://video.example.com/view/123");
+  await dialog.getByRole("button", { name: "解析并拆解" }).click();
+  await expect(page.getByText(/拆解服务暂不可用/).first()).toBeVisible();
+  await page.reload();
+  const library = page.getByRole("region", { name: "素材库" });
+  await library.getByRole("button", { name: /春款作品\.mp4/ }).click();
+  await page.getByRole("button", { name: "拆解参考片", exact: true }).click();
+  await expect.poll(() => fixture.project().referenceAnalysis?.assetId).toBe(fixture.project().assets[0].id);
+  expect(fixture.project().assets).toHaveLength(1);
+  expect(fixture.calls.filter((entry) => entry.action.endsWith("/reference-link"))).toHaveLength(1);
 });
 
 test("新手从本机导入视频、查看本地画面并用它创建第一个分镜", async ({ page }, testInfo) => {
@@ -1045,6 +1224,72 @@ test("明确选择桌面或云端目标时，视频措辞仍交给原目标", as
   expect(assistant[1]).not.toHaveProperty("desktopDeviceId");
   expect(fixture.calls.every((call) => call.method === "GET")).toBe(true);
   await expect(page).toHaveURL("/my-workspace");
+});
+
+test("导演台在宽屏、收起侧栏和手机上与工作区内容边缘对齐", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1920, height: 1017 });
+  await mockDirector(page, { title: "春款面料短片", assets: [initialAsset] });
+  await page.goto(`${path}?project=${id}`);
+  await expect(page.getByRole("img", { name: initialAsset.name })).toBeVisible();
+  const director = page.locator(".director-page");
+  const panel = page.locator(".director-studio");
+  async function expectWorkspaceEdges() {
+    const insets = await director.evaluate((root) => {
+      const shell = root.closest(".content")!;
+      const outer = shell.getBoundingClientRect();
+      const padding = getComputedStyle(shell);
+      const header = root.querySelector(".director-heading")!.getBoundingClientRect();
+      const studio = root.querySelector(".director-studio")!.getBoundingClientRect();
+      return {
+        left: studio.left - (outer.left + parseFloat(padding.paddingLeft)),
+        right: outer.right - parseFloat(padding.paddingRight) - studio.right,
+        top: header.top - (outer.top + parseFloat(padding.paddingTop)),
+        bottom: root.getBoundingClientRect().bottom - studio.bottom,
+        overflow: root.scrollWidth - root.clientWidth,
+      };
+    });
+    for (const [edge, difference] of Object.entries(insets)) {
+      expect(Math.abs(difference), edge).toBeLessThanOrEqual(1);
+    }
+  }
+  async function measureDesktopLayout() {
+    const layout = await director.evaluate((root) => {
+      const studio = root.querySelector(".director-studio")!.getBoundingClientRect();
+      const preview = root.querySelector(".director-preview")!.getBoundingClientRect();
+      const footer = root.parentElement!.querySelector(".page-footer")!.getBoundingClientRect();
+      const outerPadding = parseFloat(getComputedStyle(root.parentElement!).paddingBottom);
+      return {
+        footerGap: Math.abs(studio.bottom - footer.top),
+        viewportGap: Math.abs(document.documentElement.clientHeight - outerPadding - footer.bottom),
+        previewShare: preview.height / studio.height,
+      };
+    });
+    expect(layout.footerGap).toBeLessThanOrEqual(1);
+    expect(layout.viewportGap).toBeLessThanOrEqual(1);
+    return layout;
+  }
+  await expectWorkspaceEdges();
+  expect((await measureDesktopLayout()).previewShare).toBeGreaterThan(0.45);
+  const expandedNavWidth = (await panel.boundingBox())!.width;
+  await page.screenshot({ path: testInfo.outputPath("导演台-宽屏.png"), animations: "disabled" });
+  await page.getByRole("button", { name: "收起工作区导航" }).click();
+  await expect(page.getByRole("button", { name: "展开工作区导航" })).toBeVisible();
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeGreaterThan(expandedNavWidth);
+  await expectWorkspaceEdges();
+  expect((await measureDesktopLayout()).previewShare).toBeGreaterThan(0.45);
+  await page.screenshot({ path: testInfo.outputPath("导演台-收起侧栏.png"), animations: "disabled" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectWorkspaceEdges();
+  await expect(page.getByRole("button", { name: "保存项目" })).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("导演台-手机.png"), animations: "disabled", fullPage: true });
+  await page.setViewportSize({ width: 1920, height: 1017 });
+  await page.getByRole("button", { name: "展开工作区导航" }).click();
+  await page.getByRole("button", { name: "移出项目" }).click();
+  await page.getByRole("group", { name: "按用途筛选" }).getByRole("button", { name: /^商品素材/ }).click();
+  await expect(page.getByText("暂无商品素材")).toBeVisible();
+  await expectWorkspaceEdges();
+  await measureDesktopLayout();
+  await page.screenshot({ path: testInfo.outputPath("导演台-空项目.png"), animations: "disabled" });
 });
 
 test("导演台只有一个侧栏入口，窄屏收起导航时分镜完整可操作", async ({

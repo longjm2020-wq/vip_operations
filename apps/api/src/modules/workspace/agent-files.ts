@@ -22,7 +22,7 @@ const TARGET_GENERAL_BYTES = 20 * MiB;
 const TARGET_VIDEO_BYTES = 64 * MiB;
 const RAW_IMAGE_BYTES = 100 * MiB;
 const RAW_OFFICE_BYTES = 60 * MiB;
-const RAW_VIDEO_BYTES = 200 * MiB;
+export const RAW_VIDEO_BYTES = 200 * MiB;
 export const AGENT_IMAGE_MAX_PIXELS = 500_000_000;
 const WEBP_MAX_SIDE = 16383;
 const JPEG_MAX_SIDE = 65535;
@@ -235,6 +235,7 @@ export async function inspectAgentUpload(
   name: string,
   b: Buffer,
   generated = false,
+  requireVideoTrack = false,
 ) {
   const ext = extname(name).toLowerCase(),
     mime = mimeByExt[ext];
@@ -262,7 +263,7 @@ export async function inspectAgentUpload(
   } else if (mime.startsWith("video/")) {
     if (!isVideoHeader(b))
       throw Error("视频格式无效");
-    Object.assign(metadata, await inspectVideo(b));
+    Object.assign(metadata, await inspectVideo(b, requireVideoTrack));
     metadata.note = "视觉理解抽取最多6帧，不包含音轨识别。";
   } else if (ext === ".pdf") {
     if (!b.subarray(0, 1024).toString().includes("%PDF-"))
@@ -622,6 +623,11 @@ export async function uploadAgentFile(c: Context, req: Request) {
       req.pipe(parser);
     },
   ).catch((e) => fail("FILE_INVALID", e.message, 400));
+  return storeUploadedAgentFile(c, incoming);
+}
+
+export async function storeUploadedAgentFile(c: Context, incoming: { name: string; content: Buffer }, requireVideoTrack = false) {
+  requireAssistant(c);
   try {
     const ext = extname(incoming.name).toLowerCase(),
       mime = mimeByExt[ext];
@@ -633,7 +639,7 @@ export async function uploadAgentFile(c: Context, req: Request) {
       throw Error("单个原视频最大支持200MB（超过64MB将自动压缩）");
 
     const prepared = await compressAgentUpload(incoming.name, incoming.content);
-    const info = await inspectAgentUpload(prepared.name, prepared.content);
+    const info = await inspectAgentUpload(prepared.name, prepared.content, false, requireVideoTrack);
     if (prepared.note) {
       info.metadata.note = info.metadata.note
         ? `${prepared.note} ${info.metadata.note}`

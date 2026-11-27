@@ -1,9 +1,11 @@
 import { isDesktopClient } from "./desktop-client";
+import type { DirectorAsset } from "../../../packages/contracts/src/director";
 
 export type DirectorLocalAsset = {
   id: string;
   name: string;
-  kind: "image" | "video" | "audio";
+  kind: "image" | "video" | "audio" | "document";
+  folderRole?: DirectorAsset["role"];
   bytes: number;
   durationMs?: number;
 };
@@ -73,13 +75,14 @@ type LocalOperations = {
       ffmpeg: boolean;
       installation: string;
       localReferenceImport?: boolean;
+      folderRoleImport?: boolean;
       voice_clone?: boolean;
       talking_head?: boolean;
       templates?: { id: string; kind: "ae_template" | "lottie" | "pag" }[];
     },
   ];
   pick: [
-    { projectId: string; kind: "files" | "folder"; remaining?: number; knownIds?: string[] },
+    { projectId: string; kind: "files" | "folder"; remaining?: number; knownIds?: string[]; role?: DirectorAsset["role"] },
     PickResult,
   ];
   import: [{ projectId: string; fileId: string; name: string }, LocalAssets];

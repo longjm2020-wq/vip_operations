@@ -2,10 +2,10 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px 12px;
-  width: min(100%, 1200px);
-  margin: 0 auto;
-  padding: 12px clamp(12px, 1.4vw, 22px) 24px;
+  min-width: 0;
+  width: 100%;
 }
+.director-controls { display: grid; align-content: start; gap: inherit; min-width: 0; }
 .director-page > * { grid-column: 1 / -1; }
 .director-page:has(> .director-project-bar) > .director-heading { grid-column: 1; grid-row: 1; }
 .director-page > .director-project-bar { grid-column: 2; grid-row: 1; }
@@ -348,11 +348,16 @@
 }
 .director-role-options {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 2px 6px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 115px), 1fr));
+  gap: 4px 8px;
 }
-@container (max-width: 295px) {
-  .director-role-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.director-role-option { display: flex; align-items: center; background: var(--app-bg); border-radius: 5px; }
+.director-role-option > button:first-child { flex: 1; }
+.director-role-option:has([aria-pressed="true"]) { background: var(--app-accent-soft); }
+.director-role-option .director-role-add { justify-content: center; width: 25px; }
+.director-role-option .director-role-add:disabled { opacity: .4; cursor: default; }
+@container (min-width: 377px) {
+  .director-role-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 .director-role-filters button {
   display: inline-flex;
@@ -425,6 +430,35 @@
 }
 .director-preview audio {
   width: min(90%, 380px);
+}
+@media (min-width: 721px) {
+  .content:has(> .director-page > .director-studio) {
+    display: flex;
+    flex-direction: column;
+  }
+  .director-page:has(> .director-studio) {
+    flex: 1 0 auto;
+    grid-template-rows: max-content max-content 1fr;
+  }
+  .director-page:has(> .director-studio):has(> .ant-alert) {
+    grid-template-rows: repeat(3, max-content) 1fr;
+  }
+  .director-stage-media .director-edit:has(.director-preview[data-visual="true"]) {
+    align-self: stretch;
+    grid-template-rows: auto minmax(200px, 1fr) auto;
+    align-content: stretch;
+  }
+  .director-stage-media .director-preview[data-visual="true"] {
+    position: relative;
+    height: auto;
+  }
+  .director-stage-media .director-preview[data-visual="true"] > :is(img, video, .director-media-frame) {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .director-asset-list { max-height: max(370px, 50dvh); }
 }
 .director-timeline {
   display: grid;
@@ -548,7 +582,6 @@
   .director-steps button { padding: 4px 6px; }
 }
 @media (max-width: 600px) {
-  .director-page { padding: 8px 10px 18px; }
   .director-heading { gap: 6px; flex-wrap: wrap; }
   .director-heading h1 { font-size: 18px; }
   .director-project-specs { display: none; }

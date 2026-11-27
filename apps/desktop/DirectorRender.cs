@@ -59,7 +59,7 @@ sealed class DirectorPlan {
                new[]{s.caption,s.effectText,s.title,s.script,s.purpose,s.framing,s.direction,s.evidence}.Any(t=>t!=null&&(t.Length>3600 || t.IndexOf('\0')>=0)))
                 throw DirectorMedia.Error("分镜的时长、文案或动效无效。");
             var visual=DirectorMedia.Asset(project,DirectorMedia.Uuid(s.visualId));
-            if(visual.kind=="audio" || (visual.durationMs.HasValue && visual.kind=="video" && s.startMs>=visual.durationMs.Value))
+            if((visual.kind!="image" && visual.kind!="video") || (visual.durationMs.HasValue && visual.kind=="video" && s.startMs>=visual.durationMs.Value))
                 throw DirectorMedia.Error("分镜画面或源片入点无效。");
             if(s.audioId!=null) {
                 var a=DirectorMedia.Asset(project,DirectorMedia.Uuid(s.audioId));
@@ -166,7 +166,7 @@ static class DirectorRender {
         return String.Join("|",files.Select(path=>File.Exists(path)?FileHash(path):"missing"));
     }
     internal static Dictionary<string,object> Capabilities(string exe) {
-        var ret=new Dictionary<string,object>{{"ffmpeg",false},{"localReferenceImport",true},{"installation","从 ffmpeg.org/download.html 的 Windows 构建安装包含 libx264、AAC 的 FFmpeg，将 bin 加入 PATH，或设置 XUTI_DIRECTOR_FFMPEG 为 ffmpeg.exe 的完整路径，然后重启小序。"},{"voice_clone",false},{"talking_head",false},{"templates",new object[0]}};
+        var ret=new Dictionary<string,object>{{"ffmpeg",false},{"localReferenceImport",true},{"folderRoleImport",true},{"installation","从 ffmpeg.org/download.html 的 Windows 构建安装包含 libx264、AAC 的 FFmpeg，将 bin 加入 PATH，或设置 XUTI_DIRECTOR_FFMPEG 为 ffmpeg.exe 的完整路径，然后重启小序。"},{"voice_clone",false},{"talking_head",false},{"templates",new object[0]}};
         if(exe!=null)try {
             var enc=DirectorMedia.Exec(exe,new[]{"-hide_banner","-encoders"},Path.GetDirectoryName(exe),CancellationToken.None,7000);
             ret["ffmpeg"]=Regex.IsMatch(enc,@"\blibx264\s") && Regex.IsMatch(enc,@"\baac\s");

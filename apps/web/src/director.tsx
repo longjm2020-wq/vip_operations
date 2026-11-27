@@ -21,6 +21,7 @@ import {
   DownloadOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
+  LinkOutlined,
   LockOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -37,11 +38,15 @@ import {
   type DirectorAsset,
   type DirectorProject,
   type DirectorProjectSummary,
+  type DirectorReferenceAnalysis,
   type DirectorRender,
   type DirectorShot,
   type DirectorSnapshot,
 } from "../../../packages/contracts/src/director";
 import { DirectorLibraryPicker } from "./director-library-picker";
+import type { AgentFile } from "../../../packages/contracts/src/assistant-agent";
+import { DirectorImportTemplate } from "./director-import-template";
+import { acceptsDirectorFolderRole, directorFolderRole } from "../../../packages/contracts/src/director-import-roles";
 import { uniqueDirectorKinds } from "../../../packages/contracts/src/director-intent";
 import { api } from "./api";
 import { desktopClientRequest } from "./desktop-client";
@@ -75,10 +80,40 @@ import {
 } from "./director-asset-role";
 import "./director.css";
 
-const uploadTypes =
-  "image/*,video/mp4,video/quicktime,video/webm,audio/mpeg,audio/wav,audio/mp4,.mp3,.wav,.m4a,.pdf,.docx,.txt,.md,.srt,.pptx,.xlsx";
+const imageFiles = ".jpg,.jpeg,.png,.webp";
+const videoFiles = ".mp4,.mov,.webm";
+const audioFiles = ".mp3,.wav,.m4a";
+const documentFiles = ".pdf,.docx,.txt,.md,.srt,.pptx,.xlsx,.csv,.json";
+const uploadTypes = [imageFiles, videoFiles, audioFiles, documentFiles].join(",");
+type AssetRole = DirectorAsset["role"];
+const roleFileTypes: Record<AssetRole, string> = {
+  product: [imageFiles, videoFiles].join(","),
+  portrait: imageFiles,
+  voiceSample: [audioFiles, videoFiles].join(","),
+  narration: [audioFiles, videoFiles].join(","),
+  reference: videoFiles,
+  document: documentFiles,
+};
 const prettySeconds = (milliseconds: number) =>
   `${Number((milliseconds / 1000).toFixed(2))} 秒`;
+
+function ReferenceAnalysis({ analysis, name, expanded = false }: {
+  analysis: DirectorReferenceAnalysis;
+  name: string;
+  expanded?: boolean;
+}) {
+  return (
+    <details className="director-analysis" open={expanded}>
+      <summary>参考片拆解 · {name}</summary>
+      <p>{analysis.summary}</p>
+      <ol>
+        {analysis.beats.map((beat) => (
+          <li key={beat.timeMs}>{prettySeconds(beat.timeMs)} · {beat.description}</li>
+        ))}
+      </ol>
+    </details>
+  );
+}
 const assetPageSize = 40;
 type DirectorStep = "media" | "storyboard" | "delivery";
 const assetLimitMessage = `每个项目最多使用 ${directorAssetLimit} 份素材。`;
@@ -385,6 +420,9 @@ function DirectorEditor({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [shareText, setShareText] = useState("");
+  const [linkError, setLinkError] = useState("");
   const [alternatives, setAlternatives] = useState<{
     shotId: string;
     items: DirectorShot[];
@@ -392,6 +430,7 @@ function DirectorEditor({
   const [versionProject, setVersionProject] = useState<DirectorSnapshot>();
   const filesRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
+  const uploadRole = useRef<AssetRole | undefined>(undefined);
   const busyRef = useRef(false);
   const picker = useRef<AbortController | null>(null);
   useEffect(() => () => picker.current?.abort(), []);
@@ -430,6 +469,7 @@ function DirectorEditor({
   const analyses =
     draft.referenceAnalyses ??
     (draft.referenceAnalysis ? [draft.referenceAnalysis] : []);
+  const selectedAnalysis = analyses.find((analysis) => analysis.assetId === asset?.id);
   const localReferencesPending = references.some(
     (item) =>
       item.source === "local" &&
@@ -901,7 +941,7 @@ function DirectorEditor({
     // The URL is a one-shot request. Existing shots and render versions survive reloads.
   }, [autostart, connection.canRender, connection.local.isLoading, draft.id]);
 
-  function appendAssets(items: DirectorAsset[]) {
+  function appendAssets(items: DirectorAsset[], filter: DirectorAssetFilter = "all") {
     const sourceKey = (item: DirectorAsset) => item.fileId || `${item.deviceId}/${item.localId}`;
     const known = new Set(draft.assets.map(sourceKey));
     const unique = items.filter((item) => {
@@ -913,11 +953,19 @@ function DirectorEditor({
     if (!unique.length) return;
     if (draft.assets.length + unique.length > directorAssetLimit) throw Error(assetLimitMessage);
     setDraft((current) => ({ ...current, assets: [...current.assets, ...unique] }));
-    setAssetFilter("all");
+    setAssetFilter(filter);
     setAssetId(unique[0].id);
   }
 
-  function pickNative(kind: "files" | "folder") {
+  function chooseUpload(role?: AssetRole) {
+    const input = filesRef.current;
+    if (!input) return;
+    uploadRole.current = role;
+    input.accept = role ? roleFileTypes[role] : uploadTypes;
+    input.click();
+  }
+
+  function pickNative(kind: "files" | "folder", role?: AssetRole) {
     void run("正在导入本机素材…", async (isCurrent) => {
       const deviceId = connection.local.data?.deviceId;
       if (!deviceId || !connection.paired)
@@ -928,6 +976,7 @@ function DirectorEditor({
       picker.current = controller;
       const result = await localDirectorRequest("pick", {
         projectId: draft.id, kind,
+        ...(role && connection.local.data?.folderRoleImport ? { role } : {}),
         ...(connection.local.data?.localReferenceImport ? { remaining, knownIds } : {}),
       }, controller.signal, (processed) => {
         if (isCurrent()) setBusy(`正在导入本机素材，已检查 ${processed} 个文件…`);
@@ -945,21 +994,22 @@ function DirectorEditor({
         known.add(item.id);
         return true;
       });
-      const assets = fresh.slice(0, remaining);
+      const eligible = fresh.filter((item) => {
+        const intended = role ?? item.folderRole;
+        return !intended || acceptsDirectorFolderRole(intended, item.kind);
+      });
+      const assets = eligible.slice(0, remaining);
       if (assets.length) {
         const uniqueKinds = uniqueDirectorKinds([
           ...draft.assets.map((a) => a.mime),
           ...assets.map((a) => a.kind),
         ]);
         appendAssets(
-          assets.map((item) =>
-            localDirectorAsset(
-              item,
-              deviceId,
-              draft.brief,
-              uniqueKinds.has(item.kind),
-            ),
-          ),
+          assets.map((item) => {
+            const asset = localDirectorAsset(item, deviceId, draft.brief, uniqueKinds.has(item.kind));
+            return role ? { ...asset, role } : asset;
+          }),
+          role,
         );
       }
       const parts: string[] = [];
@@ -969,46 +1019,60 @@ function DirectorEditor({
       }
       const duplicates = (result.duplicates || 0) + result.assets.length - fresh.length;
       if (duplicates) parts.push(`${duplicates} 份已在项目中。`);
+      if (eligible.length < fresh.length)
+        parts.push(`已跳过 ${fresh.length - eligible.length} 个与所选用途不匹配的文件。`);
       if (result.skippedFiles) parts.push(`已跳过 ${result.skippedFiles} 个文件。`);
       if (result.skippedFolders) parts.push(`已跳过 ${result.skippedFolders} 个文件夹。`);
       if (result.problems?.length) parts.push(result.problems.join("；"));
-      if (result.overLimit || fresh.length > remaining)
+      if (result.overLimit || eligible.length > remaining)
         parts.push(`已达到项目 ${directorAssetLimit} 份素材的容量，已停止检查。余下文件可在另一项目继续导入。`);
-      if (!parts.length && result.cancelled === false) parts.push("所选目录中未找到可导入的图片、视频或音频。");
+      if (!parts.length && result.cancelled === false) parts.push("所选位置中未找到可导入的素材。");
       setNotice(parts.join(" "));
     });
   }
 
-  async function upload(event: ChangeEvent<HTMLInputElement>) {
+  async function upload(event: ChangeEvent<HTMLInputElement>, folder = false) {
     const chosen = Array.from(event.target.files || []);
+    const manualRole = folder ? undefined : uploadRole.current;
+    uploadRole.current = undefined;
     event.target.value = "";
     if (!chosen.length) return;
     await run("正在上传项目素材…", async () => {
-      const files = chosen.slice(0, directorAssetLimit - draft.assets.length);
+      const remaining = directorAssetLimit - draft.assets.length;
+      if (!remaining) throw Error(assetLimitMessage);
+      const failed: string[] = [];
+      const files = chosen.flatMap((file) => {
+        const role = manualRole ?? (folder ? directorFolderRole(file.webkitRelativePath) : undefined);
+        const extension = file.name.match(/\.[^.]+$/)?.[0].toLowerCase();
+        const allowedTypes = role ? roleFileTypes[role] : uploadTypes;
+        if (!extension || !allowedTypes.split(",").includes(extension)) {
+          failed.push(`${file.webkitRelativePath || file.name}：${role ? `类型不适用于「${roleNames[role]}」` : "不支持此文件类型"}`);
+          return [];
+        }
+        return [{ file, role }];
+      });
       const uniqueKinds = uniqueDirectorKinds([
         ...draft.assets.map((a) => a.mime),
-        ...files.map((f) => f.type),
+        ...files.map(({ file }) => file.type),
       ]);
-      if (!files.length) throw Error(assetLimitMessage);
       const uploaded: DirectorAsset[] = [];
-      const failed: string[] = [];
-      for (const file of files) {
+      let processed = 0;
+      for (const { file, role } of files) {
+        if (uploaded.length >= remaining) break;
+        setBusy(`正在上传素材 ${++processed} / ${files.length}…`);
         try {
-          uploaded.push(
-            libraryDirectorAsset(
-              await uploadDirectorFile(file),
-              draft.brief,
-              uniqueKinds.has(file.type.split("/")[0]),
-            ),
-          );
+          const result = await uploadDirectorFile(file);
+          if (role && !acceptsDirectorFolderRole(role, result.mime))
+            throw Error(`文件类型不适用于「${roleNames[role]}」`);
+          const asset = libraryDirectorAsset(result, draft.brief, uniqueKinds.has(file.type.split("/")[0]));
+          uploaded.push(role ? { ...asset, role } : asset);
         } catch (caught) {
           failed.push(`${file.name}：${messageOf(caught)}`);
         }
       }
-      if (uploaded.length) appendAssets(uploaded);
-      if (failed.length) setError(failed.join("；"));
-      if (files.length < chosen.length)
-        setNotice(assetLimitMessage + "已上传容量范围内的文件。");
+      if (uploaded.length) appendAssets(uploaded, manualRole);
+      if (failed.length) setError(`已跳过 ${failed.length} 个文件。\n${failed.slice(0, 5).join("；")}${failed.length > 5 ? " 等。" : ""}`);
+      if (uploaded.length) setNotice(`已加入 ${uploaded.length} 份${manualRole ? roleNames[manualRole] : "素材"}。${processed < files.length ? assetLimitMessage : ""}`);
       void cache.invalidateQueries({ queryKey: ["director-library", userId] });
     });
   }
@@ -1079,51 +1143,82 @@ function DirectorEditor({
 
   function analyzeReference(reference: DirectorAsset) {
     void run("正在拆解参考片…", async () => {
-      const project = await save();
-      const frames: { fileId: string; timeMs: number }[] = [];
-      if (reference.source === "local") {
-        if (
-          !reference.localId ||
-          reference.deviceId !== connection.local.data?.deviceId ||
-          !connection.paired
-        )
-          throw Error("请在保存该参考片的电脑上拆解本机素材。");
-        const duration = reference.durationMs || 0;
-        const times =
-          reference.mime.startsWith("video/") && duration >= 1000
-            ? [
-                0,
-                Math.floor(duration * 0.25),
-                Math.floor(duration * 0.5),
-                Math.floor(duration * 0.75),
-              ]
-            : [0];
-        for (const timeMs of times) {
-          const frame = await localDirectorRequest("read-frame", {
-            projectId: project.id,
-            assetId: reference.localId,
-            atMs: timeMs,
-          });
-          const bytes = Uint8Array.from(atob(frame.base64), (char) =>
-            char.charCodeAt(0),
-          );
-          const file = await uploadDirectorFile(
-            new File([bytes], `参考帧-${timeMs}.jpg`, { type: frame.mime }),
-          );
-          frames.push({ fileId: file.id, timeMs });
-        }
+      await analyzeProjectReference(await save(), reference);
+    });
+  }
+
+  async function analyzeProjectReference(project: DirectorProject, reference: DirectorAsset) {
+    const frames: { fileId: string; timeMs: number }[] = [];
+    if (reference.source === "local") {
+      if (
+        !reference.localId ||
+        reference.deviceId !== connection.local.data?.deviceId ||
+        !connection.paired
+      )
+        throw Error("请在保存该参考片的电脑上拆解本机素材。");
+      const duration = reference.durationMs || 0;
+      const times =
+        reference.mime.startsWith("video/") && duration >= 1000
+          ? [
+              0,
+              Math.floor(duration * 0.25),
+              Math.floor(duration * 0.5),
+              Math.floor(duration * 0.75),
+            ]
+          : [0];
+      for (const timeMs of times) {
+        const frame = await localDirectorRequest("read-frame", {
+          projectId: project.id,
+          assetId: reference.localId,
+          atMs: timeMs,
+        });
+        const bytes = Uint8Array.from(atob(frame.base64), (char) =>
+          char.charCodeAt(0),
+        );
+        const file = await uploadDirectorFile(
+          new File([bytes], `参考帧-${timeMs}.jpg`, { type: frame.mime }),
+        );
+        frames.push({ fileId: file.id, timeMs });
       }
-      const analyzed = await directorApi<DirectorProject>(
-        `${projectPath(project.id)}/reference`,
-        "POST",
-        {
-          revision: project.revision,
-          assetId: reference.id,
-          ...(frames.length ? { frames } : {}),
-        },
-      );
-      apply(analyzed);
-      setNotice("参考拆解已保存，可用于后续编排。");
+    }
+    const analyzed = await directorApi<DirectorProject>(
+      `${projectPath(project.id)}/reference`,
+      "POST",
+      {
+        revision: project.revision,
+        assetId: reference.id,
+        ...(frames.length ? { frames } : {}),
+      },
+    );
+    apply(analyzed);
+    setNotice("参考拆解已保存，可用于后续编排。");
+  }
+
+  function importReferenceLink() {
+    const text = shareText.trim();
+    if (!text) return;
+    setLinkError("");
+    void run("正在解析作品链接…", async () => {
+      if (draft.assets.length >= directorAssetLimit) throw Error(assetLimitMessage);
+      let file: AgentFile;
+      try {
+        file = await directorApi<AgentFile>(`${projectPath(draft.id)}/reference-link`, "POST", { text });
+      } catch (cause) {
+        setLinkError(messageOf(cause));
+        return;
+      }
+      const reference: DirectorAsset = { ...libraryDirectorAsset(file), role: "reference" };
+      const next = { ...draft, assets: [...draft.assets, reference] };
+      setDraft(next);
+      setAssetFilter("reference");
+      setAssetId(reference.id);
+      setLinkOpen(false);
+      setShareText("");
+      void cache.invalidateQueries({ queryKey: ["director-library", userId] });
+      const savedProject = await save(next);
+      setBusy("参考片已保存，正在拆解画面…");
+      setNotice("参考片已保存。如拆解中断，可选中该素材再次拆解。");
+      await analyzeProjectReference(savedProject, reference);
     });
   }
 
@@ -1244,132 +1339,134 @@ function DirectorEditor({
             )}
         </div>
       </section>
-      {settingsOpen && (
-        <div className="director-project-controls" id="director-settings">
-          <Field label="项目名称">
-            <Input
-              aria-label="编辑项目名称"
-              value={draft.title}
-              maxLength={160}
-              disabled={!!busy}
-              onChange={(event) => updateDraft("title", event.target.value)}
-            />
-          </Field>
-          <Field label="创作方式">
-            <Select
-              aria-label="创作方式"
-              value={draft.mode}
-              options={explicitApprovalModes}
-              onChange={(value) => {
-                if (value === "manual" && draft.mode === "smart")
-                  void takeManualControl();
-                else updateDraft("mode", value);
-              }}
-              disabled={!!busy}
-            />
-          </Field>
-          <Field label="交付目标">
-            <Select
-              aria-label="交付目标"
-              value={draft.output}
-              options={outputModes}
-              onChange={(value) => updateDraft("output", value)}
-              disabled={!!busy}
-            />
-          </Field>
-          <Field label="画幅">
-            <Select
-              aria-label="画幅"
-              value={draft.aspect}
-              options={directorAspects.map((value) => ({
-                value,
-                label: value,
-              }))}
-              onChange={(value) => updateDraft("aspect", value)}
-              disabled={!!busy}
-            />
-          </Field>
-          <Field label="目标时长（秒）">
-            <Seconds
-              label="目标时长（秒）"
-              value={draft.durationMs}
-              minimum={1000}
-              maximum={600000}
-              onChange={(value) => updateDraft("durationMs", value)}
-              disabled={!!busy}
-            />
-          </Field>
-        </div>
-      )}
-      <nav ref={stepNav} className="director-steps" aria-label="导演台制作流程">
-        {(
-          [
-            {
-              id: "media",
-              title: "整理素材",
-              note: draft.assets.length ? `${draft.assets.length} 份` : "",
-              icon: <FolderOpenOutlined />,
-            },
-            {
-              id: "storyboard",
-              title: "编排分镜",
-              note: draft.shots.length
-                ? `${draft.shots.length} 镜 · ${prettySeconds(totalDuration)}`
-                : "",
-              icon: <SnippetsOutlined />,
-            },
-            {
-              id: "delivery",
-              title: "交付导出",
-              note: renders.length
-                ? renderStatuses[renders[0].status]
-                : "",
-              icon: <DownloadOutlined />,
-            },
-          ] as const
-        ).map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            aria-label={item.title}
-            aria-current={step === item.id ? "step" : undefined}
-            onClick={() => setStep(item.id)}
-          >
-            <span className="director-step-icon" aria-hidden>
-              {item.icon}
-            </span>
-            <span>
-              <strong>{item.title}</strong>
-              {item.note && <small>{item.note}</small>}
-            </span>
-          </button>
-        ))}
-      </nav>
-      {busy && (
-        <div className="director-status" role="status">
-          <Spin size="small" />
-          {busy}
-        </div>
-      )}
-      {error && (
-        <Alert
-          type="error"
-          showIcon
-          title={error}
-          closable
-          onClose={() => setError("")}
-        />
-      )}
-      {notice && (
-        <Alert
-          className="director-notice"
-          type="info"
-          showIcon
-          title={notice}
-          closable
-          onClose={() => setNotice("")}
-        />
-      )}
+      <div className="director-controls">
+        {settingsOpen && (
+          <div className="director-project-controls" id="director-settings">
+            <Field label="项目名称">
+              <Input
+                aria-label="编辑项目名称"
+                value={draft.title}
+                maxLength={160}
+                disabled={!!busy}
+                onChange={(event) => updateDraft("title", event.target.value)}
+              />
+            </Field>
+            <Field label="创作方式">
+              <Select
+                aria-label="创作方式"
+                value={draft.mode}
+                options={explicitApprovalModes}
+                onChange={(value) => {
+                  if (value === "manual" && draft.mode === "smart")
+                    void takeManualControl();
+                  else updateDraft("mode", value);
+                }}
+                disabled={!!busy}
+              />
+            </Field>
+            <Field label="交付目标">
+              <Select
+                aria-label="交付目标"
+                value={draft.output}
+                options={outputModes}
+                onChange={(value) => updateDraft("output", value)}
+                disabled={!!busy}
+              />
+            </Field>
+            <Field label="画幅">
+              <Select
+                aria-label="画幅"
+                value={draft.aspect}
+                options={directorAspects.map((value) => ({
+                  value,
+                  label: value,
+                }))}
+                onChange={(value) => updateDraft("aspect", value)}
+                disabled={!!busy}
+              />
+            </Field>
+            <Field label="目标时长（秒）">
+              <Seconds
+                label="目标时长（秒）"
+                value={draft.durationMs}
+                minimum={1000}
+                maximum={600000}
+                onChange={(value) => updateDraft("durationMs", value)}
+                disabled={!!busy}
+              />
+            </Field>
+          </div>
+        )}
+        <nav ref={stepNav} className="director-steps" aria-label="导演台制作流程">
+          {(
+            [
+              {
+                id: "media",
+                title: "整理素材",
+                note: draft.assets.length ? `${draft.assets.length} 份` : "",
+                icon: <FolderOpenOutlined />,
+              },
+              {
+                id: "storyboard",
+                title: "编排分镜",
+                note: draft.shots.length
+                  ? `${draft.shots.length} 镜 · ${prettySeconds(totalDuration)}`
+                  : "",
+                icon: <SnippetsOutlined />,
+              },
+              {
+                id: "delivery",
+                title: "交付导出",
+                note: renders.length
+                  ? renderStatuses[renders[0].status]
+                  : "",
+                icon: <DownloadOutlined />,
+              },
+            ] as const
+          ).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-label={item.title}
+              aria-current={step === item.id ? "step" : undefined}
+              onClick={() => setStep(item.id)}
+            >
+              <span className="director-step-icon" aria-hidden>
+                {item.icon}
+              </span>
+              <span>
+                <strong>{item.title}</strong>
+                {item.note && <small>{item.note}</small>}
+              </span>
+            </button>
+          ))}
+        </nav>
+        {busy && (
+          <div className="director-status" role="status">
+            <Spin size="small" />
+            {busy}
+          </div>
+        )}
+        {error && (
+          <Alert
+            type="error"
+            showIcon
+            title={error}
+            closable
+            onClose={() => setError("")}
+          />
+        )}
+        {notice && (
+          <Alert
+            className="director-notice"
+            type="info"
+            showIcon
+            title={notice}
+            closable
+            onClose={() => setNotice("")}
+          />
+        )}
+      </div>
       <div
         className={`director-studio director-stage-${step}`}
         data-has-shots={!!draft.shots.length}
@@ -1398,7 +1495,7 @@ function DirectorEditor({
                 onClick={() =>
                   connection.supported
                     ? pickNative("files")
-                    : filesRef.current?.click()
+                    : chooseUpload()
                 }
               >
                 {connection.supported ? "导入本机文件" : "上传文件"}
@@ -1428,10 +1525,12 @@ function DirectorEditor({
                     items: [
                       { key: "choose", label: "从工作台文件选择" },
                       { key: "upload", label: "上传到工作台" },
+                      { key: "folder", label: "按模板上传文件夹" },
                     ],
                     onClick: ({ key }) => {
                       if (key === "choose") setLibraryOpen(true);
-                      else filesRef.current?.click();
+                      else if (key === "folder") folderRef.current?.click();
+                      else chooseUpload();
                     },
                   }}
                 >
@@ -1447,11 +1546,19 @@ function DirectorEditor({
                   从工作台文件选择
                 </Button>
               )}
+              <DirectorImportTemplate local={connection.supported} nativeTemplate={!!connection.local.data?.folderRoleImport} />
+              <Button size="small" type="text" icon={<LinkOutlined aria-hidden />}
+                disabled={!!busy || draft.assets.length >= directorAssetLimit}
+                onClick={() => { setLinkError(""); setLinkOpen(true); }}
+              >
+                粘贴作品链接
+              </Button>
               <input
                 className="director-file-input"
                 ref={filesRef}
                 type="file"
                 multiple
+                tabIndex={-1}
                 accept={uploadTypes}
                 onChange={(event) => void upload(event)}
                 aria-label="上传项目文件"
@@ -1461,9 +1568,10 @@ function DirectorEditor({
                 ref={folderRef}
                 type="file"
                 multiple
+                tabIndex={-1}
                 {...{ webkitdirectory: "" }}
                 accept={uploadTypes}
-                onChange={(event) => void upload(event)}
+                onChange={(event) => void upload(event, true)}
                 aria-label="上传项目文件夹"
               />
             </div>
@@ -1494,6 +1602,12 @@ function DirectorEditor({
             <DirectorAssetRoleFilters
               assets={draft.assets}
               value={assetFilter}
+              local={connection.supported}
+              canImport={(role) => !busy && draft.assets.length < directorAssetLimit && (role === "document" || !connection.supported || connection.paired)}
+              onImport={(role) => {
+                if (connection.supported && role !== "document") pickNative("files", role);
+                else chooseUpload(role);
+              }}
               onChange={(value) => {
                 if (assetFilter !== value) {
                   setAssetFilter(value);
@@ -1583,6 +1697,13 @@ function DirectorEditor({
                   </Checkbox>
                 )}
                 {asset.role === "voiceSample" && (
+                  <p className="director-muted">
+                    {connection.paired && connection.local.data?.voice_clone
+                      ? "本机音色克隆已就绪。在镜头的「更多镜头设置」选择此音色，并填写口播脚本。"
+                      : "合成配音需在已连接的 Windows 电脑配置 Qwen3-TTS Base。"}
+                  </p>
+                )}
+                {asset.role === "voiceSample" && (
                   <Field label="样本原文（可选）">
                     <Input
                       aria-label="样本原文"
@@ -1626,6 +1747,9 @@ function DirectorEditor({
                 </Space>
               </div>
             )}
+            {selectedAnalysis && asset && (
+              <ReferenceAnalysis key={asset.id} analysis={selectedAnalysis} name={asset.name} expanded />
+            )}
           </section>
         )}
         {(step === "media" || (step === "storyboard" && !!selectedShot)) && (
@@ -1639,7 +1763,7 @@ function DirectorEditor({
                 <span title={previewAsset.name}>{previewAsset.name}</span>
               )}
             </div>
-            <div className="director-preview">
+            <div className="director-preview" data-visual={!!previewAsset && isVisual(previewAsset.mime)}>
               <MediaPreview
                 asset={previewAsset}
                 projectId={draft.id}
@@ -1899,21 +2023,8 @@ function DirectorEditor({
                 </Button>
               </Space>
               {analyses.map((analysis) => (
-                <details key={analysis.assetId} className="director-analysis">
-                  <summary>
-                    参考片拆解 ·{" "}
-                    {draft.assets.find((item) => item.id === analysis.assetId)
-                      ?.name || "参考素材"}
-                  </summary>
-                  <p>{analysis.summary}</p>
-                  <ol>
-                    {analysis.beats.map((beat, index) => (
-                      <li key={`${beat.timeMs}-${index}`}>
-                        {prettySeconds(beat.timeMs)} · {beat.description}
-                      </li>
-                    ))}
-                  </ol>
-                </details>
+                <ReferenceAnalysis key={analysis.assetId} analysis={analysis}
+                  name={draft.assets.find((item) => item.id === analysis.assetId)?.name || "参考素材"} />
               ))}
             </section>
           </>
@@ -2181,6 +2292,31 @@ function DirectorEditor({
           onClose={() => setLibraryOpen(false)}
         />
       )}
+      <Modal
+        title="从作品链接拆解参考片"
+        open={linkOpen}
+        onCancel={() => setLinkOpen(false)}
+        onOk={importReferenceLink}
+        okText="解析并拆解"
+        cancelText="取消"
+        confirmLoading={!!busy}
+        okButtonProps={{ disabled: !shareText.trim() || !!busy }}
+        cancelButtonProps={{ disabled: !!busy }}
+        closable={!busy}
+        keyboard={!busy}
+        mask={{ closable: !busy }}
+      >
+        <div className="director-form">
+          <Input.TextArea aria-label="作品分享链接或分享文案" value={shareText} maxLength={8192}
+            autoSize={{ minRows: 3, maxRows: 6 }}
+            placeholder="粘贴抖音、小红书等平台的分享文案，或公开视频链接"
+            disabled={!!busy}
+            onChange={(event) => { setShareText(event.target.value); setLinkError(""); }}
+          />
+          <p className="director-muted">取得视频后会保存到工作台，并按实际画面拆解节奏和构图。需要登录或仅分享图文时，可改为导入原视频。</p>
+          {linkError && <Alert type="error" showIcon title={linkError} />}
+        </div>
+      </Modal>
       <Modal
         title="选择本镜文案"
         open={!!alternatives}

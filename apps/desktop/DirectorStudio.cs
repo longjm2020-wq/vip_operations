@@ -36,7 +36,7 @@ sealed class DirectorStudio {
         Fields(envelope,"channel","action","id","payload");DirectorMedia.Uuid(Value(envelope,"id"));
         var p=Value(envelope,"payload") as Dictionary<string,object>;
         if(action=="capabilities"){Fields(p);return;}
-        if(action=="pick")Fields(p,"projectId","kind","remaining","knownIds");
+        if(action=="pick")Fields(p,"projectId","kind","remaining","knownIds","role");
         else if(action=="import")Fields(p,"projectId","fileId","name");
         else if(action=="preview")Fields(p,"projectId","assetId");
         else if(action=="read-frame")Fields(p,"projectId","assetId","atMs");
@@ -158,6 +158,24 @@ sealed class DirectorStudio {
         return account;
     }
     const int MaxLocalAssets=500;
+    static readonly Dictionary<string,string> FolderRoles=new Dictionary<string,string>(StringComparer.Ordinal) {
+        {"商品素材","product"},{"授权肖像","portrait"},{"授权音色","voiceSample"},
+        {"正式配音","narration"},{"参考片","reference"},{"文字资料","document"}
+    };
+    static string FolderRole(string path,string inheritedRole) {
+        string role;
+        return FolderRoles.TryGetValue(new DirectoryInfo(path).Name,out role)?role:inheritedRole;
+    }
+    static bool FitsRole(string role,string kind) {
+        switch(role) {
+            case "product":return kind=="image" || kind=="video";
+            case "portrait":return kind=="image";
+            case "voiceSample":case "narration":return kind=="audio" || kind=="video";
+            case "reference":return kind=="video";
+            case "document":return kind=="document";
+            default:return role==null;
+        }
+    }
     internal sealed class PickResult {
         public readonly List<object> assets=new List<object>();
         public readonly List<string> problems=new List<string>();
@@ -172,38 +190,48 @@ sealed class DirectorStudio {
         return e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException || e is System.Security.SecurityException;
     }
     internal static PickResult ImportSelection(string project,string[] files,string folder,int remaining,
-        HashSet<string> known,string ffmpeg,CancellationToken token,Action inspected=null) {
+        HashSet<string> known,string ffmpeg,CancellationToken token,Action inspected=null,string selectedRole=null) {
         var result=new PickResult();
-        Action<string> import=file=>{
+        Action<string,string> import=(file,role)=>{
             token.ThrowIfCancellationRequested();
             if(inspected!=null)inspected();
-            if(!DirectorMedia.Inputs.Contains(Path.GetExtension(file).ToLowerInvariant())){result.skippedFiles++;return;}
+            var ext=Path.GetExtension(file).ToLowerInvariant();
+            if(!DirectorMedia.Inputs.Contains(ext) && !DirectorMedia.Documents.Contains(ext)) {
+                if(role!=null)result.Failure(file,false,DirectorMedia.Error("该格式不支持导入"));
+                else result.skippedFiles++;
+                return;
+            }
+            if(!FitsRole(role,DirectorMedia.Kind(ext))) {
+                result.Failure(file,false,DirectorMedia.Error("文件类型与指定用途不符"));
+                return;
+            }
             // Stop before probing another asset once all available slots have been filled.
             if(result.assets.Count>=remaining){result.overLimit=true;return;}
             try {
                 var asset=DirectorMedia.ImportLocal(project,file,ffmpeg,token);
-                if(known.Add(asset.id))result.assets.Add(asset.Public());else result.duplicates++;
+                if(known.Add(asset.id))result.assets.Add(asset.Public(role));else result.duplicates++;
             } catch(Exception e){if(!Skippable(e))throw;result.Failure(file,false,e);}
         };
-        foreach(string file in files){import(file);if(result.overLimit)break;}
+        foreach(string file in files){import(file,selectedRole);if(result.overLimit)break;}
         if(folder==null)return result;
         DirectorMedia.PlainLocal(folder);
         if(new DriveInfo(Path.GetPathRoot(folder)).DriveType==DriveType.Network)throw DirectorMedia.Error("请选择本机磁盘上的素材文件夹。");
 
-        var directories=new Stack<string>();
-        directories.Push(folder);
+        var directories=new Stack<KeyValuePair<string,string>>();
+        directories.Push(new KeyValuePair<string,string>(folder,FolderRole(folder,null)));
         while(directories.Count>0 && !result.overLimit) {
             token.ThrowIfCancellationRequested();
-            var path=directories.Pop();
+            var directory=directories.Pop();
+            var path=directory.Key;
             try {
                 DirectorMedia.PlainLocal(path);
                 foreach(var entry in new DirectoryInfo(path).EnumerateFileSystemInfos()) {
                     token.ThrowIfCancellationRequested();
                     if((entry.Attributes & FileAttributes.Directory)!=0) {
                         if((entry.Attributes & FileAttributes.ReparsePoint)!=0)result.skippedFolders++;
-                        else directories.Push(entry.FullName);
+                        else directories.Push(new KeyValuePair<string,string>(entry.FullName,FolderRole(entry.FullName,directory.Value)));
                     } else {
-                        import(entry.FullName);
+                        import(entry.FullName,directory.Value);
                         if(result.overLimit)break;
                     }
                 }
@@ -220,14 +248,18 @@ sealed class DirectorStudio {
         // Web clients predating the remaining-slot field accept at most 80 assets.
         int remaining=Math.Min(slots==null?80:(int)slots,MaxLocalAssets-known.Count);
         string kind=Value(p,"kind") as string;
+        string selectedRole=Value(p,"role") as string;
+        if(p.ContainsKey("role") && (selectedRole==null || !FolderRoles.ContainsValue(selectedRole) || kind!="files"))
+            throw DirectorMedia.Error("请选择有效的素材用途。");
         string[] selection=new string[0];string folder=null;
         if(kind=="files") {
-            using(var picker=new OpenFileDialog{Multiselect=true,CheckFileExists=true,Title="导入导演项目素材",Filter="图片、音频和视频|"+String.Join(";",DirectorMedia.Inputs.Select(s=>"*"+s))}) {
+            var extensions=DirectorMedia.Inputs.Concat(DirectorMedia.Documents).Where(ext=>FitsRole(selectedRole,DirectorMedia.Kind(ext)));
+            using(var picker=new OpenFileDialog{Multiselect=true,CheckFileExists=true,Title="导入导演项目素材",Filter="可用素材|"+String.Join(";",extensions.Select(s=>"*"+s))}) {
                 if(picker.ShowDialog(owner)!=DialogResult.OK)return new PickResult{cancelled=true};
                 selection=picker.FileNames;
             }
         } else if(kind=="folder"){
-            using(var picker=new FolderBrowserDialog{Description="导入所选文件夹及其子文件夹中的图片、音频和视频",ShowNewFolderButton=false}) {
+            using(var picker=new FolderBrowserDialog{Description="导入所选文件夹中的图片、音视频和文档，按用途目录归类",ShowNewFolderButton=false}) {
                 if(picker.ShowDialog(owner)!=DialogResult.OK)return new PickResult{cancelled=true};
                 folder=picker.SelectedPath;
             }
@@ -245,7 +277,7 @@ sealed class DirectorStudio {
             timer.Start();
             try {
                 return await Task.Run(()=>ImportSelection(project,selection,folder,remaining,known,
-                    DirectorMedia.Ffmpeg(),stop.Token,()=>Interlocked.Increment(ref processed)));
+                    DirectorMedia.Ffmpeg(),stop.Token,()=>Interlocked.Increment(ref processed),selectedRole));
             } catch(OperationCanceledException){throw DirectorMedia.Error("本机授权已变化，已停止导入。");}
         }
     }
@@ -272,7 +304,7 @@ sealed class DirectorStudio {
     }
     internal static object Frame(string project,string id,int atMs,string ffmpeg) {
         var a=DirectorMedia.Asset(project,id);
-        if(a.kind=="audio" || atMs<0 || (a.durationMs.HasValue && atMs>=a.durationMs.Value))throw DirectorMedia.Error("请选择有效画面和时间点。");
+        if((a.kind!="image" && a.kind!="video") || atMs<0 || (a.durationMs.HasValue && atMs>=a.durationMs.Value))throw DirectorMedia.Error("请选择有效画面和时间点。");
         string file=Path.Combine(project,"frame-"+Guid.NewGuid().ToString("N")+".jpg");
         try {
             var args=DirectorMedia.Begin();
@@ -295,6 +327,7 @@ sealed class DirectorStudio {
         if(action=="preview"||action=="read-frame") {
             string id=DirectorMedia.Uuid(Value(p,"assetId"));var asset=DirectorMedia.Asset(project,id);
             if(action=="preview"){
+                if(asset.kind=="document")throw DirectorMedia.Error("本机文档仅登记素材信息，需要正文时请上传到工作台。");
                 using(DirectorMedia.PinLocal(project,asset))Open(DirectorMedia.PathFor(project,asset));
                 return new{opened=true};
             }

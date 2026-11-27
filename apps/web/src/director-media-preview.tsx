@@ -233,6 +233,13 @@ export function MediaPreview({
         atMs={frameMs}
       />
     );
+  if (!video && !asset.mime.startsWith("image/") && !asset.mime.startsWith("audio/"))
+    return (
+      <PreviewMessage
+        icon={<FileTextOutlined />}
+        label="这份文档已登记在本机。若要让 AI 读取正文，请将文件上传到工作台并加入项目。"
+      />
+    );
   if (!canOpenLocal)
     return (
       <PreviewMessage

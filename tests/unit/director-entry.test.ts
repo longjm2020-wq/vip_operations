@@ -5,6 +5,12 @@ import {
   uniqueDirectorKinds,
 } from "../../packages/contracts/src/director-intent.js";
 import { aiFeatures } from "../../packages/contracts/src/ai-management.js";
+import {
+  acceptsDirectorFolderRole,
+  directorFolderRole,
+  directorRoleNames,
+} from "../../packages/contracts/src/director-import-roles.js";
+import { directorRoles } from "../../packages/contracts/src/director.js";
 import { inspectAgentUpload } from "../../apps/api/src/modules/workspace/agent-files.js";
 
 describe("导演台对话入口与素材", () => {
@@ -107,7 +113,9 @@ describe("导演台对话入口与素材", () => {
   it("区分视频画面和明确指定以视频提供的音色或配音", () => {
     expect(inferDirectorRole("授权音色.mp4", "video/mp4")).toBe("voiceSample");
     expect(inferDirectorRole("正式配音.mp4", "video/mp4")).toBe("narration");
-    expect(inferDirectorRole("商品介绍-正式配音.mp4", "video/mp4")).toBe("narration");
+    expect(inferDirectorRole("商品介绍-正式配音.mp4", "video/mp4")).toBe(
+      "narration",
+    );
     expect(
       inferDirectorRole("1.mp4", "video/mp4", "1.mp4 用作正式配音", false),
     ).toBe("narration");
@@ -134,6 +142,25 @@ describe("导演台对话入口与素材", () => {
         ["director_talking_head", "fixed"],
       ]),
     );
+  });
+  it("按最近的完整目录名识别六种素材用途", () => {
+    for (const role of directorRoles)
+      expect(
+        directorFolderRole(`工作用包/${directorRoleNames[role]}/第一批/01`),
+      ).toBe(role);
+    expect(directorFolderRole("授权肖像\\参考片\\A.mp4")).toBe("reference");
+    expect(directorFolderRole("商品素材/01.png")).toBe("product");
+    expect(directorFolderRole("参考片旧版/文字资料")).toBeUndefined();
+    expect(directorFolderRole("授权音色.wav")).toBeUndefined();
+  });
+  it("素材文件夹按用途检查可接收的文件种类", () => {
+    expect(acceptsDirectorFolderRole("portrait", "image/jpeg")).toBe(true);
+    expect(acceptsDirectorFolderRole("portrait", "video/mp4")).toBe(false);
+    expect(acceptsDirectorFolderRole("voiceSample", "video/mp4")).toBe(true);
+    expect(acceptsDirectorFolderRole("narration", "audio/wav")).toBe(true);
+    expect(acceptsDirectorFolderRole("reference", "image/png")).toBe(false);
+    expect(acceptsDirectorFolderRole("document", "image/png")).toBe(false);
+    expect(acceptsDirectorFolderRole("document", "text/plain")).toBe(true);
   });
   it("用真实解码器校验上传音频，拒绝仅改后缀的文件", async () => {
     const wav = Buffer.alloc(44 + 16000);

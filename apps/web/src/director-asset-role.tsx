@@ -3,6 +3,7 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   FileTextOutlined,
+  PlusOutlined,
   ShoppingOutlined,
   SoundOutlined,
   UserOutlined,
@@ -60,10 +61,16 @@ export function DirectorAssetRoleFilters({
   assets,
   value,
   onChange,
+  onImport,
+  canImport,
+  local,
 }: {
   assets: DirectorAsset[];
   value: DirectorAssetFilter;
   onChange: (role: DirectorAssetFilter) => void;
+  onImport: (role: AssetRole) => void;
+  canImport: (role: AssetRole) => boolean;
+  local: boolean;
 }) {
   const counts = new Map<AssetRole, number>();
   for (const asset of assets)
@@ -71,7 +78,7 @@ export function DirectorAssetRoleFilters({
   return (
     <div className="director-role-filters" role="group" aria-label="按用途筛选">
       <div className="director-role-filter-heading">
-        <strong>按用途筛选</strong>
+        <strong>按用途导入</strong>
         <button
           type="button"
           aria-pressed={value === "all"}
@@ -84,19 +91,28 @@ export function DirectorAssetRoleFilters({
         {directorRoles.map((role) => {
           const Icon = roleIcons[role];
           return (
-            <button
-              key={role}
-              type="button"
-              data-role={role}
-              aria-pressed={value === role}
-              onClick={() => onChange(role)}
-            >
-              <Icon aria-hidden />
-              {roleNames[role]}{" "}
-              <span className="director-role-count">
-                {counts.get(role) ?? 0}
-              </span>
-            </button>
+            <div className="director-role-option" key={role}>
+              <button
+                type="button"
+                data-role={role}
+                aria-pressed={value === role}
+                onClick={() => onChange(role)}
+              >
+                <Icon aria-hidden />
+                {roleNames[role]}{" "}
+                <span className="director-role-count">{counts.get(role) ?? 0}</span>
+              </button>
+              <button
+                type="button"
+                className="director-role-add"
+                aria-label={`导入${roleNames[role]}`}
+                title={local && role !== "document" ? `从本机导入${roleNames[role]}` : `上传${roleNames[role]}到工作台`}
+                disabled={!canImport(role)}
+                onClick={() => onImport(role)}
+              >
+                <PlusOutlined aria-hidden />
+              </button>
+            </div>
           );
         })}
       </div>

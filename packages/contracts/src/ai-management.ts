@@ -22,7 +22,7 @@ export const aiFeatures = [
   {
     id: "director_reference", name: "导演参考片拆解", group: "AI 导演台",
     href: "/my-workspace/director", kind: "vision_structured",
-    boundary: "在「整理素材」拆解参考片时，分析抽样画面及时间点并给出节奏、构图与分镜建议；智能导演也可分析项目中的工作台参考片。按实际模型调用计量。普通本机画面预览由 FFmpeg 取帧。",
+    boundary: "「整理素材」支持从文件或公开作品链接拆解参考片。取得源视频后，使用识图模型分析抽样画面、时间点、节奏和构图。智能导演也可拆解工作台参考片。链接解析与本机预览取帧独立执行，仅实际模型请求计量。",
   },
   {
     id: "assistant_chat",
