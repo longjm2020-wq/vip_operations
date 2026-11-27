@@ -166,7 +166,7 @@ static class DirectorRender {
         return String.Join("|",files.Select(path=>File.Exists(path)?FileHash(path):"missing"));
     }
     internal static Dictionary<string,object> Capabilities(string exe) {
-        var ret=new Dictionary<string,object>{{"ffmpeg",false},{"installation","从 ffmpeg.org/download.html 的 Windows 构建安装包含 libx264、AAC 的 FFmpeg，将 bin 加入 PATH，或设置 XUTI_DIRECTOR_FFMPEG 为 ffmpeg.exe 的完整路径，然后重启小序。"},{"voice_clone",false},{"talking_head",false},{"templates",new object[0]}};
+        var ret=new Dictionary<string,object>{{"ffmpeg",false},{"localReferenceImport",true},{"installation","从 ffmpeg.org/download.html 的 Windows 构建安装包含 libx264、AAC 的 FFmpeg，将 bin 加入 PATH，或设置 XUTI_DIRECTOR_FFMPEG 为 ffmpeg.exe 的完整路径，然后重启小序。"},{"voice_clone",false},{"talking_head",false},{"templates",new object[0]}};
         if(exe!=null)try {
             var enc=DirectorMedia.Exec(exe,new[]{"-hide_banner","-encoders"},Path.GetDirectoryName(exe),CancellationToken.None,7000);
             ret["ffmpeg"]=Regex.IsMatch(enc,@"\blibx264\s") && Regex.IsMatch(enc,@"\baac\s");
@@ -181,13 +181,15 @@ static class DirectorRender {
         try{var speech=DirectorTranscription.Load();ret["autoSubs"]=speech.CanStart();if(speech.exe!=null)ret["autoSubsModel"]=speech.model;}catch(InvalidOperationException){}
         return ret;
     }
-    static string Generate(string jobDir,Dictionary<string,object> config,string output,CancellationToken stop) {
+    static string Generate(string jobDir,Dictionary<string,object> config,string output,CancellationToken stop,Dictionary<string,string> fingerprints) {
         string python=DirectorMedia.Python(),script=SidecarPath();
         if(python==null || !File.Exists(script))throw DirectorMedia.Error("该镜头需要本机媒体适配器，请配置 Python、模型或已登记模板。");
         string job=Path.Combine(jobDir,"media-"+Guid.NewGuid().ToString("N")+".json"),result=Path.Combine(jobDir,output);
         var cacheInputs=new SortedDictionary<string,object>(config);
         foreach(var name in new[]{"samplePath","portraitPath","audioPath","imagePath"}) {
-            object value;if(cacheInputs.TryGetValue(name,out value) && value is string)cacheInputs[name]=FileHash((string)value);
+            object value;string stamp;
+            if(cacheInputs.TryGetValue(name,out value) && value is string)
+                cacheInputs[name]=fingerprints.TryGetValue((string)value,out stamp)?stamp:FileHash((string)value);
         }
         string key=DirectorMedia.Hash(DirectorMedia.Utf8.GetBytes(DirectorMedia.Canonical(cacheInputs)+ProviderStamp(DirectorStudio.Value(config,"templateId") as string)));
         string cached=Path.Combine(Path.GetDirectoryName(jobDir),key+Path.GetExtension(output)),meta=cached+".sha256";
@@ -205,11 +207,27 @@ static class DirectorRender {
         return (int)Math.Ceiling(1000*(Int32.Parse(m.Groups[1].Value)*3600+Int32.Parse(m.Groups[2].Value)*60+Double.Parse(m.Groups[3].Value,CultureInfo.InvariantCulture)));
     }
     static DirectorClip RenderShot(string project,string cache,string ffmpeg,int w,int h,DirectorShot s,CancellationToken stop,out bool reused) {
+        var ids=new[]{s.visualId,s.audioId,s.voice==null?null:s.voice.sampleId,s.presenter==null?null:s.presenter.portraitId,s.template==null?null:s.template.imageId};
+        var assets=new Dictionary<string,DirectorAsset>();
+        var pins=new List<IDisposable>();
+        try {
+            foreach(string id in ids.Where(id=>id!=null).Distinct()) {
+                var a=DirectorMedia.Asset(project,id);
+                if(a.localPath!=null)pins.Add(DirectorMedia.PinLocal(project,a));
+                assets.Add(id,a);
+            }
+            return RenderPinnedShot(project,cache,ffmpeg,w,h,s,stop,assets,ids,out reused);
+        } finally {foreach(var pin in pins)pin.Dispose();}
+    }
+    static DirectorClip RenderPinnedShot(string project,string cache,string ffmpeg,int w,int h,DirectorShot s,CancellationToken stop,
+                                         Dictionary<string,DirectorAsset> assets,string[] ids,out bool reused) {
         reused=false;
-        Func<string,DirectorAsset> asset=id=>DirectorMedia.Asset(project,id);
+        Func<string,DirectorAsset> asset=id=>assets[id];
         Func<string,string> source=id=>DirectorMedia.PathFor(project,asset(id));
         var visual=asset(s.visualId);
-        var refs=new[]{s.visualId,s.audioId,s.voice==null?null:s.voice.sampleId,s.presenter==null?null:s.presenter.portraitId,s.template==null?null:s.template.imageId}.Where(id=>id!=null).Select(id=>asset(id).hash);
+        var refs=ids.Where(id=>id!=null).Select(id=>asset(id).hash);
+        var fingerprints=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var a in assets.Values)fingerprints[DirectorMedia.PathFor(project,a)]=a.hash;
         bool speechSubtitles=s.audioId!=null && String.IsNullOrWhiteSpace(s.caption);
         var speech=speechSubtitles?DirectorTranscription.Load():null;
         var settings=DirectorMedia.Canonical(new{s.visualId,s.audioId,s.caption,s.effect,s.effectText,cardTitle=s.effectText==null?s.title:null,s.startMs,s.audioStartMs,s.durationMs,s.voice,s.presenter,s.template,
@@ -231,7 +249,7 @@ static class DirectorRender {
             string vPath=source(visual.id),vExt=visual.ext;
             int duration=s.durationMs,aStart=s.audioStartMs,vStart=s.startMs;
             if(s.voice!=null) {
-                aPath=Generate(job,new Dictionary<string,object>{{"kind","voice_clone"},{"samplePath",source(s.voice.sampleId)},{"text",s.voice.text},{"referenceText",s.voice.referenceText}},"voice.wav",stop);
+                aPath=Generate(job,new Dictionary<string,object>{{"kind","voice_clone"},{"samplePath",source(s.voice.sampleId)},{"text",s.voice.text},{"referenceText",s.voice.referenceText}},"voice.wav",stop,fingerprints);
                 aExt=".wav";aStart=0;duration=AudioMs(ffmpeg,aPath,aExt,job,stop);
                 if(duration<40 || duration>600000)throw DirectorMedia.Error("生成配音时长超出单镜范围。");
             }
@@ -252,11 +270,11 @@ static class DirectorRender {
                 var slice=DirectorMedia.Begin();slice.AddRange(new[]{"-ss",DirectorMedia.Sec(aStart)});DirectorMedia.Input(slice,aPath,aExt);
                 string narration=Path.Combine(job,"presenter-audio.wav");slice.AddRange(new[]{"-vn","-t",sec,"-ac","1","-ar","16000","-c:a","pcm_s16le",narration});
                 DirectorMedia.Exec(ffmpeg,slice,job,stop);
-                vPath=Generate(job,new Dictionary<string,object>{{"kind","talking_head"},{"portraitPath",source(s.presenter.portraitId)},{"audioPath",narration}},"presenter.mp4",stop);
+                vPath=Generate(job,new Dictionary<string,object>{{"kind","talking_head"},{"portraitPath",source(s.presenter.portraitId)},{"audioPath",narration}},"presenter.mp4",stop,fingerprints);
                 vExt=".mp4";vStart=0;
             }
             string motion=null;
-            if(s.template!=null)motion=Generate(job,new Dictionary<string,object>{{"kind",s.template.kind},{"templateId",s.template.templateId},{"fields",s.template.fields??new Dictionary<string,string>()},{"imagePath",s.template.imageId==null?null:source(s.template.imageId)},{"durationMs",duration},{"width",w},{"height",h},{"fps",Fps}},"template.mov",stop);
+            if(s.template!=null)motion=Generate(job,new Dictionary<string,object>{{"kind",s.template.kind},{"templateId",s.template.templateId},{"fields",s.template.fields??new Dictionary<string,string>()},{"imagePath",s.template.imageId==null?null:source(s.template.imageId)},{"durationMs",duration},{"width",w},{"height",h},{"fps",Fps}},"template.mov",stop,fingerprints);
             var args=DirectorMedia.Begin();
             if(vStart>0)args.AddRange(new[]{"-ss",DirectorMedia.Sec(vStart)});
             DirectorMedia.Input(args,vPath,vExt);

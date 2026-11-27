@@ -4,9 +4,11 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
+using Microsoft.Win32.SafeHandles;
 
 namespace XutiDesktop {
 static class DirectorTest {
@@ -106,6 +108,59 @@ static class DirectorTest {
             } finally {stop.Cancel();}
         }
     }
+    [DllImport("kernel32.dll",SetLastError=true)]
+    static extern bool DeviceIoControl(SafeFileHandle file,uint code,IntPtr input,int inputBytes,IntPtr output,int outputBytes,out int returned,IntPtr overlapped);
+    static DirectorAsset LocalPack(string temp,string project,string movie,string wav,string ffmpeg) {
+        string pack=Directory.CreateDirectory(Path.Combine(temp,"material-pack")).FullName;
+        string deep=Directory.CreateDirectory(Path.Combine(pack,"camera","take")).FullName;
+        string large=Path.Combine(deep,"long-source.mp4");
+        File.Copy(movie,large);
+        const long logicalSize=64L*1024*1024*1024;
+        using(var file=File.Open(large,FileMode.Open,FileAccess.Write,FileShare.None)) {
+            int returned;
+            // FSCTL_SET_SPARSE keeps this valid 64 GiB MP4 fixture small on disk.
+            if(!DeviceIoControl(file.SafeFileHandle,0x900c4,IntPtr.Zero,0,IntPtr.Zero,0,out returned,IntPtr.Zero))
+                throw new IOException("Unable to create sparse MP4 test fixture: "+Marshal.GetLastWin32Error());
+            file.Seek(0,SeekOrigin.End);
+            file.Write(new byte[]{0,0,0,0,102,114,101,101},0,8); // Extends the final MP4 free box through EOF.
+            file.SetLength(logicalSize);
+        }
+        File.WriteAllText(Path.Combine(pack,"notes.txt"),"Unsupported text file");
+        File.WriteAllBytes(Path.Combine(pack,"broken.mp4"),new byte[0]);
+        int visited=0;
+        var imported=DirectorStudio.ImportSelection(project,new string[0],pack,500,new HashSet<string>(),ffmpeg,CancellationToken.None,()=>visited++);
+        Check(imported.assets.Count==1 && imported.skippedFiles==2 && imported.problems.Count==1 && !imported.overLimit && visited==3,
+              "Nested pack did not preserve valid assets alongside skipped or broken files");
+        var json=DirectorMedia.Json();
+        var published=json.Serialize(imported.assets[0]);
+        Check(!published.Contains("material-pack") && !published.Contains("sourcePath"),"Local pack exposed a source path");
+        var id=(string)json.Deserialize<Dictionary<string,object>>(published)["id"];
+        var clip=DirectorMedia.Asset(project,id);
+        Check(clip.bytes==logicalSize && clip.durationMs>=1350 && clip.durationMs<=1500 && DirectorMedia.PathFor(project,clip)==large,
+              "Sparse source size, duration or local reference were lost");
+        Check(Directory.GetFiles(DirectorMedia.AssetDir(project,id),"*",SearchOption.AllDirectories).Sum(path=>new FileInfo(path).Length)<65536,
+              "Local import copied source media into the project");
+        var more=DirectorStudio.ImportSelection(project,new[]{large,wav,movie},null,1,new HashSet<string>{id},ffmpeg,CancellationToken.None);
+        Check(more.assets.Count==1 && more.duplicates==1 && more.overLimit,"Remaining slots, repeated selections or capacity receipt failed");
+
+        string narrationId=(string)json.Deserialize<Dictionary<string,object>>(json.Serialize(more.assets[0]))["id"];
+        // The existing imported narration is a private copy and must remain usable after the linked source changes.
+        File.SetLastWriteTimeUtc(wav,File.GetLastWriteTimeUtc(wav).AddMinutes(-2));
+        bool stale=false;
+        try{DirectorMedia.PathFor(project,DirectorMedia.Asset(project,narrationId));}catch(InvalidOperationException){stale=true;}
+        Check(stale && DirectorMedia.ImportLocal(project,wav,ffmpeg,CancellationToken.None).id!=narrationId,"Changed source did not invalidate the linked asset");
+        Console.WriteLine("Verified recursive pack import with a 64 GiB sparse MP4, bounded metadata, duplicate detection, partial success and changed-source detection.");
+        return clip;
+    }
+    static void PackCapacity(string temp,string project,string png) {
+        string pack=Directory.CreateDirectory(Path.Combine(temp,"image-pack")).FullName;
+        for(int i=0;i<501;i++)File.Copy(png,Path.Combine(pack,"image-"+i+".png"));
+        var imported=DirectorStudio.ImportSelection(project,new string[0],pack,500,new HashSet<string>(),null,CancellationToken.None);
+        var json=DirectorMedia.Json();
+        var reply=json.Deserialize<Dictionary<string,object>>(json.Serialize(imported));
+        Check(imported.assets.Count==500 && (bool)reply["overLimit"] && ((System.Collections.IList)reply["assets"]).Count==500,
+              "Expected one complete 500-asset pick response with an explicit capacity notice");
+    }
     public static int Run() {
         string temp=Directory.CreateDirectory(Path.Combine(Path.GetTempPath(),"xuti-"+Path.GetRandomFileName())).FullName;
         try {
@@ -123,7 +178,8 @@ static class DirectorTest {
             DirectorMedia.Exec(ff,new[]{"-nostdin","-y","-f","lavfi","-i","sine=frequency=510:duration=1.6","-ar","48000",wav},temp,CancellationToken.None);
             DirectorMedia.Exec(ff,new[]{"-nostdin","-y","-f","lavfi","-i","testsrc2=size=240x320:rate=25:duration=1.4","-f","lavfi","-i","sine=frequency=980:duration=1.4","-c:v","libx264","-threads","2","-pix_fmt","yuv420p","-c:a","aac","-shortest",movie},temp,CancellationToken.None);
             Func<string,DirectorAsset> add=file=>{using(var input=File.OpenRead(file))return DirectorMedia.Import(project,Guid.NewGuid().ToString(),Path.GetFileName(file),input,ff,CancellationToken.None);};
-            var photo=add(png);var voice=add(wav);var clip=add(movie);
+            var photo=add(png);var voice=add(wav);var clip=LocalPack(temp,project,movie,wav,ff);
+            PackCapacity(temp,project,png);
             bool deniedOther=false;
             try{DirectorMedia.Asset(studio.Project(Guid.NewGuid().ToString(),projectId),photo.id);}catch(InvalidOperationException){deniedOther=true;}
             Check(deniedOther,"Another owner's paired device accessed this asset");

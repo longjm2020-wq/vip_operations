@@ -26,6 +26,12 @@ type Model = Awaited<ReturnType<typeof resolveFeatureModel>>;
 type ImagePart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } };
+
+// Keep the previous total text allowance while retaining every eligible asset in the catalog.
+function noteLimit(assets: DirectorProject["assets"]) {
+  const withNotes = assets.filter((asset) => asset.note).length;
+  return Math.min(2000, Math.floor(160_000 / Math.max(1, withNotes)));
+}
 async function connection(feature: Feature) {
   const settings =
     encryptionReady() &&
@@ -210,20 +216,22 @@ export async function generateDirectorStoryboard(
     const extracts = docs.length
       ? await rows(
           db,
-          `SELECT id,left(extracted_text,3000) AS text FROM personal_assistant_files
+          `SELECT id,left(extracted_text,$3::int) AS text FROM personal_assistant_files
       WHERE user_id=$1::bigint AND id=ANY($2::uuid[])`,
           c.actor.id,
           docs.map((a) => a.fileId),
+          Math.min(3000, Math.floor(240_000 / docs.length)),
         )
       : [];
     const allowed = p.assets.filter(
       (a) => !(["portrait", "voiceSample"].includes(a.role) && !a.authorized),
     );
+    const maxNote = noteLimit(allowed);
     const materials = allowed.map((a) => ({
       id: a.id,
       role: a.role,
       name: a.name,
-      note: a.note,
+      note: a.note?.slice(0, maxNote),
       durationMs: a.durationMs,
       ...(a.role === "document"
         ? { text: extracts.find((f) => f.id === a.fileId)?.text }
@@ -377,6 +385,8 @@ export async function suggestDirectorShot(
     if (shot.locks.all || shot.locks.script)
       fail("DIRECTOR_LOCKED", "选中分镜的台词已锁定。", 409);
     const selected = await connection("director_storyboard");
+    const sources = p.assets.filter((a) => a.role === "document" || a.role === "product");
+    const maxNote = noteLimit(sources);
     const response = await ask(
       "director_storyboard",
       selected,
@@ -387,9 +397,7 @@ export async function suggestDirectorShot(
         instruction: b.instruction,
         shot,
         context: p.shots.map((s) => ({ title: s.title, script: s.script })),
-        sources: p.assets
-          .filter((a) => a.role === "document" || a.role === "product")
-          .map((a) => ({ name: a.name, note: a.note })),
+        sources: sources.map((a) => ({ name: a.name, note: a.note?.slice(0, maxNote) })),
       }),
       format({
         options: {

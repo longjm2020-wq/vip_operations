@@ -36,7 +36,7 @@ sealed class DirectorStudio {
         Fields(envelope,"channel","action","id","payload");DirectorMedia.Uuid(Value(envelope,"id"));
         var p=Value(envelope,"payload") as Dictionary<string,object>;
         if(action=="capabilities"){Fields(p);return;}
-        if(action=="pick")Fields(p,"projectId","kind");
+        if(action=="pick")Fields(p,"projectId","kind","remaining","knownIds");
         else if(action=="import")Fields(p,"projectId","fileId","name");
         else if(action=="preview")Fields(p,"projectId","assetId");
         else if(action=="read-frame")Fields(p,"projectId","assetId","atMs");
@@ -157,32 +157,97 @@ sealed class DirectorStudio {
         lock(gate){lastGrant=key;grantUntil=DateTime.UtcNow.AddSeconds(8);}
         return account;
     }
-    async Task<object> Pick(Form owner,string project,string kind,Func<bool> stillAuthorized) {
-        string[] selection;
+    const int MaxLocalAssets=500;
+    internal sealed class PickResult {
+        public readonly List<object> assets=new List<object>();
+        public readonly List<string> problems=new List<string>();
+        public int skippedFiles,skippedFolders,duplicates;
+        public bool overLimit,cancelled;
+        internal void Failure(string path,bool folder,Exception error) {
+            if(folder)skippedFolders++;else skippedFiles++;
+            if(problems.Count<3)problems.Add(Path.GetFileName(path)+"："+(error is InvalidOperationException?error.Message:"无法读取，请检查本机文件和访问权限。"));
+        }
+    }
+    static bool Skippable(Exception e) {
+        return e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException || e is System.Security.SecurityException;
+    }
+    internal static PickResult ImportSelection(string project,string[] files,string folder,int remaining,
+        HashSet<string> known,string ffmpeg,CancellationToken token,Action inspected=null) {
+        var result=new PickResult();
+        Action<string> import=file=>{
+            token.ThrowIfCancellationRequested();
+            if(inspected!=null)inspected();
+            if(!DirectorMedia.Inputs.Contains(Path.GetExtension(file).ToLowerInvariant())){result.skippedFiles++;return;}
+            // Stop before probing another asset once all available slots have been filled.
+            if(result.assets.Count>=remaining){result.overLimit=true;return;}
+            try {
+                var asset=DirectorMedia.ImportLocal(project,file,ffmpeg,token);
+                if(known.Add(asset.id))result.assets.Add(asset.Public());else result.duplicates++;
+            } catch(Exception e){if(!Skippable(e))throw;result.Failure(file,false,e);}
+        };
+        foreach(string file in files){import(file);if(result.overLimit)break;}
+        if(folder==null)return result;
+        DirectorMedia.PlainLocal(folder);
+        if(new DriveInfo(Path.GetPathRoot(folder)).DriveType==DriveType.Network)throw DirectorMedia.Error("请选择本机磁盘上的素材文件夹。");
+
+        var directories=new Stack<string>();
+        directories.Push(folder);
+        while(directories.Count>0 && !result.overLimit) {
+            token.ThrowIfCancellationRequested();
+            var path=directories.Pop();
+            try {
+                DirectorMedia.PlainLocal(path);
+                foreach(var entry in new DirectoryInfo(path).EnumerateFileSystemInfos()) {
+                    token.ThrowIfCancellationRequested();
+                    if((entry.Attributes & FileAttributes.Directory)!=0) {
+                        if((entry.Attributes & FileAttributes.ReparsePoint)!=0)result.skippedFolders++;
+                        else directories.Push(entry.FullName);
+                    } else {
+                        import(entry.FullName);
+                        if(result.overLimit)break;
+                    }
+                }
+            } catch(Exception e){if(!Skippable(e))throw;result.Failure(path,true,e);}
+        }
+        return result;
+    }
+    async Task<object> Pick(Form owner,string project,Dictionary<string,object> p,Func<bool> stillAuthorized,Action<int> progress) {
+        object slots=Value(p,"remaining");
+        if(slots!=null && (!(slots is int)||(int)slots<1||(int)slots>MaxLocalAssets))throw DirectorMedia.Error("项目的剩余素材数量无效。");
+        var ids=Value(p,"knownIds") as object[];
+        if(p.ContainsKey("knownIds") && (ids==null || ids.Length>MaxLocalAssets))throw DirectorMedia.Error("项目的已有素材编号无效。");
+        var known=new HashSet<string>((ids??new object[0]).Select(DirectorMedia.Uuid),StringComparer.OrdinalIgnoreCase);
+        // Web clients predating the remaining-slot field accept at most 80 assets.
+        int remaining=Math.Min(slots==null?80:(int)slots,MaxLocalAssets-known.Count);
+        string kind=Value(p,"kind") as string;
+        string[] selection=new string[0];string folder=null;
         if(kind=="files") {
             using(var picker=new OpenFileDialog{Multiselect=true,CheckFileExists=true,Title="导入导演项目素材",Filter="图片、音频和视频|"+String.Join(";",DirectorMedia.Inputs.Select(s=>"*"+s))}) {
-                selection=picker.ShowDialog(owner)==DialogResult.OK?picker.FileNames:new string[0];
+                if(picker.ShowDialog(owner)!=DialogResult.OK)return new PickResult{cancelled=true};
+                selection=picker.FileNames;
             }
         } else if(kind=="folder"){
-            using(var picker=new FolderBrowserDialog{Description="导入所选文件夹中第一层的图片、音频和视频",ShowNewFolderButton=false}) {
-                if(picker.ShowDialog(owner)!=DialogResult.OK)selection=new string[0];
-                else {
-                    DirectorMedia.PlainLocal(picker.SelectedPath);
-                    selection=Directory.EnumerateFiles(picker.SelectedPath).Where(f=>DirectorMedia.Inputs.Contains(Path.GetExtension(f).ToLowerInvariant())).Take(81).ToArray();
-                }
+            using(var picker=new FolderBrowserDialog{Description="导入所选文件夹及其子文件夹中的图片、音频和视频",ShowNewFolderButton=false}) {
+                if(picker.ShowDialog(owner)!=DialogResult.OK)return new PickResult{cancelled=true};
+                folder=picker.SelectedPath;
             }
         } else throw DirectorMedia.Error("未知的素材选择方式。");
-        if(selection.Length>80)throw DirectorMedia.Error("一次最多导入 80 份素材，请缩小选择范围。");
         if(!stillAuthorized())throw DirectorMedia.Error("本机授权已变化，请返回导演台重试。");
-        return await Task.Run(()=>{
-            string exe=DirectorMedia.Ffmpeg();var assets=new List<object>();
-            foreach(string file in selection) {
-                DirectorMedia.PlainLocal(file);
-                using(var stream=new FileStream(file,FileMode.Open,FileAccess.Read,FileShare.Read))
-                    assets.Add(DirectorMedia.Import(project,Guid.NewGuid().ToString(),Path.GetFileName(file),stream,exe,CancellationToken.None).Public());
-            }
-            return (object)new{assets};
-        });
+        int processed=0,reported=0;
+        // The WebView authorization callback may only run on its owning UI thread.
+        using(var stop=new CancellationTokenSource())
+        using(var timer=new System.Windows.Forms.Timer{Interval=500}) {
+            timer.Tick+=(sender,args)=>{
+                if(!stillAuthorized()){timer.Stop();stop.Cancel();return;}
+                int count=Volatile.Read(ref processed);
+                if(progress!=null && count!=reported){reported=count;progress(count);}
+            };
+            timer.Start();
+            try {
+                return await Task.Run(()=>ImportSelection(project,selection,folder,remaining,known,
+                    DirectorMedia.Ffmpeg(),stop.Token,()=>Interlocked.Increment(ref processed)));
+            } catch(OperationCanceledException){throw DirectorMedia.Error("本机授权已变化，已停止导入。");}
+        }
     }
     async Task<object> Import(string account,string project,string id,string name,Func<bool> stillAuthorized) {
         // Only this fixed same-origin authenticated media endpoint can supply remote bytes.
@@ -214,21 +279,25 @@ sealed class DirectorStudio {
             if(a.kind=="video")args.AddRange(new[]{"-ss",DirectorMedia.Sec(atMs)});
             DirectorMedia.Input(args,DirectorMedia.PathFor(project,a),a.ext);
             args.AddRange(new[]{"-an","-frames:v","1","-vf","scale=640:640:force_original_aspect_ratio=decrease","-q:v","4","-threads","1",file});
-            DirectorMedia.Exec(ffmpeg,args,project,CancellationToken.None,15000);
+            using(DirectorMedia.PinLocal(project,a))
+                DirectorMedia.Exec(ffmpeg,args,project,CancellationToken.None,15000);
             if(!File.Exists(file)||new FileInfo(file).Length>512*1024)throw DirectorMedia.Error("指定时间未读到可分析的画面。");
             return new{mime="image/jpeg",base64=Convert.ToBase64String(File.ReadAllBytes(file))};
         } finally {if(File.Exists(file))File.Delete(file);}
     }
-    internal async Task<object> Handle(Form owner,string account,string device,string action,Dictionary<string,object> p,Func<bool> authorized) {
+    internal async Task<object> Handle(Form owner,string account,string device,string action,Dictionary<string,object> p,Func<bool> authorized,Action<int> importProgress=null) {
         string ffmpeg=DirectorMedia.Ffmpeg();
         if(action=="capabilities")return await Task.Run(()=>DirectorRender.Capabilities(ffmpeg));
         if(!authorized())throw DirectorMedia.Error("请在「我的电脑」配对此设备并授权，再打开本机导演台。");
         string project=Project(device,Value(p,"projectId"));
-        if(action=="pick")return await Pick(owner,project,Value(p,"kind") as string,authorized);
+        if(action=="pick")return await Pick(owner,project,p,authorized,importProgress);
         if(action=="import")return await Import(account,project,DirectorMedia.Uuid(Value(p,"fileId")),Value(p,"name") as string,authorized);
         if(action=="preview"||action=="read-frame") {
             string id=DirectorMedia.Uuid(Value(p,"assetId"));var asset=DirectorMedia.Asset(project,id);
-            if(action=="preview"){Open(DirectorMedia.PathFor(project,asset));return new{opened=true};}
+            if(action=="preview"){
+                using(DirectorMedia.PinLocal(project,asset))Open(DirectorMedia.PathFor(project,asset));
+                return new{opened=true};
+            }
             var ms=Value(p,"atMs");
             if(ms!=null&&!(ms is int))throw DirectorMedia.Error("帧时间无效。");
             return await Task.Run(()=>Frame(project,id,ms==null?0:(int)ms,ffmpeg));

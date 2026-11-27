@@ -20,7 +20,7 @@ static partial class Native {
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
     static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
 
-    static void CheckBatchEntryName(SafeFileHandle handle,string path) {
+    internal static void CheckBatchEntryName(SafeFileHandle handle,string path) {
         var actual=new StringBuilder(1024);
         uint length=GetFinalPathNameByHandleW(handle,actual,(uint)actual.Capacity,0);
         if(length==0 || length>=actual.Capacity || !SameFolder(actual.ToString(),@"\\?\"+path))

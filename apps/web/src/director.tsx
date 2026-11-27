@@ -7,6 +7,7 @@ import {
   Empty,
   Input,
   Modal,
+  Pagination,
   Progress,
   Select,
   Space,
@@ -26,6 +27,7 @@ import {
 import { useLocation, useSearchParams } from "react-router-dom";
 import {
   directorAspects,
+  directorAssetLimit,
   directorRoles,
   emptyDirectorLocks,
   type DirectorAsset,
@@ -67,6 +69,18 @@ const uploadTypes =
   "image/*,video/mp4,video/quicktime,video/webm,audio/mpeg,audio/wav,audio/mp4,.mp3,.wav,.m4a,.pdf,.docx,.txt,.md,.srt,.pptx,.xlsx";
 const prettySeconds = (milliseconds: number) =>
   `${Number((milliseconds / 1000).toFixed(2))} 秒`;
+const assetPageSize = 40;
+const assetLimitMessage = `每个项目最多使用 ${directorAssetLimit} 份素材。`;
+function formatImportSize(bytes: number) {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let amount = bytes;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit++;
+  }
+  return `${amount.toLocaleString("zh-CN", { maximumFractionDigits: 2 })} ${units[unit]}`;
+}
 const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : "操作暂时无法完成，请重试。";
 const renderStatuses = {
@@ -344,6 +358,8 @@ function DirectorEditor({
     initial.shots[0]?.id || "",
   );
   const [assetId, setAssetId] = useState("");
+  const [assetPage, setAssetPage] = useState(1);
+  const currentAssetPage = Math.min(assetPage, Math.max(1, Math.ceil(draft.assets.length / assetPageSize)));
   const [selectedRenderId, setSelectedRenderId] = useState("");
   const [review, setReview] = useState(false);
   const [instruction, setInstruction] = useState("");
@@ -361,6 +377,8 @@ function DirectorEditor({
   const filesRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false);
+  const picker = useRef<AbortController | null>(null);
+  useEffect(() => () => picker.current?.abort(), []);
   const operationEpoch = useRef(0);
   const startedAuto = useRef(false);
   const receiptKey = useRef("");
@@ -851,33 +869,50 @@ function DirectorEditor({
   }, [autostart, connection.canRender, connection.local.isLoading, draft.id]);
 
   function appendAssets(items: DirectorAsset[]) {
-    setDraft((current) => {
-      const known = new Set(
-        current.assets.map((item) => item.fileId || item.localId),
-      );
-      const unique = items.filter((item) => {
-        const id = item.fileId || item.localId;
-        if (known.has(id)) return false;
-        known.add(id);
-        return true;
-      });
-      return {
-        ...current,
-        assets: [...current.assets, ...unique].slice(0, 80),
-      };
+    const sourceKey = (item: DirectorAsset) => item.fileId || `${item.deviceId}/${item.localId}`;
+    const known = new Set(draft.assets.map(sourceKey));
+    const unique = items.filter((item) => {
+      const key = sourceKey(item);
+      if (known.has(key)) return false;
+      known.add(key);
+      return true;
     });
-    if (items[0]) setAssetId(items[0].id);
+    if (!unique.length) return;
+    if (draft.assets.length + unique.length > directorAssetLimit) throw Error(assetLimitMessage);
+    setDraft((current) => ({ ...current, assets: [...current.assets, ...unique] }));
+    setAssetPage(Math.floor(draft.assets.length / assetPageSize) + 1);
+    setAssetId(unique[0].id);
   }
 
   function pickNative(kind: "files" | "folder") {
-    void run("正在导入本机素材…", async () => {
+    void run("正在导入本机素材…", async (isCurrent) => {
       const deviceId = connection.local.data?.deviceId;
       if (!deviceId || !connection.paired)
         throw Error("请先在「我的电脑」连接并授权这台电脑。");
-      const { assets } = await localDirectorRequest("pick", {
-        projectId: draft.id,
-        kind,
+      const remaining = directorAssetLimit - draft.assets.length;
+      const knownIds = draft.assets.flatMap((a) => a.deviceId === deviceId && a.localId ? [a.localId] : []);
+      const controller = new AbortController();
+      picker.current = controller;
+      const result = await localDirectorRequest("pick", {
+        projectId: draft.id, kind,
+        ...(connection.local.data?.localReferenceImport ? { remaining, knownIds } : {}),
+      }, controller.signal, (processed) => {
+        if (isCurrent()) setBusy(`正在导入本机素材，已检查 ${processed} 个文件…`);
+      }).catch((cause: unknown) => {
+        const detail = messageOf(cause);
+        if (!connection.local.data?.localReferenceImport && /512\s*MiB|最多导入\s*80\s*份/i.test(detail))
+          throw Error(`${detail} 请将小序 Windows 桌面端更新至 1.3.1 或更新版本，再点「导入本机文件夹」一次导入素材包。`);
+        throw cause;
+      }).finally(() => { picker.current = null; });
+      if (!isCurrent() || result.cancelled) return;
+      // 1.3.0 does not accept a remaining count, and can return too many items.
+      const known = new Set(knownIds);
+      const fresh = result.assets.filter((item) => {
+        if (known.has(item.id)) return false;
+        known.add(item.id);
+        return true;
       });
+      const assets = fresh.slice(0, remaining);
       if (assets.length) {
         const uniqueKinds = uniqueDirectorKinds([
           ...draft.assets.map((a) => a.mime),
@@ -893,9 +928,21 @@ function DirectorEditor({
             ),
           ),
         );
-        if (draft.assets.length + assets.length > 80)
-          setNotice("每个项目最多使用 80 份素材，已添加容量范围内的素材。");
       }
+      const parts: string[] = [];
+      if (assets.length) {
+        const bytes = assets.reduce((total, item) => total + item.bytes, 0);
+        parts.push(`已加入 ${assets.length} 份本机素材（${formatImportSize(bytes)}）。`);
+      }
+      const duplicates = (result.duplicates || 0) + result.assets.length - fresh.length;
+      if (duplicates) parts.push(`${duplicates} 份已在项目中。`);
+      if (result.skippedFiles) parts.push(`已跳过 ${result.skippedFiles} 个文件。`);
+      if (result.skippedFolders) parts.push(`已跳过 ${result.skippedFolders} 个文件夹。`);
+      if (result.problems?.length) parts.push(result.problems.join("；"));
+      if (result.overLimit || fresh.length > remaining)
+        parts.push(`已达到项目 ${directorAssetLimit} 份素材的容量，已停止检查。余下文件可在另一项目继续导入。`);
+      if (!parts.length && result.cancelled === false) parts.push("所选目录中未找到可导入的图片、视频或音频。");
+      setNotice(parts.join(" "));
     });
   }
 
@@ -904,12 +951,12 @@ function DirectorEditor({
     event.target.value = "";
     if (!chosen.length) return;
     await run("正在上传项目素材…", async () => {
-      const files = chosen.slice(0, 80 - draft.assets.length);
+      const files = chosen.slice(0, directorAssetLimit - draft.assets.length);
       const uniqueKinds = uniqueDirectorKinds([
         ...draft.assets.map((a) => a.mime),
         ...files.map((f) => f.type),
       ]);
-      if (!files.length) throw Error("每个项目最多使用 80 份素材。");
+      if (!files.length) throw Error(assetLimitMessage);
       const uploaded: DirectorAsset[] = [];
       const failed: string[] = [];
       for (const file of files) {
@@ -928,7 +975,7 @@ function DirectorEditor({
       if (uploaded.length) appendAssets(uploaded);
       if (failed.length) setError(failed.join("；"));
       if (files.length < chosen.length)
-        setNotice("每个项目最多使用 80 份素材，已上传容量范围内的文件。");
+        setNotice(assetLimitMessage + "已上传容量范围内的文件。");
       void cache.invalidateQueries({ queryKey: ["director-library", userId] });
     });
   }
@@ -1237,14 +1284,14 @@ function DirectorEditor({
         <section className="director-panel director-media" aria-label="素材库">
           <div className="director-section-heading">
             <h2>素材</h2>
-            <span>{draft.assets.length} / 80</span>
+            <span>{draft.assets.length} / {directorAssetLimit}</span>
           </div>
           <div className="director-imports">
             <Button
               icon={<CloudUploadOutlined aria-hidden />}
               disabled={
                 !!busy ||
-                draft.assets.length >= 80 ||
+                draft.assets.length >= directorAssetLimit ||
                 (connection.supported && !connection.paired)
               }
               onClick={() =>
@@ -1259,7 +1306,7 @@ function DirectorEditor({
               icon={<FolderOpenOutlined aria-hidden />}
               disabled={
                 !!busy ||
-                draft.assets.length >= 80 ||
+                draft.assets.length >= directorAssetLimit ||
                 (connection.supported && !connection.paired)
               }
               onClick={() =>
@@ -1272,7 +1319,7 @@ function DirectorEditor({
             </Button>
             <Button
               type="text"
-              disabled={!!busy || draft.assets.length >= 80}
+              disabled={!!busy || draft.assets.length >= directorAssetLimit}
               onClick={() => {
                 setLibrarySelected([]);
                 setLibraryOpen(true);
@@ -1283,7 +1330,7 @@ function DirectorEditor({
             {connection.supported && (
               <Button
                 type="text"
-                disabled={!!busy || draft.assets.length >= 80}
+                disabled={!!busy || draft.assets.length >= directorAssetLimit}
                 onClick={() => filesRef.current?.click()}
               >
                 上传到工作台
@@ -1310,12 +1357,14 @@ function DirectorEditor({
             />
           </div>
           <p className="director-muted">
-            {draft.assets.length
-              ? "点击素材即可查看或修改它的角色。"
-              : "导入图片、视频、配音或文档后，为每份素材选择用途。"}
+            {connection.local.data?.localReferenceImport
+              ? "本机素材直接引用原文件。导入文件夹会包含子目录，剪辑期间请保留原文件的位置和内容。"
+              : connection.supported && connection.paired
+                ? "当前客户端复制本机素材，单份最多 512 MiB。大素材包请更新至 Windows 桌面端 1.3.1 或更新版本。"
+                : "可上传文件或从工作台选择。几十 GB 的本机素材包可在 Windows 桌面端按文件夹导入。"}
           </p>
           <div className="director-asset-list">
-            {draft.assets.map((item) => (
+            {draft.assets.slice((currentAssetPage - 1) * assetPageSize, currentAssetPage * assetPageSize).map((item) => (
               <button
                 type="button"
                 key={item.id}
@@ -1341,6 +1390,10 @@ function DirectorEditor({
               </button>
             ))}
           </div>
+          {draft.assets.length > assetPageSize && (
+            <Pagination size="small" current={currentAssetPage} total={draft.assets.length}
+              pageSize={assetPageSize} showSizeChanger={false} onChange={setAssetPage} />
+          )}
           {asset && (
             <div className="director-asset-settings">
               <Field label="素材角色">
@@ -1883,7 +1936,7 @@ function DirectorEditor({
                 disabled={
                   draft.assets.some((asset) => asset.fileId === item.id) ||
                   (!librarySelected.includes(item.id) &&
-                    draft.assets.length + librarySelected.length >= 80)
+                    draft.assets.length + librarySelected.length >= directorAssetLimit)
                 }
               >
                 {item.name}

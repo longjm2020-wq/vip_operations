@@ -463,7 +463,8 @@ sealed class DesktopShell : Form {
                 var payload=AssistantForm.D(data["payload"]);var core=workspace.CoreWebView2;
                 Func<bool> allowed=()=>!exiting && version==navigation && assistant.Authorized && assistant.DeviceId==device && DirectorStudio.DirectorPage(core.Source);
                 string account=op=="capabilities"?null:await director.Grant(core,device,payload,allowed,op=="status");
-                var result=await director.Handle(this,account,device,op,payload,allowed);
+                var result=await director.Handle(this,account,device,op,payload,allowed,
+                    count=>Reply(version,new{channel="xuti-director-progress",id,processed=count}));
                 if(DirectorStudio.DirectorPage(core.Source) && (account==null || (allowed() && account==await DirectorStudio.Session(core))))
                     Reply(version,new{channel="xuti-desktop",id,ok=true,data=result});
                 return;

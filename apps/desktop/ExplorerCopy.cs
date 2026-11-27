@@ -209,10 +209,10 @@ static partial class Native {
         internal static extern bool CreateDirectoryW(string path,IntPtr security);
         [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true,ExactSpelling=true)]
         internal static extern SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
-        [StructLayout(LayoutKind.Sequential)] struct HandleInfo {
+        [StructLayout(LayoutKind.Sequential)] internal struct HandleInfo {
             public uint attributes,creationLow,creationHigh,accessLow,accessHigh,writeLow,writeHigh,volume,sizeHigh,sizeLow,links,indexHigh,indexLow;
         }
-        [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle handle,out HandleInfo info);
+        [DllImport("kernel32.dll",SetLastError=true)] internal static extern bool GetFileInformationByHandle(SafeFileHandle handle,out HandleInfo info);
         internal static void VerifyBatchNote(SafeFileHandle handle,bool justCreated) {
             HandleInfo info;
             var excluded=FileAttributes.Directory|FileAttributes.ReparsePoint|FileAttributes.System|FileAttributes.Hidden|FileAttributes.Offline|FileAttributes.Device;

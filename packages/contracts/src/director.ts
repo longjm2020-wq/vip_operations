@@ -25,6 +25,7 @@ export const directorDeliverables = [
   "plan",
 ] as const;
 export const directorAspects = ["9:16", "16:9", "1:1"] as const;
+export const directorAssetLimit = 500;
 export const emptyDirectorLocks = {
   all: false,
   script: false,
@@ -113,7 +114,7 @@ const documentFields = {
   durationMs: z.number().int().min(1000).max(600_000),
   assets: z
     .array(directorAssetSchema)
-    .max(80)
+    .max(directorAssetLimit, `每个项目最多使用 ${directorAssetLimit} 份素材`)
     .refine(uniqueIds, "素材编号重复"),
   shots: z.array(directorShotSchema).max(100).refine(uniqueIds, "分镜编号重复"),
 };

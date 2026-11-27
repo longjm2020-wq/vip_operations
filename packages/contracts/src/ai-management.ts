@@ -17,7 +17,7 @@ export const aiFeatures = [
   {
     id: "director_storyboard", name: "导演创作与分镜", group: "AI 导演台",
     href: "/my-workspace/director", kind: "structured",
-    boundary: "根据创作指令、素材资料和参考片拆解生成原创分镜。仅模型实际调用产生用量，人工编排与桌面渲染独立运行。",
+    boundary: "根据创作指令、素材目录和参考片拆解生成原创分镜。素材较多时按数量缩短备注和文档摘录。仅模型实际调用产生用量，人工编排与桌面渲染独立运行。",
   },
   {
     id: "director_reference", name: "导演参考片拆解", group: "AI 导演台",

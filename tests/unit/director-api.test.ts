@@ -219,6 +219,20 @@ describe("director project API", () => {
       status: 404,
     });
   });
+  it("persists a complete 500-item local pack and rejects an overflow without changing its saved revision", async () => {
+    const c = actor();
+    const assets: DirectorAsset[] = Array.from({ length: 501 }, (_, index) => ({
+      id: randomUUID(), source: "local", role: "product", localId: randomUUID(),
+      deviceId: device, name: `素材-${index + 1}.mp4`, mime: "video/mp4", durationMs: 1200,
+    }));
+    const project = await createDirectorProject(c, {
+      requestId: randomUUID(), title: "本机整包", assets: assets.slice(0, -1),
+    });
+    expect((await readDirectorProject(c, project.id)).assets).toEqual(assets.slice(0, -1));
+    await expect(patchDirectorProject(c, project.id, { revision: 1, assets })).rejects.toMatchObject({ status: 400 });
+    expect((await readDirectorProject(c, project.id)).revision).toBe(1);
+  });
+
   it("resolves canonical library identities and binds local material to its own paired device", async () => {
     const c = actor(),
       product = await file("商品.png", "image/png", "product"),
@@ -379,6 +393,24 @@ describe("director project API", () => {
         confirm: true,
       }),
     ).toMatchObject({ status: "queued" });
+  });
+  it("keeps the full large local catalog available to the director with bounded notes", async () => {
+    const c = actor();
+    const assets: DirectorAsset[] = Array.from({ length: 500 }, (_, i) => ({
+      id: randomUUID(), localId: randomUUID(), deviceId: device, source: "local",
+      role: "product", name: `商品视频-${i}.mp4`, mime: "video/mp4", note: "镜".repeat(2000),
+    }));
+    const s = shot({ visualId: assets[499].id });
+    const p = await createDirectorProject(c, { requestId: randomUUID(), title: "整包", assets, shots: [s] });
+    const { locks: _, ...fields } = s;
+    fx.model.mockResolvedValueOnce(envelope({ conflicts: [], shots: [fields] }));
+    const result = await generateDirectorStoryboard(c, p.id, { revision: 1, shotId: s.id });
+    const body = JSON.parse(fx.model.mock.calls[0][2].body);
+    const catalog = JSON.parse(body.messages[1].content).assets;
+    expect(catalog).toHaveLength(500);
+    expect(catalog[499]).toMatchObject({ id: assets[499].id, note: "镜".repeat(320) });
+    expect(result.shots[0].visualId).toBe(assets[499].id);
+    expect(result.assets[499].note).toHaveLength(2000);
   });
   it("edits only the requested shot, preserves locked fields, offers uncommitted choices, and refuses malformed model output", async () => {
     const c = actor(),

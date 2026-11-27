@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "../../packages/contracts/src/personal-assistant.js";
 import {
   emptyDirectorLocks,
@@ -43,7 +44,12 @@ async function mockDirector(
   page: Page,
   initial: Partial<DirectorProject> = {},
   native = false,
-  options?: { storyboardGate?: Promise<void>; assistantReady?: boolean },
+  options?: {
+    storyboardGate?: Promise<void>;
+    assistantReady?: boolean;
+    pickedAssets?: { id: string; name: string; kind: string; bytes: number; durationMs?: number }[];
+    linkedImport?: boolean;
+  },
 ) {
   const assistant = await mockDirectorAssistant(page, options?.assistantReady);
   let project: DirectorProject = {
@@ -81,7 +87,17 @@ async function mockDirector(
             deviceId,
           };
         if (action === "director-capabilities")
-          return { ffmpeg: true, installation: "" };
+          return { ffmpeg: true, installation: "", localReferenceImport: options?.linkedImport };
+        if (action === "director-pick") {
+          if (!options?.linkedImport) {
+            expect(Object.keys(payload).sort()).toEqual(["kind", "projectId"]);
+            return { assets: options?.pickedAssets || [] };
+          }
+          return {
+            assets: options.pickedAssets || [], skippedFolders: 1, skippedFiles: 2,
+            problems: ["说明.txt：不支持此格式"], duplicates: 1, overLimit: true,
+          };
+        }
         if (action === "director-import")
           return {
             assets: [
@@ -389,6 +405,43 @@ test("导演台可从空白手工创作、采用候选文案、锁定并只导�
         call.action.endsWith("/storyboard") || call.action.endsWith("/renders"),
     ),
   ).toBe(false);
+});
+
+test("文件夹导入几十 GiB 的本机素材后列出跳过项并可分页保存", async ({ page }) => {
+  const localId = randomUUID();
+  const assets = Array.from({ length: 499 }, (_, index) => ({
+    id: randomUUID(), name: `素材-${index + 1}.mp4`, kind: "video" as const,
+    bytes: index === 0 ? 36 * 1024 ** 3 : 1024, durationMs: 1500,
+  }));
+  const fixture = await mockDirector(page, {
+    assets: [{ id: assetId, source: "local", role: "product", localId, deviceId, name: "已有.jpg", mime: "image/jpeg" }],
+  }, true, { linkedImport: true, pickedAssets: assets });
+  await page.goto(`${path}?project=${id}`);
+  await page.getByRole("button", { name: "导入本机文件夹" }).click();
+  const notice = page.getByText(/已加入 499 份本机素材（36 GiB）/);
+  await expect(notice).toContainText("已跳过 2 个文件");
+  await expect(notice).toContainText("说明.txt");
+  await expect(notice).toContainText("余下文件可在另一项目继续导入");
+  expect(fixture.nativeActions.find((a) => a.action === "director-pick")?.payload).toEqual({
+    projectId: id, kind: "folder", remaining: 499, knownIds: [localId],
+  });
+  await expect(page.getByText("500 / 500")).toBeVisible();
+  const media = page.getByRole("region", { name: "素材库" });
+  await media.getByTitle("13", { exact: true }).click();
+  await expect(media.getByRole("button", { name: /素材-499.mp4/ })).toBeVisible();
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect.poll(() => fixture.project().assets.length).toBe(500);
+  expect(fixture.project().assets.at(-1)?.localId).toBe(assets.at(-1)?.id);
+});
+
+test("旧 Windows 导演台继续使用原来的选文件桥接", async ({ page }) => {
+  const fixture = await mockDirector(page, {}, true, {
+    pickedAssets: [{ id: randomUUID(), name: "旧素材.mp4", kind: "video", bytes: 1024 ** 2, durationMs: 1000 }],
+  });
+  await page.goto(`${path}?project=${id}`);
+  await page.getByRole("button", { name: "导入本机文件", exact: true }).click();
+  await expect(page.getByText(/已加入 1 份本机素材/)).toBeVisible();
+  expect(fixture.nativeActions.find((a) => a.action === "director-pick")?.payload).toEqual({ projectId: id, kind: "files" });
 });
 
 test("浏览器打开聊天的智能交办会编排一次并提示 Windows 剪辑", async ({

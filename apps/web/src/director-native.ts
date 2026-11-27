@@ -58,18 +58,30 @@ export type DirectorLocalArtifact =
 
 type LocalRevision = { projectId: string; version: number };
 type LocalAssets = { assets: DirectorLocalAsset[] };
+type PickResult = LocalAssets & {
+  skippedFiles?: number;
+  skippedFolders?: number;
+  duplicates?: number;
+  cancelled?: boolean;
+  overLimit?: boolean;
+  problems?: string[];
+};
 type LocalOperations = {
   capabilities: [
     Record<string, never>,
     {
       ffmpeg: boolean;
       installation: string;
+      localReferenceImport?: boolean;
       voice_clone?: boolean;
       talking_head?: boolean;
       templates?: { id: string; kind: "ae_template" | "lottie" | "pag" }[];
     },
   ];
-  pick: [{ projectId: string; kind: "files" | "folder" }, LocalAssets];
+  pick: [
+    { projectId: string; kind: "files" | "folder"; remaining?: number; knownIds?: string[] },
+    PickResult,
+  ];
   import: [{ projectId: string; fileId: string; name: string }, LocalAssets];
   preview: [{ projectId: string; assetId: string }, { opened: true }];
   "read-frame": [
@@ -94,6 +106,7 @@ export function localDirectorRequest<Operation extends keyof LocalOperations>(
   operation: Operation,
   payload: LocalOperations[Operation][0],
   signal?: AbortSignal,
+  onPickProgress?: (processed: number) => void,
 ): Promise<LocalOperations[Operation][1]> {
   const bridge = supportsLocalDirector() ? window.chrome?.webview : undefined;
   if (!bridge)
@@ -118,7 +131,13 @@ export function localDirectorRequest<Operation extends keyof LocalOperations>(
     };
     const receive = (event: MessageEvent) => {
       const response = event.data;
-      if (response?.channel !== "xuti-desktop" || response.id !== id) return;
+      if (response?.id !== id) return;
+      if (operation === "pick" && response.channel === "xuti-director-progress") {
+        if (Number.isSafeInteger(response.processed) && response.processed >= 0)
+          onPickProgress?.(response.processed);
+        return;
+      }
+      if (response.channel !== "xuti-desktop") return;
       clean();
       if (!response.ok) {
         reject(
@@ -138,10 +157,14 @@ export function localDirectorRequest<Operation extends keyof LocalOperations>(
         : operation === "capabilities"
           ? 65_000
           : 20_000;
-    const timeout = setTimeout(() => {
-      clean();
-      reject(new Error("本机响应超时，请查看项目进度后重试。"));
-    }, timeoutMs);
+    // The native picker can stay open while the user chooses a folder. Linked
+    // imports report progress while indexing it and finish with one receipt.
+    const timeout = operation === "pick" && "remaining" in payload
+      ? undefined
+      : setTimeout(() => {
+          clean();
+          reject(new Error("本机响应超时，请查看项目进度后重试。"));
+        }, timeoutMs);
     if (signal?.aborted) return cancel();
     bridge.addEventListener("message", receive);
     window.addEventListener("pagehide", leave, { once: true });
