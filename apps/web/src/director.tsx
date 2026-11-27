@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Checkbox,
+  Dropdown,
   Input,
   Modal,
   Pagination,
@@ -14,7 +15,6 @@ import {
   Tag,
 } from "antd";
 import {
-  AudioOutlined,
   ArrowRightOutlined,
   CheckOutlined,
   CloudUploadOutlined,
@@ -22,7 +22,6 @@ import {
   FileTextOutlined,
   FolderOpenOutlined,
   LockOutlined,
-  PictureOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   SettingOutlined,
@@ -42,7 +41,7 @@ import {
   type DirectorShot,
   type DirectorSnapshot,
 } from "../../../packages/contracts/src/director";
-import type { AgentFile } from "../../../packages/contracts/src/assistant-agent";
+import { DirectorLibraryPicker } from "./director-library-picker";
 import { uniqueDirectorKinds } from "../../../packages/contracts/src/director-intent";
 import { api } from "./api";
 import { desktopClientRequest } from "./desktop-client";
@@ -59,7 +58,6 @@ import {
   getDirectorCapabilities,
   isVisual,
   libraryDirectorAsset,
-  libraryDirectorFiles,
   localDirectorAsset,
   nativeDirectorPlan,
   projectDirectorFields,
@@ -69,6 +67,12 @@ import {
 } from "./director-project";
 import { useUser } from "./shared";
 import { Field, MediaPreview, Seconds, ShotEditor } from "./director-editing";
+import {
+  DirectorAssetAuthorization,
+  DirectorAssetRoleBadge,
+  DirectorAssetRoleFilters,
+  type DirectorAssetFilter,
+} from "./director-asset-role";
 import "./director.css";
 
 const uploadTypes =
@@ -197,12 +201,7 @@ export function DirectorPage() {
   return (
     <main className="director-page">
       <header className="director-heading">
-        <div>
-          <h1>
-            <VideoCameraOutlined aria-hidden /> AI 导演台
-          </h1>
-          <p>把手里的素材编成分镜，再导出脚本或视频。</p>
-        </div>
+        <h1><VideoCameraOutlined aria-hidden /> AI 导演台</h1>
         <div className="director-projects">
           <Select
             aria-label="切换项目"
@@ -217,8 +216,8 @@ export function DirectorPage() {
             onChange={choose}
           />
           <Button
-            icon={<PlusOutlined />}
-            type="primary"
+            icon={<PlusOutlined aria-hidden />}
+            type={projectId ? "text" : "primary"}
             onClick={() => {
               setTitle("");
               setError("");
@@ -376,8 +375,8 @@ function DirectorEditor({
     initial.shots[0]?.id || "",
   );
   const [assetId, setAssetId] = useState("");
-  const [assetPage, setAssetPage] = useState(1);
-  const currentAssetPage = Math.min(assetPage, Math.max(1, Math.ceil(draft.assets.length / assetPageSize)));
+  const [assetFilter, setAssetFilter] = useState<DirectorAssetFilter>("all");
+  const assetListRef = useRef<HTMLDivElement>(null);
   const [selectedRenderId, setSelectedRenderId] = useState("");
   const [review, setReview] = useState(false);
   const [instruction, setInstruction] = useState("");
@@ -386,7 +385,6 @@ function DirectorEditor({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [librarySelected, setLibrarySelected] = useState<string[]>([]);
   const [alternatives, setAlternatives] = useState<{
     shotId: string;
     items: DirectorShot[];
@@ -408,7 +406,21 @@ function DirectorEditor({
     >(),
   );
   const pendingPauses = useRef(new Map<string, Promise<DirectorLocalJob>>());
-  const asset = draft.assets.find((item) => item.id === assetId) ?? draft.assets[0];
+  const filteredAssets = assetFilter === "all"
+    ? draft.assets
+    : draft.assets.filter((item) => item.role === assetFilter);
+  const assetIndex = Math.max(0, filteredAssets.findIndex((item) => item.id === assetId));
+  const asset = filteredAssets[assetIndex];
+  const currentAssetPage = Math.floor(assetIndex / assetPageSize) + 1;
+  const pageStart = (currentAssetPage - 1) * assetPageSize;
+  useEffect(() => {
+    const list = assetListRef.current;
+    const row = list?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
+    if (!list || !row) return;
+    if (row.offsetTop < list.scrollTop) list.scrollTop = row.offsetTop;
+    else if (row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight)
+      list.scrollTop = row.offsetTop + row.offsetHeight - list.clientHeight;
+  }, [step, asset?.id, assetFilter, currentAssetPage]);
   const selectedShot = draft.shots.find((item) => item.id === selectedShotId);
   const previewAsset = step === "media" ? asset : draft.assets.find(
       (item) =>
@@ -451,11 +463,6 @@ function DirectorEditor({
     refetchInterval: 2_000,
     staleTime: 0,
     retry: false,
-  });
-  const library = useQuery({
-    queryKey: ["director-library", userId],
-    queryFn: ({ signal }) => libraryDirectorFiles(signal),
-    enabled: libraryOpen,
   });
 
   function showStep(next: DirectorStep) {
@@ -906,7 +913,7 @@ function DirectorEditor({
     if (!unique.length) return;
     if (draft.assets.length + unique.length > directorAssetLimit) throw Error(assetLimitMessage);
     setDraft((current) => ({ ...current, assets: [...current.assets, ...unique] }));
-    setAssetPage(Math.floor(draft.assets.length / assetPageSize) + 1);
+    setAssetFilter("all");
     setAssetId(unique[0].id);
   }
 
@@ -1007,6 +1014,10 @@ function DirectorEditor({
   }
 
   function updateAsset(id: string, change: Partial<DirectorAsset>) {
+    if (change.role && assetFilter !== "all") {
+      setAssetFilter(change.role);
+      setAssetId(id);
+    }
     setDraft((current) => ({
       ...current,
       assets: current.assets.map((item) =>
@@ -1033,7 +1044,9 @@ function DirectorEditor({
       ...current,
       assets: current.assets.filter((item) => item.id !== id),
     }));
-    if (assetId === id) setAssetId("");
+    if (asset?.id === id) {
+      setAssetId(filteredAssets[assetIndex + 1]?.id ?? filteredAssets[assetIndex - 1]?.id ?? "");
+    }
   }
 
   function addShot(visual?: DirectorAsset) {
@@ -1188,124 +1201,113 @@ function DirectorEditor({
 
   return (
     <>
-      <section
-        className="director-project-bar director-panel"
-        aria-label="当前项目"
-      >
-        <div className="director-project-summary">
-          <div className="director-project-title">
-            <strong>{draft.title || "未命名项目"}</strong>
-            <span>
-              {draft.aspect} · {prettySeconds(draft.durationMs)} ·{" "}
-              {draft.output === "video" ? "剪辑成片" : "只交付脚本"}
-            </span>
-          </div>
-          <div className="director-project-actions">
-            <span className="director-save-state">
-              {dirty ? "有未保存修改" : `已保存 · 版本 ${saved.revision}`}
-            </span>
-            <Button
-              icon={<SettingOutlined />}
-              aria-expanded={settingsOpen}
-              aria-controls="director-settings"
-              onClick={() => setSettingsOpen(!settingsOpen)}
-            >
-              项目设置
-            </Button>
-            <Button
-              icon={<CheckOutlined />}
-              disabled={!dirty || !!busy}
-              onClick={() =>
-                void run("正在保存…", async () => {
-                  await save();
-                  setNotice("项目已保存。");
-                })
-              }
-            >
-              保存项目
-            </Button>
-            {draft.mode === "smart" &&
-              (canInterruptSmartWork ||
-                renders.some(
-                  (entry) =>
-                    entry.status === "running" || entry.status === "queued",
-                )) && (
-                <Button
-                  disabled={!!busy && !canInterruptSmartWork}
-                  onClick={() => void takeManualControl()}
-                >
-                  人工接管
-                </Button>
-              )}
-          </div>
+      <section className="director-project-bar" aria-label="当前项目">
+        <span className="director-project-specs">{draft.aspect} · {prettySeconds(draft.durationMs)}</span>
+        <div className="director-project-actions">
+          <span className="director-save-state">
+            {dirty ? "有未保存修改" : `已保存 · 版本 ${saved.revision}`}
+          </span>
+          <Button
+            icon={<SettingOutlined aria-hidden />}
+            type="text"
+            aria-expanded={settingsOpen}
+            aria-controls="director-settings"
+            onClick={() => setSettingsOpen(!settingsOpen)}
+          >
+            项目设置
+          </Button>
+          <Button
+            icon={<CheckOutlined aria-hidden />}
+            type={dirty ? "primary" : "text"}
+            disabled={!dirty || !!busy}
+            onClick={() =>
+              void run("正在保存…", async () => {
+                await save();
+                setNotice("项目已保存。");
+              })
+            }
+          >
+            保存项目
+          </Button>
+          {draft.mode === "smart" &&
+            (canInterruptSmartWork ||
+              renders.some(
+                (entry) =>
+                  entry.status === "running" || entry.status === "queued",
+              )) && (
+              <Button
+                disabled={!!busy && !canInterruptSmartWork}
+                onClick={() => void takeManualControl()}
+              >
+                人工接管
+              </Button>
+            )}
         </div>
-        {settingsOpen && (
-          <div className="director-project-controls" id="director-settings">
-            <Field label="项目名称">
-              <Input
-                aria-label="编辑项目名称"
-                value={draft.title}
-                maxLength={160}
-                disabled={!!busy}
-                onChange={(event) => updateDraft("title", event.target.value)}
-              />
-            </Field>
-            <Field label="创作方式">
-              <Select
-                aria-label="创作方式"
-                value={draft.mode}
-                options={explicitApprovalModes}
-                onChange={(value) => {
-                  if (value === "manual" && draft.mode === "smart")
-                    void takeManualControl();
-                  else updateDraft("mode", value);
-                }}
-                disabled={!!busy}
-              />
-            </Field>
-            <Field label="交付目标">
-              <Select
-                aria-label="交付目标"
-                value={draft.output}
-                options={outputModes}
-                onChange={(value) => updateDraft("output", value)}
-                disabled={!!busy}
-              />
-            </Field>
-            <Field label="画幅">
-              <Select
-                aria-label="画幅"
-                value={draft.aspect}
-                options={directorAspects.map((value) => ({
-                  value,
-                  label: value,
-                }))}
-                onChange={(value) => updateDraft("aspect", value)}
-                disabled={!!busy}
-              />
-            </Field>
-            <Field label="目标时长（秒）">
-              <Seconds
-                label="目标时长（秒）"
-                value={draft.durationMs}
-                minimum={1000}
-                maximum={600000}
-                onChange={(value) => updateDraft("durationMs", value)}
-                disabled={!!busy}
-              />
-            </Field>
-          </div>
-        )}
       </section>
+      {settingsOpen && (
+        <div className="director-project-controls" id="director-settings">
+          <Field label="项目名称">
+            <Input
+              aria-label="编辑项目名称"
+              value={draft.title}
+              maxLength={160}
+              disabled={!!busy}
+              onChange={(event) => updateDraft("title", event.target.value)}
+            />
+          </Field>
+          <Field label="创作方式">
+            <Select
+              aria-label="创作方式"
+              value={draft.mode}
+              options={explicitApprovalModes}
+              onChange={(value) => {
+                if (value === "manual" && draft.mode === "smart")
+                  void takeManualControl();
+                else updateDraft("mode", value);
+              }}
+              disabled={!!busy}
+            />
+          </Field>
+          <Field label="交付目标">
+            <Select
+              aria-label="交付目标"
+              value={draft.output}
+              options={outputModes}
+              onChange={(value) => updateDraft("output", value)}
+              disabled={!!busy}
+            />
+          </Field>
+          <Field label="画幅">
+            <Select
+              aria-label="画幅"
+              value={draft.aspect}
+              options={directorAspects.map((value) => ({
+                value,
+                label: value,
+              }))}
+              onChange={(value) => updateDraft("aspect", value)}
+              disabled={!!busy}
+            />
+          </Field>
+          <Field label="目标时长（秒）">
+            <Seconds
+              label="目标时长（秒）"
+              value={draft.durationMs}
+              minimum={1000}
+              maximum={600000}
+              onChange={(value) => updateDraft("durationMs", value)}
+              disabled={!!busy}
+            />
+          </Field>
+        </div>
+      )}
       <nav ref={stepNav} className="director-steps" aria-label="导演台制作流程">
         {(
           [
             {
               id: "media",
               title: "整理素材",
-              note: draft.assets.length
-                ? `${draft.assets.length} 份素材`
-                : "导入图片、视频或文档",
+              note: draft.assets.length ? `${draft.assets.length} 份` : "",
               icon: <FolderOpenOutlined />,
             },
             {
@@ -1313,7 +1315,7 @@ function DirectorEditor({
               title: "编排分镜",
               note: draft.shots.length
                 ? `${draft.shots.length} 镜 · ${prettySeconds(totalDuration)}`
-                : "手工编排或由 AI 起草",
+                : "",
               icon: <SnippetsOutlined />,
             },
             {
@@ -1321,9 +1323,7 @@ function DirectorEditor({
               title: "交付导出",
               note: renders.length
                 ? renderStatuses[renders[0].status]
-                : draft.output === "script"
-                  ? "下载分镜脚本"
-                  : "导出脚本或成片",
+                : "",
               icon: <DownloadOutlined />,
             },
           ] as const
@@ -1340,7 +1340,7 @@ function DirectorEditor({
             </span>
             <span>
               <strong>{item.title}</strong>
-              <small>{item.note}</small>
+              {item.note && <small>{item.note}</small>}
             </span>
           </button>
         ))}
@@ -1362,6 +1362,7 @@ function DirectorEditor({
       )}
       {notice && (
         <Alert
+          className="director-notice"
           type="info"
           showIcon
           title={notice}
@@ -1387,6 +1388,7 @@ function DirectorEditor({
             <div className="director-imports">
               <Button
                 type={draft.assets.length ? "default" : "primary"}
+                size="small"
                 icon={<CloudUploadOutlined aria-hidden />}
                 disabled={
                   !!busy ||
@@ -1403,6 +1405,8 @@ function DirectorEditor({
               </Button>
               <Button
                 icon={<FolderOpenOutlined aria-hidden />}
+                size="small"
+                type="text"
                 disabled={
                   !!busy ||
                   draft.assets.length >= directorAssetLimit ||
@@ -1416,25 +1420,31 @@ function DirectorEditor({
               >
                 {connection.supported ? "导入本机文件夹" : "上传文件夹"}
               </Button>
-              <Button
-                type="text"
-                disabled={!!busy || draft.assets.length >= directorAssetLimit}
-                onClick={() => {
-                  setLibrarySelected([]);
-                  setLibraryOpen(true);
-                }}
-              >
-                从工作台文件选择
-              </Button>
-              {connection.supported && (
-                <Button
-                  type="text"
-                  disabled={
-                    !!busy || draft.assets.length >= directorAssetLimit
-                  }
-                  onClick={() => filesRef.current?.click()}
+              {connection.supported ? (
+                <Dropdown
+                  trigger={["click"]}
+                  disabled={!!busy || draft.assets.length >= directorAssetLimit}
+                  menu={{
+                    items: [
+                      { key: "choose", label: "从工作台文件选择" },
+                      { key: "upload", label: "上传到工作台" },
+                    ],
+                    onClick: ({ key }) => {
+                      if (key === "choose") setLibraryOpen(true);
+                      else filesRef.current?.click();
+                    },
+                  }}
                 >
-                  上传到工作台
+                  <Button size="small" type="text" disabled={!!busy || draft.assets.length >= directorAssetLimit}>更多导入 ▾</Button>
+                </Dropdown>
+              ) : (
+                <Button
+                  size="small"
+                  type="text"
+                  disabled={!!busy || draft.assets.length >= directorAssetLimit}
+                  onClick={() => setLibraryOpen(true)}
+                >
+                  从工作台文件选择
                 </Button>
               )}
               <input
@@ -1457,14 +1467,14 @@ function DirectorEditor({
                 aria-label="上传项目文件夹"
               />
             </div>
-            <p className="director-muted">
+            <p className="director-muted director-import-hint">
               {connection.supported && !connection.paired
                 ? desktopAvailability
                 : connection.local.data?.localReferenceImport
-                  ? "本机素材直接引用原文件。导入文件夹会包含子目录，剪辑期间请保留原文件的位置和内容。"
+                  ? "本机素材引用原文件，剪辑期间请保留原位置。"
                   : connection.supported && connection.paired
                     ? "当前客户端复制本机素材，单份最多 512 MiB。大素材包请更新至 Windows 桌面端 1.3.1 或更新版本。"
-                    : "可上传文件或从工作台选择。几十 GB 的本机素材包可在 Windows 桌面端按文件夹导入。"}
+                    : "大素材包可在 Windows 桌面端按文件夹导入。"}
             </p>
             {connection.supported &&
               (!connection.paired || !connection.local.data?.ffmpeg) && (
@@ -1481,49 +1491,46 @@ function DirectorEditor({
                   </Button>
                 </div>
               )}
-            <div className="director-asset-list">
-              {draft.assets
-                .slice(
-                  (currentAssetPage - 1) * assetPageSize,
-                  currentAssetPage * assetPageSize,
-                )
-                .map((item) => (
+            <DirectorAssetRoleFilters
+              assets={draft.assets}
+              value={assetFilter}
+              onChange={(value) => {
+                if (assetFilter !== value) {
+                  setAssetFilter(value);
+                  setAssetId("");
+                }
+              }}
+            />
+            <div className="director-asset-list" ref={assetListRef}>
+              {filteredAssets.slice(pageStart, pageStart + assetPageSize).map((item) => (
                   <button
                     type="button"
                     key={item.id}
                     onClick={() => setAssetId(item.id)}
                     aria-pressed={asset?.id === item.id}
                   >
-                    <span className="director-asset-icon" aria-hidden>
-                      {item.mime.startsWith("audio/") ? (
-                        <AudioOutlined />
-                      ) : item.mime.startsWith("image/") ? (
-                        <PictureOutlined />
-                      ) : isVisual(item.mime) ? (
-                        <VideoCameraOutlined />
-                      ) : (
-                        <FileTextOutlined />
-                      )}
+                    <span className="director-asset-name">
+                      <strong title={item.name}>{item.name}</strong>
+                      <small>{directorMediaTypeLabel(item.mime)} · {item.source === "local" ? "本机" : "工作台"}</small>
                     </span>
-                    <span>
-                      <strong>{item.name}</strong>
-                      <small>
-                        {directorMediaTypeLabel(item.mime)} ·{" "}
-                        {roleNames[item.role]} ·{" "}
-                        {item.source === "local" ? "本机" : "工作台"}
-                      </small>
+                    <span className="director-asset-labels">
+                      <DirectorAssetRoleBadge role={item.role} />
+                      <DirectorAssetAuthorization asset={item} />
                     </span>
                   </button>
                 ))}
             </div>
-            {draft.assets.length > assetPageSize && (
+            {!filteredAssets.length && assetFilter !== "all" && (
+              <p className="director-role-empty">暂无{roleNames[assetFilter]}</p>
+            )}
+            {filteredAssets.length > assetPageSize && (
               <Pagination
                 size="small"
                 current={currentAssetPage}
-                total={draft.assets.length}
+                total={filteredAssets.length}
                 pageSize={assetPageSize}
                 showSizeChanger={false}
-                onChange={setAssetPage}
+                onChange={(page) => setAssetId(filteredAssets[(page - 1) * assetPageSize]?.id ?? "")}
               />
             )}
             {asset && (
@@ -1644,7 +1651,7 @@ function DirectorEditor({
                 canReadFrame={connection.canRender}
                 emptyDescription={
                   step === "media"
-                    ? "导入一张图片或一段视频，在这里查看画面"
+                    ? assetFilter === "all" ? "导入一张图片或一段视频，在这里查看画面" : "选择其他用途，查看对应素材"
                     : "为这个分镜选择画面素材，即可预览"
                 }
                 onOpen={(id) =>
@@ -2165,63 +2172,15 @@ function DirectorEditor({
           </>
         )}
       </div>
-      <Modal
-        title="从工作台文件选择"
-        open={libraryOpen}
-        onCancel={() => setLibraryOpen(false)}
-        onOk={() => {
-          const selected = (library.data || []).filter((item) =>
-            librarySelected.includes(item.id),
-          );
-          const uniqueKinds = uniqueDirectorKinds([
-            ...draft.assets.map((a) => a.mime),
-            ...selected.map((a) => a.mime),
-          ]);
-          appendAssets(
-            selected.map((item) =>
-              libraryDirectorAsset(
-                item,
-                draft.brief,
-                uniqueKinds.has(item.mime.split("/")[0]),
-              ),
-            ),
-          );
-          setLibraryOpen(false);
-        }}
-        okText="加入项目"
-        cancelText="取消"
-        okButtonProps={{ disabled: !librarySelected.length }}
-      >
-        {library.isLoading ? (
-          <Spin />
-        ) : library.isError ? (
-          <Alert type="error" title={messageOf(library.error)} />
-        ) : (
-          <Checkbox.Group
-            value={librarySelected}
-            onChange={setLibrarySelected}
-            className="director-library-options"
-          >
-            {(library.data || []).map((item: AgentFile) => (
-              <Checkbox
-                key={item.id}
-                value={item.id}
-                disabled={
-                  draft.assets.some((asset) => asset.fileId === item.id) ||
-                  (!librarySelected.includes(item.id) &&
-                    draft.assets.length + librarySelected.length >=
-                      directorAssetLimit)
-                }
-              >
-                {item.name}
-              </Checkbox>
-            ))}
-            {!library.data?.length && (
-              <p className="director-muted">工作台中暂无可用文件。</p>
-            )}
-          </Checkbox.Group>
-        )}
-      </Modal>
+      {libraryOpen && (
+        <DirectorLibraryPicker
+          userId={userId}
+          assets={draft.assets}
+          brief={draft.brief}
+          onAdd={appendAssets}
+          onClose={() => setLibraryOpen(false)}
+        />
+      )}
       <Modal
         title="选择本镜文案"
         open={!!alternatives}

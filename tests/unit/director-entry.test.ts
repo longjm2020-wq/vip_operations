@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   directorBriefIntent,
   inferDirectorRole,
+  uniqueDirectorKinds,
 } from "../../packages/contracts/src/director-intent.js";
 import { aiFeatures } from "../../packages/contracts/src/ai-management.js";
 import { inspectAgentUpload } from "../../apps/api/src/modules/workspace/agent-files.js";
@@ -52,6 +53,73 @@ describe("导演台对话入口与素材", () => {
     expect(
       inferDirectorRole("录音.wav", "audio/wav", "用我的声音样本克隆口播"),
     ).toBe("voiceSample");
+  });
+  it("同批导入时按各文件的用途分类，通用音色要求只用于唯一的录音", () => {
+    const media = [
+      ["产品实拍.mp4", "video/mp4"],
+      ["对标参考片.MP4", "video/mp4"],
+      ["授权肖像.jpg", "image/jpeg"],
+      ["声音样本.wav", "audio/wav"],
+      ["正式配音.m4a", "audio/mp4"],
+      ["录音03.wav", "audio/wav"],
+      ["资料.pdf", "application/pdf"],
+    ];
+    const singles = uniqueDirectorKinds(media.map(([, mime]) => mime));
+    const brief = "使用我的肖像和音色样本制作视频，拆解参考片后加入正式配音";
+    expect(
+      media.map(([name, mime]) =>
+        inferDirectorRole(name, mime, brief, singles.has(mime.split("/")[0])),
+      ),
+    ).toEqual([
+      "product",
+      "reference",
+      "portrait",
+      "voiceSample",
+      "narration",
+      "narration",
+      "document",
+    ]);
+    expect(
+      inferDirectorRole(
+        "2.wav",
+        "audio/wav",
+        "授权音色：2.wav；正式配音：3.wav",
+        false,
+      ),
+    ).toBe("voiceSample");
+    expect(
+      inferDirectorRole(
+        "3.wav",
+        "audio/wav",
+        "授权音色：2.wav；正式配音：3.wav",
+        false,
+      ),
+    ).toBe("narration");
+    expect(
+      inferDirectorRole(
+        "1.wav",
+        "audio/wav",
+        "11.wav 用作声音样本，1.wav 是正式配音",
+        false,
+      ),
+    ).toBe("narration");
+  });
+  it("区分视频画面和明确指定以视频提供的音色或配音", () => {
+    expect(inferDirectorRole("授权音色.mp4", "video/mp4")).toBe("voiceSample");
+    expect(inferDirectorRole("正式配音.mp4", "video/mp4")).toBe("narration");
+    expect(inferDirectorRole("商品介绍-正式配音.mp4", "video/mp4")).toBe("narration");
+    expect(
+      inferDirectorRole("1.mp4", "video/mp4", "1.mp4 用作正式配音", false),
+    ).toBe("narration");
+    expect(
+      inferDirectorRole(
+        "商品素材.mp4",
+        "video/mp4",
+        "做产品视频，还需要一段参考片",
+        true,
+      ),
+    ).toBe("product");
+    expect(inferDirectorRole("商品带旁白.mp4", "video/mp4")).toBe("product");
   });
   it("把云端模型的设置入口和本机能力分开登记", () => {
     expect(

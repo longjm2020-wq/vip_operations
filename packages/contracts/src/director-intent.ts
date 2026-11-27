@@ -16,42 +16,64 @@ export function inferDirectorRole(
   name: string,
   mime: string,
   brief = "",
-  onlyOfKind = false,
+  onlyOfKind = true,
 ): DirectorAsset["role"] {
   const isVideo = mime.startsWith("video/");
   const isImage = mime.startsWith("image/");
-  const index = brief.toLowerCase().indexOf(name.toLowerCase());
+  const isAudio = mime.startsWith("audio/");
+  const sampleName = /音色|声音样本|参考音|声纹|克隆|voice.?sample|clone/i;
+  const narrationName = /旁白|正式配音|成品配音|narration|voice.?over/i;
+  const lowerBrief = brief.toLowerCase();
+  const lowerName = name.toLowerCase();
+  let index = lowerBrief.indexOf(lowerName);
+  // Numeric camera/recording filenames can be suffixes of another file in the same brief.
+  while (index > 0 && /[\w.-]/.test(lowerBrief[index - 1])) {
+    index = lowerBrief.indexOf(lowerName, index + 1);
+  }
   if (index >= 0) {
     const before =
       brief
         .slice(0, index)
-        .split(/[，,、;；。]/)
+        .split(/[，,、;；。\n]/)
         .at(-1) || "";
-    const after = brief.slice(index + name.length).split(/[，,、;；。]/)[0];
+    const after = brief.slice(index + name.length).split(/[，,、;；。\n]/)[0];
     const hint =
       (after.match(
         /^[\s"”」》]*(?:是|做|作|为|用作|用做|当作|作为|用来|用于)\s*(.{1,8})/,
       )?.[1] || "") +
       (before.match(
-        /(参考片|同行视频|商品素材|产品图|肖像|人像|音色样本|正式配音)[：:\s是为叫用"“「《]*$/,
+        /(参考片|同行视频|商品素材|产品图|肖像|人像|授权音色|音色样本|声音样本|正式配音|旁白|文字资料)[：:\s是为叫用"“「《]*$/,
       )?.[1] || "");
     if (isVideo && /参考|同行|竞品|对标/.test(hint)) return "reference";
-    if (isImage && /肖像|人物|人像|主播/.test(hint))
-      return "portrait";
+    if (isImage && /肖像|人物|人像|主播/.test(hint)) return "portrait";
     if ((isImage || isVideo) && /商品|产品/.test(hint)) return "product";
-    if (mime.startsWith("audio/") && /配音|旁白/.test(hint)) return "narration";
-    if (mime.startsWith("audio/") && /音色|克隆|样本/.test(hint))
+    if ((isAudio || isVideo) && /音色|克隆|声音样本/.test(hint))
       return "voiceSample";
+    if ((isAudio || isVideo) && /配音|旁白/.test(hint)) return "narration";
+    if (isAudio && /样本/.test(hint)) return "voiceSample";
+    if (/文字资料/.test(hint)) return "document";
   }
-  if (
-    isVideo &&
-    onlyOfKind &&
-    /同行视频|参考(?:这[条段个份])?视频|参考片|对标视频|拆解.{0,5}视频/.test(
-      brief,
-    ) &&
-    !/商品(?:实拍|视频)|产品(?:实拍|视频)/.test(name)
-  )
-    return "reference";
+  if (isAudio) {
+    if (narrationName.test(name)) return "narration";
+    return sampleName.test(name) || (onlyOfKind && sampleName.test(brief))
+      ? "voiceSample"
+      : "narration";
+  }
+  if (isVideo) {
+    if (/同行|竞品|对标|参考|reference|competitor/i.test(name))
+      return "reference";
+    if (/正式配音|成品配音|narration|voice.?over/i.test(name))
+      return "narration";
+    if (/授权音色|音色样本|声音样本|voice.?sample/i.test(name))
+      return "voiceSample";
+    if (/商品|产品/.test(name)) return "product";
+    return onlyOfKind &&
+      /同行视频|参考(?:这[条段个份])?视频|参考片|对标视频|拆解.{0,5}视频/.test(
+        brief,
+      )
+      ? "reference"
+      : "product";
+  }
   if (
     isImage &&
     onlyOfKind &&
@@ -59,20 +81,7 @@ export function inferDirectorRole(
     !/产品|商品/.test(name)
   )
     return "portrait";
-  if (mime.startsWith("audio/")) {
-    if (/旁白|正式配音|成品配音|narration|voiceover/i.test(name))
-      return "narration";
-    return /音色|声音样本|参考音|声纹|克隆|voice.?sample|clone/i.test(
-      name + " " + brief,
-    )
-      ? "voiceSample"
-      : "narration";
-  }
-  if (mime.startsWith("video/"))
-    return /参考|同行|竞品|对标|reference|competitor/i.test(name)
-      ? "reference"
-      : "product";
-  if (mime.startsWith("image/"))
+  if (isImage)
     return /人像|肖像|半身照|主播|头像|portrait|headshot/i.test(name)
       ? "portrait"
       : "product";

@@ -91,7 +91,7 @@ const ProjectDetailPage = lazyPage(() => import("./projects").then(module => ({ 
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
-const coreFeatureSummary = "AI 员工独立交办与小序派单 · AI 导演台素材预览、分镜与成片导出 · 公司知识库与知识图谱 · 多中转站智选模型与价格用量 · 实时语音与演示 · 公开网页搜索 · 小序意图识别、电脑与网页操作 · Windows 企业微信定位、后台复制文件、分发附件时自动补建目录、创建同名文本 · Mac Finder 文件复制 · 云端和本地浏览器 · 三栏工作台 · 文档、图像视频与语音制作 · 经营分析与商品决策 · 聚水潭库存 · 协作表格 · AIGC";
+const coreFeatureSummary = "AI 员工独立交办与小序派单 · AI 导演台素材分类与预览、分镜与成片导出 · 公司知识库与知识图谱 · 多中转站智选模型与价格用量 · 实时语音与演示 · 公开网页搜索 · 小序意图识别、电脑与网页操作 · Windows 企业微信定位、后台复制文件、分发附件时自动补建目录、创建同名文本 · Mac Finder 文件复制 · 云端和本地浏览器 · 三栏工作台 · 文档、图像视频与语音制作 · 经营分析与商品决策 · 聚水潭库存 · 协作表格 · AIGC";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),

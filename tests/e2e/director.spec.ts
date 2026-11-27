@@ -434,7 +434,7 @@ test("导演台可从空白手工创作、采用候选文案、锁定并只导�
 test("文件夹导入几十 GiB 的本机素材后列出跳过项并可分页保存", async ({ page }) => {
   const localId = randomUUID();
   const assets = Array.from({ length: 499 }, (_, index) => ({
-    id: randomUUID(), name: `素材-${index + 1}.mp4`, kind: "video" as const,
+    id: randomUUID(), name: index === 497 ? "节奏参考片.mp4" : `素材-${index + 1}.mp4`, kind: "video" as const,
     bytes: index === 0 ? 36 * 1024 ** 3 : 1024, durationMs: 1500,
   }));
   const fixture = await mockDirector(page, {
@@ -456,6 +456,14 @@ test("文件夹导入几十 GiB 的本机素材后列出跳过项并可分页保
   const media = page.getByRole("region", { name: "素材库" });
   await media.getByTitle("13", { exact: true }).click();
   await expect(media.getByRole("button", { name: /素材-499.mp4/ })).toBeVisible();
+  const filters = media.getByRole("group", { name: "按用途筛选" });
+  await filters.getByRole("button", { name: /参考片\s*1$/ }).click();
+  await expect(media.getByRole("button", { name: /节奏参考片\.mp4/, pressed: true })).toBeVisible();
+  await expect(media.getByTitle("13", { exact: true })).toHaveCount(0);
+  await filters.getByRole("button", { name: /商品素材\s*499$/ }).click();
+  await expect(media.getByRole("button", { name: /已有\.jpg/, pressed: true })).toBeVisible();
+  await media.getByTitle("13", { exact: true }).click();
+  await expect(media.getByRole("button", { name: /素材-480\.mp4/, pressed: true })).toBeVisible();
   await page.getByRole("button", { name: "保存项目" }).click();
   await expect.poll(() => fixture.project().assets.length).toBe(500);
   expect(fixture.project().assets.at(-1)?.localId).toBe(assets.at(-1)?.id);
@@ -466,6 +474,18 @@ test("旧 Windows 导演台继续使用原来的选文件桥接", async ({ page 
     pickedAssets: [{ id: randomUUID(), name: "旧素材.mp4", kind: "video", bytes: 1024 ** 2, durationMs: 1000 }],
   });
   await page.goto(`${path}?project=${id}`);
+  const more = page.getByRole("button", { name: /更多导入/ });
+  await more.click();
+  await page.getByRole("menuitem", { name: "从工作台文件选择" }).click();
+  const dialog = page.getByRole("dialog", { name: "从工作台文件选择" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "取消" }).click();
+  await more.click();
+  const choosing = page.waitForEvent("filechooser");
+  await page.getByRole("menuitem", { name: "上传到工作台" }).click();
+  const chooser = await choosing;
+  expect(await chooser.element().getAttribute("aria-label")).toBe("上传项目文件");
+  await chooser.setFiles([]);
   await page.getByRole("button", { name: "导入本机文件", exact: true }).click();
   await expect(page.getByText(/已加入 1 份本机素材/)).toBeVisible();
   expect(fixture.nativeActions.find((a) => a.action === "director-pick")?.payload).toEqual({ projectId: id, kind: "files" });
@@ -521,6 +541,165 @@ test("新手从本机导入视频、查看本地画面并用它创建第一个�
   expect(fixture.calls.some((call) => /\/(storyboard|renders)$/.test(call.action))).toBe(false);
 });
 
+test("混合素材分别标明六种用途，筛选与改类同步显示授权", async ({
+  page,
+}, testInfo) => {
+  const materials = [
+    { name: "羊绒衫细节.jpg", kind: "image", role: "商品素材" },
+    { name: "模特肖像.jpg", kind: "image", role: "授权肖像" },
+    { name: "演员音色样本.wav", kind: "audio", role: "授权音色" },
+    { name: "冬季旁白.mp3", kind: "audio", role: "正式配音" },
+    { name: "节奏参考片.mp4", kind: "video", role: "参考片" },
+  ];
+  const fixture = await mockDirector(
+    page,
+    {
+      title: "冬季羊绒衫拍摄素材",
+      assets: [
+        {
+          id: assetId,
+          fileId,
+          source: "library",
+          role: "document",
+          name: "商品说明.txt",
+          mime: "text/plain",
+        },
+      ],
+    },
+    true,
+    {
+      linkedImport: true,
+      pickedAssets: materials.map(({ name, kind }) => ({
+        id: randomUUID(),
+        name,
+        kind,
+        bytes: 1024,
+      })),
+      previewFrame: (
+        await sharp("tests/fixtures/selection-care-label.png")
+          .resize(320)
+          .jpeg()
+          .toBuffer()
+      ).toString("base64"),
+    },
+  );
+  await page.goto(`${path}?project=${id}`);
+  const library = page.getByRole("region", { name: "素材库" });
+  const filters = library.getByRole("group", { name: "按用途筛选" });
+  const filter = (role: string, count: number) =>
+    filters.getByRole("button", { name: new RegExp(`^${role}\\s*${count}$`) });
+  const assetRow = (name: string) =>
+    library.getByRole("button", {
+      name: new RegExp(name.replaceAll(".", "\\.")),
+    });
+  const consent = library.getByRole("checkbox");
+  await filter("文字资料", 1).click();
+  await page.getByRole("button", { name: "导入本机文件夹" }).click();
+  await expect(filter("全部", 6)).toHaveAttribute("aria-pressed", "true");
+  await expect(assetRow("羊绒衫细节.jpg")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  const samples = [...materials, { name: "商品说明.txt", role: "文字资料" }];
+  for (const { name, role } of samples) {
+    await expect(filter(role, 1)).toBeVisible();
+    await expect(assetRow(name)).toContainText(role);
+  }
+  await expect(assetRow("模特肖像.jpg")).toContainText("待确认授权");
+  await expect(assetRow("演员音色样本.wav")).toContainText("待确认授权");
+  await expect(assetRow("冬季旁白.mp3")).not.toContainText("待确认授权");
+  await expect(
+    page.getByRole("img", { name: "羊绒衫细节.jpg的预览画面" }),
+  ).toBeInViewport();
+  await expect(assetRow("节奏参考片.mp4")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "用此素材创建分镜", exact: true })).toBeInViewport();
+  await page.screenshot({
+    path: testInfo.outputPath("素材用途-桌面.png"),
+    animations: "disabled",
+  });
+  for (const width of [1280, 1360]) {
+    await page.setViewportSize({ width, height: 900 });
+    const row = assetRow("模特肖像.jpg");
+    const authorization = await row.getByText("待确认授权", { exact: true }).boundingBox();
+    const source = await row.getByText("图片 · 本机", { exact: true }).boundingBox();
+    expect(authorization!.x + authorization!.width).toBeLessThanOrEqual(source!.x);
+  }
+  await page.screenshot({ path: testInfo.outputPath("素材用途-中等宽度.png"), animations: "disabled" });
+  for (const width of [768, 820]) {
+    await page.setViewportSize({ width, height: 900 });
+    const director = page.locator(".director-page");
+    await expect(page.getByRole("button", { name: "保存项目" })).toBeInViewport();
+    const layout = await director.evaluate((element) => {
+      const controls = [".director-projects", ".director-project-actions", ".director-steps"].map(
+        (selector) => element.querySelector(selector)!.getBoundingClientRect(),
+      );
+      const overlap = controls.some((rect, index) =>
+        controls.slice(index + 1).some((other) =>
+          rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top,
+        ),
+      );
+      return { overlap, overflow: element.scrollWidth > element.clientWidth + 1 };
+    });
+    expect(layout).toEqual({ overlap: false, overflow: false });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await library.evaluate(
+      (section) => section.scrollWidth <= section.clientWidth + 1,
+    ),
+  ).toBe(true);
+  await library.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath("素材用途-手机.png"),
+    fullPage: true,
+    animations: "disabled",
+  });
+
+  await filter("授权音色", 1).click();
+  await expect(assetRow("演员音色样本.wav")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(assetRow("冬季旁白.mp3")).toHaveCount(0);
+  await expect(consent).not.toBeChecked();
+  await consent.check();
+  await expect(assetRow("演员音色样本.wav")).toContainText("已确认授权");
+  await filter("正式配音", 1).click();
+  await library.getByLabel("素材角色", { exact: true }).click();
+  await page
+    .locator(".ant-select-dropdown:visible")
+    .getByText("授权音色", { exact: true })
+    .click();
+  await expect(filter("授权音色", 2)).toHaveAttribute("aria-pressed", "true");
+  await expect(assetRow("冬季旁白.mp3")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(assetRow("冬季旁白.mp3")).toContainText("待确认授权");
+  await expect(assetRow("演员音色样本.wav")).toContainText("已确认授权");
+  await expect(consent).not.toBeChecked();
+  await filter("正式配音", 0).click();
+  await expect(library.getByText(/暂无正式配音/)).toBeVisible();
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect
+    .poll(
+      () =>
+        fixture.project().assets.find((item) => item.name === "冬季旁白.mp3")
+          ?.role,
+    )
+    .toBe("voiceSample");
+  const assets = fixture.project().assets;
+  expect(
+    assets.find((item) => item.name === "演员音色样本.wav")?.authorized,
+  ).toBe(true);
+  expect(
+    assets.find((item) => item.name === "冬季旁白.mp3")?.authorized,
+  ).toBeFalsy();
+  expect(
+    assets.find((item) => item.name === "模特肖像.jpg")?.authorized,
+  ).toBeFalsy();
+});
+
 test("外机视频仍显示媒体类型并保留其已有用途，只有改选角色后才用作商品画面", async ({ page }) => {
   const fixture = await mockDirector(page, {
     assets: [{
@@ -541,6 +720,46 @@ test("外机视频仍显示媒体类型并保留其已有用途，只有改选�
   await page.getByRole("button", { name: "保存项目" }).click();
   await expect.poll(() => fixture.project().assets[0].role).toBe("product");
   expect(fixture.nativeActions.some((action) => action.action === "director-read-frame")).toBe(false);
+});
+
+test("工作台选材框展示用途并保留项目中已经调整的用途", async ({ page }) => {
+  const voiceId = randomUUID();
+  const fixture = await mockDirector(page, {
+    assets: [{ ...initialAsset, name: "服装实拍.jpg", role: "document" }],
+  });
+  await page.route("**/api/v1/my-workspace/assistant/files", (route) =>
+    route.fulfill({
+      json: {
+        data: [
+          { id: fileId, name: "服装实拍.jpg", mime: "image/jpeg" },
+          { id: voiceId, name: "主播音色样本.wav", mime: "audio/wav" },
+        ].map((file) => ({
+          ...file,
+          createdAt: timestamp,
+          source: "upload",
+          size: 800,
+        })),
+      },
+    }),
+  );
+  await page.goto(`${path}?project=${id}`);
+  await page.getByRole("button", { name: "从工作台文件选择" }).click();
+  const dialog = page.getByRole("dialog", { name: "从工作台文件选择" });
+  const existing = dialog.getByRole("checkbox", { name: /服装实拍.jpg/ });
+  await expect(existing).toBeDisabled();
+  await expect(existing).toHaveAccessibleName(/文字资料/);
+  const voice = dialog.getByRole("checkbox", { name: /主播音色样本.wav/ });
+  await expect(voice).toHaveAccessibleName(/授权音色/);
+  await voice.check();
+  await dialog.getByRole("button", { name: "加入项目" }).click();
+  const media = page.getByRole("region", { name: "素材库" });
+  const voiceRow = media.getByRole("button", { name: /主播音色样本.wav/ });
+  await expect(voiceRow).toContainText("授权音色");
+  await expect(voiceRow).toContainText("待确认授权");
+  await page.getByRole("button", { name: "保存项目" }).click();
+  await expect
+    .poll(() => fixture.project().assets.map(({ role }) => role))
+    .toEqual(["document", "voiceSample"]);
 });
 
 test("浏览器打开聊天的智能交办会编排一次并提示 Windows 剪辑", async ({
