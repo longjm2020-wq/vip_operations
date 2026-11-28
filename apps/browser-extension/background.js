@@ -102,7 +102,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   const stored = await chrome.storage.sync.get({
-    xutiOrigin: "http://localhost:5173",
+    xutiOrigin: "https://vip-web-production.up.railway.app",
   });
   const xutiOrigin = String(stored.xutiOrigin || "").replace(/\/+$/, "");
   if (!/^https?:\/\//i.test(xutiOrigin)) {

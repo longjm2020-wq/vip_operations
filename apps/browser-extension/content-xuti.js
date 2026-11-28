@@ -9,7 +9,7 @@
   if (params.get("extImport") !== "1") return;
 
   const { xutiOrigin } = await chrome.storage.sync.get({
-    xutiOrigin: "http://localhost:5173",
+    xutiOrigin: "https://vip-web-production.up.railway.app",
   });
   let configuredOrigin = "";
   try {

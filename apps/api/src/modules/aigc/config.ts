@@ -103,7 +103,14 @@ function activeSecrets(encrypted?: string): Record<string, string> {
 
 function activeSettings(config: Record<string, any>) {
   const { bailianWorkspaceId, bailianVoiceWorkspaceId, bailianVideoCheck, opentalkingBaseUrl, cozyclayBaseUrl, runninghubWorkflowId } = config;
-  return { bailianWorkspaceId, bailianVoiceWorkspaceId, bailianVideoCheck, opentalkingBaseUrl, cozyclayBaseUrl: cozyclayBaseUrl || "", runninghubWorkflowId };
+  return {
+    bailianWorkspaceId,
+    bailianVoiceWorkspaceId,
+    bailianVideoCheck,
+    opentalkingBaseUrl,
+    cozyclayBaseUrl: cozyclayBaseUrl || process.env.COZYCLAY_BASE_URL || "",
+    runninghubWorkflowId,
+  };
 }
 export async function storedSettings() {
   return (await one(

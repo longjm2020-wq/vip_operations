@@ -2,7 +2,7 @@ const input = document.getElementById("origin");
 const statusEl = document.getElementById("status");
 const saveBtn = document.getElementById("save");
 
-chrome.storage.sync.get({ xutiOrigin: "http://localhost:5173" }, (items) => {
+chrome.storage.sync.get({ xutiOrigin: "https://vip-web-production.up.railway.app" }, (items) => {
   input.value = items.xutiOrigin || "";
 });
 
