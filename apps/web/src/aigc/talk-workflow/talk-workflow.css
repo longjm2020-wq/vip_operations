@@ -19,7 +19,7 @@
   padding: 6px 10px;
   border-radius: 8px;
   background: var(--app-surface);
-  border: 1px solid var(--app-border);
+  border: 1px solid var(--app-shell-border);
 }
 
 .wf-studio-bar-left,
@@ -62,7 +62,7 @@
   flex-direction: column;
   border-radius: 8px;
   background: var(--app-surface);
-  border: 1px solid var(--app-border);
+  border: 1px solid var(--app-shell-border);
   overflow: hidden;
 }
 
@@ -74,8 +74,8 @@
   gap: 8px;
   min-height: 38px;
   padding: 6px 12px;
-  border-bottom: 1px solid var(--app-border);
-  background: color-mix(in srgb, var(--app-bg) 42%, var(--app-surface));
+  border-bottom: 1px solid var(--app-shell-border);
+  background: color-mix(in srgb, var(--app-bg) 32%, var(--app-surface));
   font-size: 12px;
   font-weight: 600;
 }
@@ -145,9 +145,9 @@
 
 /* 剪映风格居中大导入卡片 */
 .wf-import-dropzone {
-  border: 1px dashed var(--app-border-strong, var(--app-border));
+  border: 1px dashed var(--app-border);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--app-bg) 65%, transparent);
+  background: color-mix(in srgb, var(--app-bg) 55%, transparent);
   padding: 18px 14px;
   display: flex;
   flex-direction: column;
@@ -456,7 +456,7 @@
   flex-direction: column;
   border-radius: 8px;
   background: var(--app-surface);
-  border: 1px solid var(--app-border);
+  border: 1px solid var(--app-shell-border);
   overflow: hidden;
 }
 
@@ -468,8 +468,8 @@
   flex-wrap: wrap;
   gap: 8px;
   padding: 5px 10px;
-  border-bottom: 1px solid var(--app-border);
-  background: color-mix(in srgb, var(--app-bg) 45%, var(--app-surface));
+  border-bottom: 1px solid var(--app-shell-border);
+  background: color-mix(in srgb, var(--app-bg) 35%, var(--app-surface));
 }
 
 .wf-tl-tools,
@@ -501,15 +501,15 @@
 
 .wf-tl-headers {
   flex: 0 0 86px;
-  border-right: 1px solid var(--app-border);
-  background: color-mix(in srgb, var(--app-bg) 50%, var(--app-surface));
+  border-right: 1px solid var(--app-shell-border);
+  background: color-mix(in srgb, var(--app-bg) 45%, var(--app-surface));
   display: flex;
   flex-direction: column;
 }
 
 .wf-tl-header-ruler {
   height: 24px;
-  border-bottom: 1px solid var(--app-border);
+  border-bottom: 1px solid var(--app-shell-border);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -524,7 +524,7 @@
   padding: 0 8px;
   font-size: 11px;
   color: var(--app-secondary);
-  border-bottom: 1px solid var(--app-border);
+  border-bottom: 1px solid var(--app-shell-border);
 }
 
 .wf-tl-track-label-video {
@@ -715,7 +715,7 @@
   gap: 10px;
   color: var(--app-secondary);
   font-size: 13px;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.015);
 }
 
 /* CozyClay 面板复用样式 */
