@@ -104,11 +104,11 @@
 .wf-lib-tabs {
   flex: none;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 2px;
-  padding: 6px 6px 5px;
-  border-bottom: 1px solid var(--app-border);
-  background: color-mix(in srgb, var(--app-bg) 48%, var(--app-surface));
+  padding: 6px 4px 5px;
+  border-bottom: 1px solid var(--app-shell-border);
+  background: color-mix(in srgb, var(--app-bg) 42%, var(--app-surface));
 }
 
 .wf-lib-tab {
@@ -374,6 +374,87 @@
   line-height: 1.45;
   text-align: center;
   pointer-events: none;
+}
+
+.wf-player-subtitle.is-hormozi_pop {
+  background: transparent;
+  color: #ffe824;
+  font-size: 17px;
+  font-weight: 800;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95), 0 0 2px #000;
+}
+
+.wf-player-subtitle.is-karaoke_glow {
+  background: rgba(10, 12, 18, 0.6);
+  color: #52f0ff;
+  font-weight: 700;
+}
+
+.wf-player-subtitle.is-minimal_bar {
+  background: rgba(16, 18, 24, 0.72);
+  color: #f8fafc;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.wf-player-subtitle.is-neon_pink {
+  background: transparent;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  text-shadow: 0 0 10px #c04dff, 0 0 4px #ff4db8;
+}
+
+.wf-player-title-overlay {
+  position: absolute;
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
+  max-width: 86%;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(18, 20, 28, 0.75);
+  color: #ffea33;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.wf-ai-edit-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wf-code-preview {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--app-bg);
+  color: var(--app-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 180px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.wf-tl-clip-badges {
+  display: flex;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.wf-tl-clip-badge {
+  font-size: 9px;
+  line-height: 1.2;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--app-accent-soft) 75%, transparent);
+  color: var(--app-accent);
+  white-space: nowrap;
 }
 
 .wf-player-empty {

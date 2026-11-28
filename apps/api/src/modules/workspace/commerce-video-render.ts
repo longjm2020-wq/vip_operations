@@ -2,7 +2,15 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
+import type { WorkflowShotPostEdit } from "../../../../../packages/contracts/src/commerce-talk-workflow.js";
 import { runMedia } from "./agent-media.js";
+import {
+  buildColorFilterExpr,
+  buildEffectFilterExpr,
+  buildMotionFilterExpr,
+  makeStyledSubtitles,
+  type StyledSubtitleScene,
+} from "./workflow-post-edit.js";
 
 const width = 720;
 const height = 1280;
@@ -360,11 +368,13 @@ export type WorkflowRenderSegment = {
   content: Buffer;
   caption: string;
   durationSec: number;
+  postEdit?: WorkflowShotPostEdit;
 };
 
 /**
  * 将服装口播工作流的多类型分镜（对口型视频、三维预演视频、B-roll 视频、商品/分镜静态图）
- * 统一缩放为 720×1280 竖屏 30fps，补齐音轨并烧录中文字幕，合成最终成片 MP4。
+ * 统一缩放为 720×1280 竖屏 30fps，应用每镜滤镜、特效、关键帧运镜动画与镜头转场（xfade），
+ * 并烧录 AE 级动态中文字幕与顶部卖点花字，合成最终成片 MP4。
  */
 export async function renderWorkflowVideo(
   segments: readonly WorkflowRenderSegment[],
@@ -375,13 +385,20 @@ export async function renderWorkflowVideo(
   }
   const dir = await mkdtemp(join(tmpdir(), "xuti-workflow-render-"));
   try {
-    const normalizedPaths: string[] = [];
-    const subtitleScenes: CommerceVideoScene[] = [];
-    let timelineCursor = 0;
+    const normalizedSegments: Array<{
+      path: string;
+      duration: number;
+      caption: string;
+      postEdit?: WorkflowShotPostEdit;
+    }> = [];
 
     for (const [index, segment] of segments.entries()) {
       signal?.throwIfAborted();
       const segOut = join(dir, `seg-${index}.mp4`);
+      const pe = segment.postEdit;
+      const colorExpr = buildColorFilterExpr(pe?.filter);
+      const effectExpr = buildEffectFilterExpr(pe?.effect);
+
       if (segment.kind === "video") {
         validatePresenter(segment.content);
         const rawPath = join(dir, `raw-${index}.mp4`);
@@ -394,13 +411,29 @@ export async function renderWorkflowVideo(
         } catch {
           hasAudio = false;
         }
+        const motionExpr = buildMotionFilterExpr(
+          pe?.motion,
+          "video",
+          width,
+          height,
+          segDuration,
+        );
+        const vfChain = [
+          `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=0x16181c,setsar=1,fps=30`,
+          motionExpr,
+          colorExpr,
+          effectExpr,
+        ]
+          .filter(Boolean)
+          .join(",");
+
         const args = hasAudio
           ? [
               "-y",
               ...movieInput,
               rawPath,
               "-vf",
-              `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=0x16181c,setsar=1,fps=30`,
+              vfChain,
               "-af",
               "aresample=48000:async=1:first_pts=0",
               "-ar",
@@ -437,7 +470,7 @@ export async function renderWorkflowVideo(
               "1:a:0",
               "-shortest",
               "-vf",
-              `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=0x16181c,setsar=1,fps=30`,
+              vfChain,
               "-c:v",
               "libx264",
               "-pix_fmt",
@@ -456,17 +489,32 @@ export async function renderWorkflowVideo(
             ];
         await runMedia(args, signal, 90000, dir);
         const verified = await inspectPresenterFile(segOut, signal);
-        segDuration = verified.duration;
-        subtitleScenes.push({
-          start: timelineCursor,
-          end: timelineCursor + segDuration,
+        normalizedSegments.push({
+          path: segOut,
+          duration: verified.duration,
           caption: segment.caption.slice(0, 64),
+          postEdit: pe,
         });
-        timelineCursor += segDuration;
       } else {
         const imgPath = join(dir, `img-${index}.png`);
         await prepareProductImage(segment.content, imgPath);
         const segDuration = Math.max(2, Math.min(15, segment.durationSec || 4));
+        const motionExpr = buildMotionFilterExpr(
+          pe?.motion,
+          "image",
+          width,
+          height,
+          segDuration,
+        );
+        const vfChain = [
+          motionExpr || `scale=${width}:${height},setsar=1,fps=30`,
+          "setsar=1",
+          colorExpr,
+          effectExpr,
+        ]
+          .filter(Boolean)
+          .join(",");
+
         await runMedia(
           [
             "-y",
@@ -487,7 +535,7 @@ export async function renderWorkflowVideo(
             "-i",
             "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-vf",
-            `scale=${width}:${height},setsar=1,fps=30`,
+            vfChain,
             "-c:v",
             "libx264",
             "-pix_fmt",
@@ -506,47 +554,136 @@ export async function renderWorkflowVideo(
             segOut,
           ],
           signal,
-          60000,
+          90000,
           dir,
         );
-        subtitleScenes.push({
-          start: timelineCursor,
-          end: timelineCursor + segDuration,
+        const verified = await inspectPresenterFile(segOut, signal);
+        normalizedSegments.push({
+          path: segOut,
+          duration: verified.duration,
           caption: segment.caption.slice(0, 64),
+          postEdit: pe,
         });
-        timelineCursor += segDuration;
       }
-      normalizedPaths.push(segOut);
     }
 
-    const concatListPath = join(dir, "concat.txt");
-    await writeFile(
-      concatListPath,
-      normalizedPaths.map((p) => `file '${p.replaceAll("'", "'\\''")}'`).join("\n"),
-      { signal },
-    );
+    // 计算时间轴与转场重叠，并构建字幕时间表
+    const hasTransitions =
+      normalizedSegments.length > 1 &&
+      normalizedSegments.some(
+        (seg, idx) => idx > 0 && seg.postEdit?.transition && seg.postEdit.transition !== "none",
+      );
+
+    const subtitleScenes: StyledSubtitleScene[] = [];
+    let timelineCursor = 0;
+    const transitionPlan: Array<{ transition: string; duration: number; offset: number }> = [];
+
+    for (const [idx, seg] of normalizedSegments.entries()) {
+      const requestedTrans = seg.postEdit?.transition || "none";
+      const requestedDur = seg.postEdit?.transitionDurationSec || 0.4;
+      const prevDur = idx > 0 ? normalizedSegments[idx - 1].duration : 0;
+      const effectiveDur =
+        idx > 0 && requestedTrans !== "none"
+          ? Math.min(requestedDur, prevDur * 0.4, seg.duration * 0.4)
+          : 0;
+      const start = Math.max(0, timelineCursor - effectiveDur);
+      if (idx > 0 && hasTransitions) {
+        transitionPlan.push({
+          transition: requestedTrans === "none" ? "fade" : requestedTrans,
+          duration: Math.max(0.05, effectiveDur || 0.05),
+          offset: Math.max(0, start),
+        });
+      }
+      subtitleScenes.push({
+        start,
+        end: start + seg.duration,
+        caption: seg.caption,
+        subtitleStyle: seg.postEdit?.subtitleStyle,
+        titleOverlay: seg.postEdit?.titleOverlay,
+      });
+      timelineCursor = start + seg.duration;
+    }
 
     const mergedPath = join(dir, "merged.mp4");
-    await runMedia(
-      [
-        "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        concatListPath,
-        "-c",
-        "copy",
+    if (hasTransitions) {
+      const mergeArgs: string[] = ["-y", "-filter_complex_threads", "1"];
+      for (const seg of normalizedSegments) {
+        mergeArgs.push(...movieInput, seg.path);
+      }
+      const filterParts: string[] = [];
+      for (let i = 0; i < normalizedSegments.length; i++) {
+        filterParts.push(`[${i}:v]settb=AVTB,fps=30[v${i}]`);
+        filterParts.push(`[${i}:a]aresample=48000[a${i}]`);
+      }
+      let currentV = "v0";
+      let currentA = "a0";
+      for (let i = 1; i < normalizedSegments.length; i++) {
+        const step = transitionPlan[i - 1];
+        const nextV = `xv${i}`;
+        const nextA = `xa${i}`;
+        filterParts.push(
+          `[${currentV}][v${i}]xfade=transition=${step.transition}:duration=${step.duration.toFixed(3)}:offset=${step.offset.toFixed(3)}[${nextV}]`,
+        );
+        filterParts.push(
+          `[${currentA}][a${i}]acrossfade=d=${step.duration.toFixed(3)}:c1=tri:c2=tri[${nextA}]`,
+        );
+        currentV = nextV;
+        currentA = nextA;
+      }
+      mergeArgs.push(
+        "-filter_complex",
+        filterParts.join(";"),
+        "-map",
+        `[${currentV}]`,
+        "-map",
+        `[${currentA}]`,
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-crf",
+        "22",
+        "-preset",
+        "veryfast",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-threads",
+        "2",
         mergedPath,
-      ],
-      signal,
-      90000,
-      dir,
-    );
+      );
+      await runMedia(mergeArgs, signal, 120000, dir);
+    } else {
+      const concatListPath = join(dir, "concat.txt");
+      await writeFile(
+        concatListPath,
+        normalizedSegments
+          .map((s) => `file '${s.path.replaceAll("'", "'\\''")}'`)
+          .join("\n"),
+        { signal },
+      );
+      await runMedia(
+        [
+          "-y",
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          concatListPath,
+          "-c",
+          "copy",
+          mergedPath,
+        ],
+        signal,
+        90000,
+        dir,
+      );
+    }
 
     const outputPath = join(dir, "final.mp4");
-    const captions = makeSubtitles(subtitleScenes, timelineCursor);
+    const captions = makeStyledSubtitles(subtitleScenes, timelineCursor, width, height);
     if (captions) {
       await writeFile(join(dir, "captions.ass"), captions, { signal });
       await runMedia(

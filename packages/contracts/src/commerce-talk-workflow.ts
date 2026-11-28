@@ -52,6 +52,91 @@ export const workflowShotTypes = [
 ] as const;
 export type WorkflowShotType = (typeof workflowShotTypes)[number];
 
+/** 镜头转场预设（对应 FFmpeg xfade 与 AE 转场关键帧） */
+export const workflowTransitions = [
+  "none",
+  "fade",
+  "wipeleft",
+  "wiperight",
+  "slideleft",
+  "slideright",
+  "circleopen",
+  "zoomin",
+  "dissolve",
+  "fadeblack",
+] as const;
+export type WorkflowTransition = (typeof workflowTransitions)[number];
+
+/** 画面色彩滤镜预设 */
+export const workflowFilters = [
+  "none",
+  "warm_fashion",
+  "cool_editorial",
+  "vintage_film",
+  "high_contrast",
+  "soft_beauty",
+  "bw_cinema",
+] as const;
+export type WorkflowFilter = (typeof workflowFilters)[number];
+
+/** 画面特效预设 */
+export const workflowEffects = [
+  "none",
+  "vignette",
+  "flash_in",
+  "rgb_shake",
+  "sharpen_pop",
+  "film_grain",
+  "glow_soft",
+] as const;
+export type WorkflowEffect = (typeof workflowEffects)[number];
+
+/** 运镜与关键帧动画预设 */
+export const workflowMotions = [
+  "none",
+  "zoom_in",
+  "zoom_out",
+  "pan_left",
+  "pan_right",
+  "pop_in",
+] as const;
+export type WorkflowMotion = (typeof workflowMotions)[number];
+
+/** 动态字幕样式预设（ASS 关键帧动效） */
+export const workflowSubtitleStyles = [
+  "classic",
+  "hormozi_pop",
+  "karaoke_glow",
+  "minimal_bar",
+  "neon_pink",
+] as const;
+export type WorkflowSubtitleStyle = (typeof workflowSubtitleStyles)[number];
+
+/** 单个分镜的后期剪辑与 AE 动效配置 */
+export const workflowShotPostEditSchema = z
+  .object({
+    transition: z.enum(workflowTransitions).default("none"),
+    transitionDurationSec: z.number().min(0.2).max(1.5).default(0.4),
+    filter: z.enum(workflowFilters).default("none"),
+    effect: z.enum(workflowEffects).default("none"),
+    motion: z.enum(workflowMotions).default("none"),
+    subtitleStyle: z.enum(workflowSubtitleStyles).default("classic"),
+    titleOverlay: z.string().trim().max(24).default(""),
+  })
+  .strict();
+export type WorkflowShotPostEdit = z.infer<typeof workflowShotPostEditSchema>;
+
+/** AI 代码自动化智能剪辑请求体 */
+export const aiEditWorkflowInputSchema = z
+  .object({
+    instruction: z.string().trim().max(1000).default(""),
+    preset: z
+      .enum(["douyin_viral", "editorial_cool", "vintage_fashion", "clean_talk", "custom"])
+      .default("douyin_viral"),
+  })
+  .strict();
+export type AiEditWorkflowInput = z.infer<typeof aiEditWorkflowInputSchema>;
+
 /** 参考视频来源平台 */
 export const workflowSourcePlatforms = [
   "douyin",
@@ -157,6 +242,7 @@ export const workflowAssetsConfigSchema = z
     aspectRatio: z.enum(["9:16", "16:9", "1:1", "3:4"]).default("9:16"),
     targetDurationSec: z.number().int().min(5).max(120).default(20),
     pauseBeforePrevis: z.boolean().default(true),
+    postEditDefaults: workflowShotPostEditSchema.partial().optional(),
   })
   .strict();
 export type WorkflowAssetsConfig = z.infer<typeof workflowAssetsConfigSchema>;
@@ -207,6 +293,7 @@ export const workflowShotSchema = z
     clipAssetId: z.string().max(120).optional(),
     operationId: z.string().max(200).optional(),
     videoModelOverride: z.string().trim().max(160).optional(),
+    postEdit: workflowShotPostEditSchema.optional(),
     status: z
       .enum([
         "pending",

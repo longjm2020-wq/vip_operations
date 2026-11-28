@@ -555,6 +555,35 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
     if (url.pathname.endsWith(`/workflows/${workflowId}`) && method === "GET") {
       return route.fulfill({ json: storedWorkflow });
     }
+    if (url.pathname.endsWith(`/workflows/${workflowId}`) && method === "PATCH") {
+      const body = route.request().postDataJSON();
+      storedWorkflow = { ...storedWorkflow, ...body, revision: (storedWorkflow?.revision || 1) + 1 };
+      return route.fulfill({ json: storedWorkflow });
+    }
+    if (url.pathname.endsWith(`/workflows/${workflowId}/ai-edit`) && method === "POST") {
+      storedWorkflow = {
+        ...storedWorkflow,
+        shots: (storedWorkflow.shots || []).map((s: any, idx: number) => ({
+          ...s,
+          postEdit: {
+            transition: idx === 0 ? "none" : "slideleft",
+            transitionDurationSec: 0.4,
+            filter: "warm_fashion",
+            effect: idx === 0 ? "flash_in" : "vignette",
+            motion: idx === 0 ? "pop_in" : "zoom_in",
+            subtitleStyle: "hormozi_pop",
+            titleOverlay: idx === 0 ? "显瘦神裤" : "",
+          },
+        })),
+      };
+      return route.fulfill({
+        json: {
+          workflow: storedWorkflow,
+          summary: "已自动完成 AI 剪辑编排",
+          engine: "heuristic",
+        },
+      });
+    }
     return route.fulfill({ status: 404, json: { error: "unknown workflow fixture" } });
   });
 
@@ -573,6 +602,14 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await timeline.getByRole("button", { name: "新增分镜" }).click();
   await expect(timeline.getByText("新增分镜 1")).toBeVisible();
   await expect(page.getByLabel("参数检查器").getByText("分镜参数 · S01")).toBeVisible();
+
+  // 切到「剪辑」面板执行 AI 自动编排后期并校验导出 AE 脚本按钮与时间轴徽标
+  await page.getByRole("tab", { name: "剪辑" }).click();
+  await page.getByLabel("AI 剪辑指令").fill("抖音爆款快切，前3秒白闪，暖调穿搭滤镜");
+  await page.getByRole("button", { name: "AI 自动编排后期" }).click();
+  await expect(timeline.getByText("暖调穿搭质感")).toBeVisible();
+  await expect(timeline.getByText("开场白闪冲击")).toBeVisible();
+  await expect(page.getByRole("link", { name: /导出 AE 自动化脚本/ })).toBeVisible();
 });
 test("imports a share reference and keeps the current source when a replacement requires local upload", async ({ page }) => {
   await fixture(page);

@@ -30,6 +30,7 @@ import {
   ReloadOutlined,
   RobotOutlined,
   SaveOutlined,
+  ScissorOutlined,
   StepBackwardOutlined,
   StepForwardOutlined,
   ThunderboltOutlined,
@@ -39,15 +40,29 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import type {
+  AiEditWorkflowInput,
+  WorkflowEffect,
+  WorkflowFilter,
+  WorkflowMotion,
   WorkflowRunMode,
   WorkflowShot,
+  WorkflowShotPostEdit,
+  WorkflowSubtitleStyle,
+  WorkflowTransition,
 } from "../../../../../packages/contracts/src/commerce-talk-workflow";
 import { studioApi } from "../api";
 import { CozyClayPrevisPanel } from "./cozyclay-panel";
 import {
+  defaultShotPostEdit,
+  effectLabels,
+  filterLabels,
   isWorkflowActive,
+  motionLabels,
+  previewCssFilterMap,
   shotTypeLabels,
   stageLabels,
+  subtitleStyleLabels,
+  transitionLabels,
   type WorkflowCatalog,
   type WorkflowShotView,
   type WorkflowView,
@@ -64,7 +79,14 @@ type ProductItem = {
   images: Array<{ id: string; url: string; color?: string }>;
 };
 
-type LibraryTab = "import" | "assets" | "deconstruct" | "shots" | "previs" | "models";
+type LibraryTab =
+  | "import"
+  | "assets"
+  | "deconstruct"
+  | "shots"
+  | "ai_edit"
+  | "previs"
+  | "models";
 type InspectorTab = "draft" | "shot";
 type PreviewSource = "auto" | "final" | "shot_clip" | "storyboard" | "reference";
 
@@ -86,6 +108,10 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [advancing, setAdvancing] = useState(false);
+  const [aiEditing, setAiEditing] = useState(false);
+  const [aiEditPrompt, setAiEditPrompt] = useState("");
+  const [aiEditPreset, setAiEditPreset] =
+    useState<AiEditWorkflowInput["preset"]>("douyin_viral");
   const [productSearch, setProductSearch] = useState("");
 
   // 工作台 UI 状态
@@ -441,6 +467,57 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
     }));
   };
 
+  const patchShotPostEdit = (
+    shotId: string,
+    patch: Partial<WorkflowShotPostEdit>,
+  ) => {
+    patchShot(shotId, (s) => ({
+      ...s,
+      postEdit: {
+        ...defaultShotPostEdit,
+        ...(s.postEdit || {}),
+        ...patch,
+      },
+    }));
+  };
+
+  const runAiAutoEdit = async (presetOverride?: AiEditWorkflowInput["preset"]) => {
+    if (!draft) return;
+    if (!draft.shots.length) {
+      message.warning("请先生成分镜脚本或点击时间轴「+ 新增分镜」后再执行 AI 智能剪辑");
+      return;
+    }
+    const chosenPreset = presetOverride || aiEditPreset;
+    setAiEditPreset(chosenPreset);
+    setAiEditing(true);
+    try {
+      if (dirty) {
+        const saved = await saveDraft();
+        if (!saved) return;
+      }
+      const res: { workflow: WorkflowView; summary: string; engine: string } =
+        await studioApi(
+          `${basePath}/${encodeURIComponent(draft.id)}/ai-edit`,
+          "POST",
+          {
+            preset: chosenPreset,
+            instruction: aiEditPrompt.trim(),
+          },
+        );
+      setDraft(res.workflow);
+      setDirty(false);
+      client.setQueryData(
+        ["commerce-workflow", account, "detail", res.workflow.id],
+        res.workflow,
+      );
+      message.success(res.summary || "AI 代码自动化智能剪辑编排已完成");
+    } catch (err) {
+      message.error((err as Error).message || "AI 智能剪辑编排失败");
+    } finally {
+      setAiEditing(false);
+    }
+  };
+
   const addShot = () => {
     if (!draft) return;
     const nextIdx = draft.shots.length + 1;
@@ -622,9 +699,17 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
     { key: "assets", label: "素材", icon: <AppstoreOutlined /> },
     { key: "deconstruct", label: "拆解", icon: <FileTextOutlined /> },
     { key: "shots", label: "分镜", icon: <PictureOutlined /> },
+    { key: "ai_edit", label: "剪辑", icon: <ScissorOutlined /> },
     { key: "previs", label: "预演", icon: <VideoCameraOutlined /> },
     { key: "models", label: "模型", icon: <ControlOutlined /> },
   ];
+
+  const activePostEdit: WorkflowShotPostEdit = {
+    ...defaultShotPostEdit,
+    ...(draft?.assetsConfig.postEditDefaults || {}),
+    ...(selectedShot?.postEdit || {}),
+  };
+  const previewCssFilter = previewCssFilterMap[activePostEdit.filter] || "none";
 
   return (
     <div className="wf-studio" aria-label="爆款复刻集成工作台">
@@ -1209,7 +1294,103 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
               )
             )}
 
-            {/* 标签 5：CozyClay 三维预演 */}
+            {/* 标签 5：AI 代码自动化智能剪辑与 AE 后期脚本 */}
+            {libTab === "ai_edit" && (
+              !draft ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  title="请先在「导入」页新建或打开工作流后再使用 AI 智能剪辑"
+                />
+              ) : (
+                <>
+                  <div className="wf-section-card">
+                    <div className="wf-section-card-head">
+                      <span>AI 代码自动化智能剪辑</span>
+                      <Tag color="blue" style={{ margin: 0 }}>字幕 / 特效 / 转场 / 滤镜 / 动画</Tag>
+                    </div>
+                    <p className="wf-muted">
+                      输入剪辑风格或节奏需求，AI 自动为全部分镜生成转场、调色滤镜、画面特效、关键帧运镜动画与动态字幕代码，支持云端 FFmpeg 直出或导出 AE 工程脚本。
+                    </p>
+                    <div className="wf-ai-edit-presets">
+                      {(
+                        [
+                          ["douyin_viral", "抖音爆款快切"],
+                          ["editorial_cool", "杂志高级冷调"],
+                          ["vintage_fashion", "复古胶片穿搭"],
+                          ["clean_talk", "极简干货口播"],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <Button
+                          key={key}
+                          size="small"
+                          type={aiEditPreset === key ? "primary" : "default"}
+                          disabled={active || aiEditing}
+                          onClick={() => setAiEditPreset(key)}
+                        >
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                    <Input.TextArea
+                      rows={3}
+                      aria-label="AI 剪辑指令"
+                      placeholder="例如：前 3 秒白闪冲击 + 爆款弹跳黄大字，整体暖调穿搭滤镜，镜头间加左滑/缩放转场，最后 1 镜缓慢推进..."
+                      value={aiEditPrompt}
+                      disabled={active || aiEditing}
+                      onChange={(e) => setAiEditPrompt(e.target.value)}
+                    />
+                    <Button
+                      type="primary"
+                      icon={<ScissorOutlined />}
+                      loading={aiEditing}
+                      disabled={active || !shots.length}
+                      onClick={() => void runAiAutoEdit()}
+                    >
+                      AI 自动编排后期
+                    </Button>
+                  </div>
+
+                  <div className="wf-section-card">
+                    <div className="wf-section-card-head">
+                      <span>Adobe After Effects 工程联动</span>
+                    </div>
+                    <p className="wf-muted">
+                      将当前时间轴的分镜、关键帧运镜、转场、花字与动态字幕编译为标准 ExtendScript（.jsx），在 AE 中「文件 → 脚本 → 运行脚本文件」即可自动生成完整合成。
+                    </p>
+                    <Button
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      disabled={!shots.length}
+                      href={`/api/v1/aigc${basePath}/${encodeURIComponent(draft.id)}/ae-script?download=1`}
+                    >
+                      导出 AE 自动化脚本 (.jsx)
+                    </Button>
+                  </div>
+
+                  {shots.length > 0 && (
+                    <details className="wf-section-card">
+                      <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                        查看当前后期剪辑代码蓝图（JSON）
+                      </summary>
+                      <pre className="wf-code-preview">
+                        {JSON.stringify(
+                          shots.map((s) => ({
+                            id: s.id,
+                            durationSec: s.durationSec,
+                            postEdit: s.postEdit || defaultShotPostEdit,
+                          })),
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </details>
+                  )}
+                </>
+              )
+            )}
+
+            {/* 标签 6：CozyClay 三维预演 */}
             {libTab === "previs" && (
               !draft ? (
                 <Alert
@@ -1386,6 +1567,7 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
                   ref={videoRef}
                   key={previewMedia.src}
                   className="wf-player-media"
+                  style={{ filter: previewCssFilter }}
                   src={previewMedia.src}
                   controls
                   playsInline
@@ -1393,19 +1575,38 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
                   onPause={() => setIsPlaying(false)}
                   onEnded={() => setIsPlaying(false)}
                 />
+                {activePostEdit.titleOverlay && (
+                  <div className="wf-player-title-overlay">
+                    {activePostEdit.titleOverlay}
+                  </div>
+                )}
                 {previewMedia.subtitle && (
-                  <div className="wf-player-subtitle">{previewMedia.subtitle}</div>
+                  <div
+                    className={`wf-player-subtitle is-${activePostEdit.subtitleStyle}`}
+                  >
+                    {previewMedia.subtitle}
+                  </div>
                 )}
               </div>
             ) : previewMedia.kind === "image" ? (
               <div className="wf-player-frame">
                 <img
                   className="wf-player-media"
+                  style={{ filter: previewCssFilter }}
                   src={previewMedia.src}
                   alt={previewMedia.label}
                 />
+                {activePostEdit.titleOverlay && (
+                  <div className="wf-player-title-overlay">
+                    {activePostEdit.titleOverlay}
+                  </div>
+                )}
                 {previewMedia.subtitle && (
-                  <div className="wf-player-subtitle">{previewMedia.subtitle}</div>
+                  <div
+                    className={`wf-player-subtitle is-${activePostEdit.subtitleStyle}`}
+                  >
+                    {previewMedia.subtitle}
+                  </div>
                 )}
               </div>
             ) : (
@@ -1646,6 +1847,96 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
                     />
                   </div>
                 )}
+                <div className="wf-prop-row">
+                  <span className="wf-prop-label">镜头转场</span>
+                  <Select<WorkflowTransition>
+                    size="small"
+                    value={selectedShot.postEdit?.transition || "none"}
+                    disabled={active || selectedShotIndex === 0}
+                    options={Object.entries(transitionLabels).map(([value, label]) => ({
+                      value,
+                      label,
+                    }))}
+                    onChange={(transition) =>
+                      patchShotPostEdit(selectedShot.id, { transition })
+                    }
+                  />
+                </div>
+                <div className="wf-prop-row">
+                  <span className="wf-prop-label">色彩滤镜</span>
+                  <Select<WorkflowFilter>
+                    size="small"
+                    value={selectedShot.postEdit?.filter || "none"}
+                    disabled={active}
+                    options={Object.entries(filterLabels).map(([value, label]) => ({
+                      value,
+                      label,
+                    }))}
+                    onChange={(filter) =>
+                      patchShotPostEdit(selectedShot.id, { filter })
+                    }
+                  />
+                </div>
+                <div className="wf-prop-row">
+                  <span className="wf-prop-label">画面特效</span>
+                  <Select<WorkflowEffect>
+                    size="small"
+                    value={selectedShot.postEdit?.effect || "none"}
+                    disabled={active}
+                    options={Object.entries(effectLabels).map(([value, label]) => ({
+                      value,
+                      label,
+                    }))}
+                    onChange={(effect) =>
+                      patchShotPostEdit(selectedShot.id, { effect })
+                    }
+                  />
+                </div>
+                <div className="wf-prop-row">
+                  <span className="wf-prop-label">运镜动画</span>
+                  <Select<WorkflowMotion>
+                    size="small"
+                    value={selectedShot.postEdit?.motion || "none"}
+                    disabled={active}
+                    options={Object.entries(motionLabels).map(([value, label]) => ({
+                      value,
+                      label,
+                    }))}
+                    onChange={(motion) =>
+                      patchShotPostEdit(selectedShot.id, { motion })
+                    }
+                  />
+                </div>
+                <div className="wf-prop-row">
+                  <span className="wf-prop-label">动态字幕</span>
+                  <Select<WorkflowSubtitleStyle>
+                    size="small"
+                    value={selectedShot.postEdit?.subtitleStyle || "classic"}
+                    disabled={active}
+                    options={Object.entries(subtitleStyleLabels).map(([value, label]) => ({
+                      value,
+                      label,
+                    }))}
+                    onChange={(subtitleStyle) =>
+                      patchShotPostEdit(selectedShot.id, { subtitleStyle })
+                    }
+                  />
+                </div>
+                <div className="wf-prop-row">
+                  <span className="wf-prop-label">顶部花字</span>
+                  <Input
+                    size="small"
+                    maxLength={24}
+                    placeholder="可选，如：显瘦神裤"
+                    value={selectedShot.postEdit?.titleOverlay || ""}
+                    disabled={active}
+                    onChange={(e) =>
+                      patchShotPostEdit(selectedShot.id, {
+                        titleOverlay: e.target.value,
+                      })
+                    }
+                  />
+                </div>
                 {selectedShot.error && (
                   <Alert type="warning" showIcon title={selectedShot.error} />
                 )}
@@ -2003,9 +2294,28 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
                           <span>{shot.durationSec}s</span>
                         </div>
                         <span className="wf-tl-clip-sub">{shot.title}</span>
-                        <span className="wf-tl-clip-sub">
-                          {shotTypeLabels[shot.type]}
-                        </span>
+                        <div className="wf-tl-clip-badges">
+                          {shot.postEdit?.transition && shot.postEdit.transition !== "none" && (
+                            <span className="wf-tl-clip-badge">
+                              {transitionLabels[shot.postEdit.transition]}
+                            </span>
+                          )}
+                          {shot.postEdit?.filter && shot.postEdit.filter !== "none" && (
+                            <span className="wf-tl-clip-badge">
+                              {filterLabels[shot.postEdit.filter]}
+                            </span>
+                          )}
+                          {shot.postEdit?.effect && shot.postEdit.effect !== "none" && (
+                            <span className="wf-tl-clip-badge">
+                              {effectLabels[shot.postEdit.effect]}
+                            </span>
+                          )}
+                          {shot.postEdit?.motion && shot.postEdit.motion !== "none" && (
+                            <span className="wf-tl-clip-badge">
+                              {motionLabels[shot.postEdit.motion]}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </button>
                   );

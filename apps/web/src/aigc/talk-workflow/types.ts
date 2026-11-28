@@ -2,10 +2,16 @@ import type {
   WorkflowAssetsConfig,
   WorkflowCozyClayState,
   WorkflowDeconstructData,
+  WorkflowEffect,
+  WorkflowFilter,
   WorkflowModelConfig,
+  WorkflowMotion,
   WorkflowRunMode,
   WorkflowShot,
+  WorkflowShotPostEdit,
   WorkflowStage,
+  WorkflowSubtitleStyle,
+  WorkflowTransition,
 } from "../../../../../packages/contracts/src/commerce-talk-workflow";
 
 export type WorkflowShotView = WorkflowShot & {
@@ -124,6 +130,77 @@ export const shotTypeLabels: Record<WorkflowShot["type"], string> = {
   previs_video: "CozyClay 三维预演视频",
   broll_video: "AI 穿搭展示（B-roll）",
   product_insert: "商品实拍特写",
+};
+
+export const transitionLabels: Record<WorkflowTransition, string> = {
+  none: "无转场（硬切）",
+  fade: "叠化淡入",
+  wipeleft: "向左擦除",
+  wiperight: "向右擦除",
+  slideleft: "左滑推镜",
+  slideright: "右滑推镜",
+  circleopen: "圆形展开",
+  zoomin: "缩放闪切",
+  dissolve: "柔和溶解",
+  fadeblack: "黑场过渡",
+};
+
+export const filterLabels: Record<WorkflowFilter, string> = {
+  none: "原色",
+  warm_fashion: "暖调穿搭质感",
+  cool_editorial: "冷调杂志高级",
+  vintage_film: "复古胶片",
+  high_contrast: "高对比吸睛",
+  soft_beauty: "柔光美颜提亮",
+  bw_cinema: "黑白电影",
+};
+
+export const effectLabels: Record<WorkflowEffect, string> = {
+  none: "无特效",
+  vignette: "暗角聚焦",
+  flash_in: "开场白闪冲击",
+  rgb_shake: "节奏微震动",
+  sharpen_pop: "细节锐化增强",
+  film_grain: "胶片颗粒",
+  glow_soft: "梦幻柔光",
+};
+
+export const motionLabels: Record<WorkflowMotion, string> = {
+  none: "静止 / 原画",
+  zoom_in: "缓慢推进",
+  zoom_out: "缓慢拉远",
+  pan_left: "平滑左摇",
+  pan_right: "平滑右摇",
+  pop_in: "弹性缩放进场",
+};
+
+export const subtitleStyleLabels: Record<WorkflowSubtitleStyle, string> = {
+  classic: "经典白字黑描边",
+  hormozi_pop: "爆款大字弹跳黄",
+  karaoke_glow: "卡拉OK逐字扫光",
+  minimal_bar: "极简半透明底条",
+  neon_pink: "时尚霓虹花字",
+};
+
+export const defaultShotPostEdit: WorkflowShotPostEdit = {
+  transition: "none",
+  transitionDurationSec: 0.4,
+  filter: "none",
+  effect: "none",
+  motion: "none",
+  subtitleStyle: "classic",
+  titleOverlay: "",
+};
+
+/** 播放器实时 CSS 滤镜预览映射 */
+export const previewCssFilterMap: Record<WorkflowFilter, string> = {
+  none: "none",
+  warm_fashion: "contrast(1.06) brightness(1.03) saturate(1.18) sepia(0.12)",
+  cool_editorial: "contrast(1.1) saturate(0.92) hue-rotate(-6deg)",
+  vintage_film: "contrast(1.08) saturate(0.82) sepia(0.24)",
+  high_contrast: "contrast(1.22) saturate(1.24)",
+  soft_beauty: "contrast(0.96) brightness(1.06) saturate(1.08)",
+  bw_cinema: "grayscale(1) contrast(1.18)",
 };
 
 export function isWorkflowActive(stage?: WorkflowStage): boolean {

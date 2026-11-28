@@ -30,13 +30,20 @@ import {
 import { bailianCommerceVoiceModels } from "../../../../../packages/contracts/src/bailian-commerce-voice.js";
 import {
   advanceWorkflowInputSchema,
+  aiEditWorkflowInputSchema,
   createWorkflowInputSchema,
   magi2VideoModelSpec,
   recommendedScriptModels,
   updateWorkflowInputSchema,
   workflowActiveStages,
   workflowDeconstructSchema,
+  workflowEffects,
+  workflowFilters,
+  workflowMotions,
+  workflowShotPostEditSchema,
   workflowShotSchema,
+  workflowSubtitleStyles,
+  workflowTransitions,
   type WorkflowAssetsConfig,
   type WorkflowCozyClayState,
   type WorkflowDeconstructData,
@@ -60,6 +67,11 @@ import {
   renderWorkflowVideo,
   type WorkflowRenderSegment,
 } from "../workspace/commerce-video-render.js";
+import {
+  buildAfterEffectsScript,
+  buildHeuristicPostEditPlan,
+  sanitizeAiPostEditResponse,
+} from "../workspace/workflow-post-edit.js";
 import { listRelayStations } from "../workspace/smart-models.js";
 import { commerceFalConfigured } from "./commerce-fal.js";
 import {
@@ -691,7 +703,7 @@ export async function handleCommerceTalkWorkflow(
   }
 
   const wfMatch =
-    /^\/workflows\/([a-f0-9-]{36})(?:\/(assets|import-reference|advance|cozyclay\/export)|\/shots\/([\w-]+)\/regenerate)?$/i.exec(
+    /^\/workflows\/([a-f0-9-]{36})(?:\/(assets|import-reference|advance|cozyclay\/export|ai-edit|ae-script)|\/shots\/([\w-]+)\/regenerate)?$/i.exec(
       suffix,
     );
   if (!wfMatch) return res.status(404).json({ error: "找不到该工作流接口" });
@@ -856,6 +868,107 @@ export async function handleCommerceTalkWorkflow(
       );
     }
     return res.json(project);
+  }
+
+  // AI 代码自动化智能剪辑：调用大模型（带确定性节奏编排降级）自动编排全部分镜的转场、滤镜、特效、运镜动画与动态字幕
+  if (action === "ai-edit" && req.method === "POST") {
+    const input = parse(aiEditWorkflowInputSchema, await readBody());
+    const shots = (Array.isArray(workflow.shots) ? workflow.shots : []) as WorkflowShot[];
+    if (!shots.length) {
+      fail("NO_SHOTS", "当前工作流尚无分镜，请先生成分镜脚本或新增分镜后再执行 AI 智能剪辑", 400);
+    }
+
+    const fallback = buildHeuristicPostEditPlan(shots, input);
+    let plan = fallback;
+    let engine: "llm" | "heuristic" = "heuristic";
+
+    try {
+      const modelConfig = (workflow.model_config || {}) as Partial<WorkflowModelConfig>;
+      const systemPrompt = [
+        "你是资深服装短视频与 Adobe After Effects 后期剪辑导演。",
+        "请根据用户的剪辑指令与分镜脚本，为每个分镜编排最契合节奏的后期剪辑参数（仅输出合法 JSON）。",
+        `可选 transition: ${workflowTransitions.join(", ")}（第1镜固定 none）`,
+        `可选 filter: ${workflowFilters.join(", ")}`,
+        `可选 effect: ${workflowEffects.join(", ")}`,
+        `可选 motion: ${workflowMotions.join(", ")}`,
+        `可选 subtitleStyle: ${workflowSubtitleStyles.join(", ")}`,
+        "JSON 格式：{ \"summary\": \"一句话剪辑思路\", \"shots\": [{ \"id\": \"S01\", \"postEdit\": { \"transition\": \"none\", \"transitionDurationSec\": 0.4, \"filter\": \"warm_fashion\", \"effect\": \"flash_in\", \"motion\": \"pop_in\", \"subtitleStyle\": \"hormozi_pop\", \"titleOverlay\": \"显瘦神裤\" } }] }",
+      ].join("\n");
+      const userPrompt = JSON.stringify({
+        preset: input.preset,
+        instruction: input.instruction || "自动优化服装带货短视频的节奏、转场、滤镜、特效、运镜与字幕动效",
+        title: workflow.title,
+        shots: shots.map((s) => ({
+          id: s.id,
+          title: s.title,
+          type: s.type,
+          durationSec: s.durationSec,
+          caption: s.caption,
+          action: s.action,
+        })),
+      });
+      const raw = await callWorkflowLlm(
+        studio,
+        modelConfig.scriptModel,
+        systemPrompt,
+        userPrompt,
+      );
+      plan = sanitizeAiPostEditResponse(raw, shots, fallback);
+      engine = "llm";
+    } catch {
+      // 未配置外部大模型或网络异常时，无缝降级为内置智能节奏编排引擎，保证功能 100% 可用
+      plan = fallback;
+      engine = "heuristic";
+    }
+
+    const nextShots: WorkflowShot[] = shots.map((shot) => ({
+      ...shot,
+      postEdit: plan.shotEdits[shot.id] || shot.postEdit,
+    }));
+    const nextAssetsConfig = {
+      ...(workflow.assets_config || {}),
+      postEditDefaults: plan.postEditDefaults,
+    };
+
+    const updated = await one(
+      db,
+      `UPDATE public.commerce_talk_workflows
+       SET shots=$2::jsonb,
+           assets_config=$3::jsonb,
+           message=$4,
+           revision=revision+1,
+           updated_at=now()
+       WHERE id=$1::uuid RETURNING *`,
+      workflow.id,
+      JSON.stringify(nextShots),
+      JSON.stringify(nextAssetsConfig),
+      plan.summary,
+    );
+    return res.json({
+      workflow: workflowView(updated!),
+      summary: plan.summary,
+      engine,
+    });
+  }
+
+  // 导出标准 Adobe After Effects ExtendScript (.jsx) 自动化剪辑脚本
+  if (action === "ae-script" && req.method === "GET") {
+    const assetsConfig = (workflow.assets_config || {}) as Partial<WorkflowAssetsConfig>;
+    const shots = (Array.isArray(workflow.shots) ? workflow.shots : []) as WorkflowShot[];
+    const script = buildAfterEffectsScript({
+      id: workflow.id,
+      title: workflow.title,
+      aspectRatio: assetsConfig.aspectRatio,
+      shots,
+    });
+    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+    if (req.query.download === "1") {
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="xuti-ae-edit-${String(workflow.id).slice(0, 8)}.jsx"`,
+      );
+    }
+    return res.send(script);
   }
 
   if (action === "advance" && req.method === "POST") {
@@ -1478,6 +1591,13 @@ export async function processCommerceTalkWorkflow(
 
       const segments: WorkflowRenderSegment[] = [];
       for (const shot of shots) {
+        const mergedPostEdit =
+          shot.postEdit || assetsConfig.postEditDefaults
+            ? workflowShotPostEditSchema.parse({
+                ...(assetsConfig.postEditDefaults || {}),
+                ...(shot.postEdit || {}),
+              })
+            : undefined;
         if (shot.clipAssetId) {
           const clip = await studio.store.readAsset(shot.clipAssetId);
           if (clip?.buffer) {
@@ -1486,6 +1606,7 @@ export async function processCommerceTalkWorkflow(
               content: clip.buffer,
               caption: shot.caption || "",
               durationSec: shot.durationSec || 5,
+              postEdit: mergedPostEdit,
             });
             continue;
           }
@@ -1498,6 +1619,7 @@ export async function processCommerceTalkWorkflow(
               content: img.buffer,
               caption: shot.caption || "",
               durationSec: shot.durationSec || 4,
+              postEdit: mergedPostEdit,
             });
             continue;
           }
@@ -1511,6 +1633,7 @@ export async function processCommerceTalkWorkflow(
               content: loaded.content,
               caption: shot.caption || "",
               durationSec: shot.durationSec || 4,
+              postEdit: mergedPostEdit,
             });
           }
         }
