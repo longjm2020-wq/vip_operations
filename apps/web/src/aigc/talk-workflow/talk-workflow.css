@@ -456,9 +456,20 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-accent) 12%, transparent);
 }
 
-.wf-director-textarea.ant-input {
+.wf-director-textarea,
+.wf-director-textarea.ant-input,
+.wf-director-textarea.ant-input-borderless,
+.wf-director-textarea:hover,
+.wf-director-textarea:focus,
+.wf-director-textarea:focus-visible,
+.wf-director-textarea.ant-input:hover,
+.wf-director-textarea.ant-input:focus,
+.wf-director-textarea.ant-input-focused {
   padding: 2px 0;
-  background: transparent;
+  background: transparent !important;
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
   font-size: 13px;
   line-height: 1.55;
   resize: none;
