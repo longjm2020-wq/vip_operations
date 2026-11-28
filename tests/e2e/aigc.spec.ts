@@ -464,10 +464,12 @@ test("the apparel entry opens and submits a mixed product batch", async ({ page 
   await page.getByRole("button", { name: /服装口播.*商品讲解/ }).click();
   await expect(page.getByRole("heading", { name: "服装口播" })).toBeVisible();
   await expect(page.getByLabel("口播制作方式")).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "口播" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "角色库" })).toBeVisible();
   const topbarNav = page.locator(".topbar .workspace-subnav");
   await expect(topbarNav.getByRole("button", { name: "返回创作空间" })).toBeVisible();
   await expect(topbarNav.getByText("服装口播", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "口播" }).click();
+  await page.goto("/aigc?view=talk-video&mode=commerce");
   await page.getByText("按款批量", { exact: true }).click();
   const search = page.getByRole("combobox", { name: "批量选择商品" });
   await search.fill("XUTI");
@@ -650,8 +652,8 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await expect(timeline.getByText("新增分镜 1")).toBeVisible();
   await expect(page.getByLabel("参数检查器").getByText("分镜参数 · S01")).toBeVisible();
 
-  // 切到「素材」面板测试数字人角色库（面部 + 三视图 + 克隆音色）创建与绑定
-  await page.getByRole("tab", { name: "素材" }).click();
+  // 切到「角色库」面板测试数字人角色库（面部 + 三视图 + 克隆音色）创建与绑定
+  await page.getByRole("tab", { name: "角色库" }).click();
   await expect(page.getByLabel("数字人角色库")).toBeVisible();
   await page.getByRole("button", { name: "新建角色" }).click();
   const charDialog = page.getByRole("dialog", { name: /新建数字人角色/ });

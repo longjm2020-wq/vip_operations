@@ -187,11 +187,31 @@ function TalkVideoWorkspace({
 }) {
   const [params] = useSearchParams();
   const selected = params.get("mode");
-  const openLipSync = !canUseCommerce || selected === "lip-sync";
-  const openCommerce =
+  const legacyLipSync = !canUseCommerce || selected === "lip-sync";
+  const legacyCommerce =
     canUseCommerce && (selected === "commerce" || linkedCommerce);
-  const initialLibTab = openLipSync || openCommerce ? "talk" : "import";
-  const initialTalkTool = openLipSync ? "lip-sync" : "commerce";
+
+  if (legacyLipSync) {
+    return (
+      <section className="talk-video" aria-labelledby="talk-video-title">
+        <header className="talk-video-heading">
+          <h1 id="talk-video-title">数字人口播</h1>
+        </header>
+        <LipSync account={account} connection={connection} />
+      </section>
+    );
+  }
+
+  if (legacyCommerce) {
+    return (
+      <section className="talk-video" aria-labelledby="talk-video-title">
+        <header className="talk-video-heading">
+          <h1 id="talk-video-title">服装口播</h1>
+        </header>
+        <CommerceTalkVideo account={account} fal={connection.data} />
+      </section>
+    );
+  }
 
   return (
     <section
@@ -200,23 +220,10 @@ function TalkVideoWorkspace({
     >
       <div className="talk-video-topbar">
         <header className="talk-video-heading">
-          <h1 id="talk-video-title">
-            {canUseCommerce ? "服装口播" : "数字人口播"}
-          </h1>
+          <h1 id="talk-video-title">服装口播</h1>
         </header>
       </div>
-      <CommerceTalkWorkflow
-        account={account}
-        canUseCommerce={canUseCommerce}
-        initialLibTab={initialLibTab}
-        initialTalkTool={initialTalkTool}
-        commercePanel={
-          canUseCommerce ? (
-            <CommerceTalkVideo account={account} fal={connection.data} />
-          ) : null
-        }
-        lipSyncPanel={<LipSync account={account} connection={connection} />}
-      />
+      <CommerceTalkWorkflow account={account} canUseCommerce={canUseCommerce} />
     </section>
   );
 }

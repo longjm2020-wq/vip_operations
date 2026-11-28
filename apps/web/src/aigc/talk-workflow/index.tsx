@@ -13,7 +13,6 @@ import {
   Tooltip,
 } from "antd";
 import {
-  AppstoreOutlined,
   ArrowLeftOutlined,
   ArrowRightOutlined,
   AudioOutlined,
@@ -35,6 +34,7 @@ import {
   StepForwardOutlined,
   ThunderboltOutlined,
   UploadOutlined,
+  UserOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -84,14 +84,12 @@ type ProductItem = {
 
 type LibraryTab =
   | "import"
-  | "talk"
   | "assets"
   | "deconstruct"
   | "shots"
   | "ai_edit"
   | "previs"
   | "models";
-type TalkToolMode = "commerce" | "lip-sync";
 type InspectorTab = "draft" | "shot";
 type PreviewSource = "auto" | "final" | "shot_clip" | "storyboard" | "reference";
 
@@ -106,17 +104,9 @@ function formatTimecode(seconds: number): string {
 export function CommerceTalkWorkflow({
   account,
   canUseCommerce = true,
-  initialLibTab = "import",
-  initialTalkTool = "commerce",
-  commercePanel,
-  lipSyncPanel,
 }: {
   account: string;
   canUseCommerce?: boolean;
-  initialLibTab?: LibraryTab;
-  initialTalkTool?: TalkToolMode;
-  commercePanel?: React.ReactNode;
-  lipSyncPanel?: React.ReactNode;
 }) {
   const { message } = App.useApp();
   const client = useQueryClient();
@@ -134,10 +124,7 @@ export function CommerceTalkWorkflow({
   const [productSearch, setProductSearch] = useState("");
 
   // 工作台 UI 状态
-  const [libTab, setLibTab] = useState<LibraryTab>(initialLibTab);
-  const [talkTool, setTalkTool] = useState<TalkToolMode>(
-    canUseCommerce ? initialTalkTool : "lip-sync",
-  );
+  const [libTab, setLibTab] = useState<LibraryTab>("import");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("draft");
   const [previewSource, setPreviewSource] = useState<PreviewSource>("auto");
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
@@ -721,8 +708,7 @@ export function CommerceTalkWorkflow({
 
   const libraryTabs: Array<{ key: LibraryTab; label: string; icon: React.ReactNode }> = [
     { key: "import", label: "导入", icon: <LinkOutlined /> },
-    { key: "talk", label: "口播", icon: <AudioOutlined /> },
-    { key: "assets", label: "素材", icon: <AppstoreOutlined /> },
+    { key: "assets", label: "角色库", icon: <UserOutlined /> },
     { key: "deconstruct", label: "拆解", icon: <FileTextOutlined /> },
     { key: "shots", label: "分镜", icon: <PictureOutlined /> },
     { key: "ai_edit", label: "剪辑", icon: <ScissorOutlined /> },
@@ -960,29 +946,7 @@ export function CommerceTalkWorkflow({
               </>
             )}
 
-            {/* 标签 2：融合口播直出（商品口播单款/批量 + 原声对口型） */}
-            {libTab === "talk" && (
-              <div className="wf-embedded-talk">
-                {canUseCommerce && commercePanel && lipSyncPanel && (
-                  <Segmented<TalkToolMode>
-                    size="small"
-                    block
-                    aria-label="口播直出能力"
-                    value={talkTool}
-                    options={[
-                      { value: "commerce", label: "商品口播" },
-                      { value: "lip-sync", label: "原声对口型" },
-                    ]}
-                    onChange={setTalkTool}
-                  />
-                )}
-                {canUseCommerce && talkTool === "commerce"
-                  ? commercePanel
-                  : lipSyncPanel}
-              </div>
-            )}
-
-            {/* 标签 3：数字人角色库（面部+三视图+音色）与商品/角色/道具/场景素材 */}
+            {/* 标签 2：数字人角色库（面部+三视图+音色）与商品/道具/场景素材 */}
             {libTab === "assets" && (
               <>
                 <CharacterLibraryPanel
