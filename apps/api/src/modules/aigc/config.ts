@@ -54,6 +54,28 @@ const endpoint = z
       return false;
     }
   }, "请填写不含凭据的 HTTPS 服务地址");
+const cozyclayEndpoint = z
+  .string()
+  .trim()
+  .max(500)
+  .refine((value) => {
+    if (!value) return true;
+    try {
+      const u = new URL(value);
+      const local =
+        u.protocol === "http:" &&
+        ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+      return (
+        (u.protocol === "https:" || local) &&
+        !u.username &&
+        !u.password &&
+        !u.search &&
+        !u.hash
+      );
+    } catch {
+      return false;
+    }
+  }, "请填写不含凭据的 HTTPS 地址或本机 localhost 地址");
 const inputSchema = z.object({
   revision: z.number().int().positive(),
   bailianWorkspaceId: z
@@ -63,6 +85,7 @@ const inputSchema = z.object({
     .default(""),
   useSavedQwenConnection: z.boolean().default(false),
   opentalkingBaseUrl: endpoint,
+  cozyclayBaseUrl: cozyclayEndpoint.optional().default(""),
   runninghubWorkflowId: z
     .string()
     .max(120)
@@ -79,8 +102,8 @@ function activeSecrets(encrypted?: string): Record<string, string> {
 }
 
 function activeSettings(config: Record<string, any>) {
-  const { bailianWorkspaceId, bailianVoiceWorkspaceId, bailianVideoCheck, opentalkingBaseUrl, runninghubWorkflowId } = config;
-  return { bailianWorkspaceId, bailianVoiceWorkspaceId, bailianVideoCheck, opentalkingBaseUrl, runninghubWorkflowId };
+  const { bailianWorkspaceId, bailianVoiceWorkspaceId, bailianVideoCheck, opentalkingBaseUrl, cozyclayBaseUrl, runninghubWorkflowId } = config;
+  return { bailianWorkspaceId, bailianVoiceWorkspaceId, bailianVideoCheck, opentalkingBaseUrl, cozyclayBaseUrl: cozyclayBaseUrl || "", runninghubWorkflowId };
 }
 export async function storedSettings() {
   return (await one(

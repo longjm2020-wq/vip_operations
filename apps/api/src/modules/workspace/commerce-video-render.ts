@@ -354,3 +354,256 @@ export async function renderCommerceVideo(
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+export type WorkflowRenderSegment = {
+  kind: "video" | "image";
+  content: Buffer;
+  caption: string;
+  durationSec: number;
+};
+
+/**
+ * 将服装口播工作流的多类型分镜（对口型视频、三维预演视频、B-roll 视频、商品/分镜静态图）
+ * 统一缩放为 720×1280 竖屏 30fps，补齐音轨并烧录中文字幕，合成最终成片 MP4。
+ */
+export async function renderWorkflowVideo(
+  segments: readonly WorkflowRenderSegment[],
+  signal?: AbortSignal,
+) {
+  if (!segments.length || segments.length > 24) {
+    throw Error("成片合成支持 1 至 24 个分镜片段");
+  }
+  const dir = await mkdtemp(join(tmpdir(), "xuti-workflow-render-"));
+  try {
+    const normalizedPaths: string[] = [];
+    const subtitleScenes: CommerceVideoScene[] = [];
+    let timelineCursor = 0;
+
+    for (const [index, segment] of segments.entries()) {
+      signal?.throwIfAborted();
+      const segOut = join(dir, `seg-${index}.mp4`);
+      if (segment.kind === "video") {
+        validatePresenter(segment.content);
+        const rawPath = join(dir, `raw-${index}.mp4`);
+        await writeFile(rawPath, segment.content, { signal });
+        let segDuration = Math.max(1, Math.min(30, segment.durationSec || 5));
+        let hasAudio = true;
+        try {
+          const info = await inspectPresenterFile(rawPath, signal);
+          segDuration = info.duration;
+        } catch {
+          hasAudio = false;
+        }
+        const args = hasAudio
+          ? [
+              "-y",
+              ...movieInput,
+              rawPath,
+              "-vf",
+              `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=0x16181c,setsar=1,fps=30`,
+              "-af",
+              "aresample=48000:async=1:first_pts=0",
+              "-ar",
+              "48000",
+              "-ac",
+              "2",
+              "-c:v",
+              "libx264",
+              "-pix_fmt",
+              "yuv420p",
+              "-crf",
+              "22",
+              "-preset",
+              "veryfast",
+              "-c:a",
+              "aac",
+              "-b:a",
+              "128k",
+              "-threads",
+              "2",
+              segOut,
+            ]
+          : [
+              "-y",
+              ...movieInput,
+              rawPath,
+              "-f",
+              "lavfi",
+              "-i",
+              "anullsrc=channel_layout=stereo:sample_rate=48000",
+              "-map",
+              "0:V:0",
+              "-map",
+              "1:a:0",
+              "-shortest",
+              "-vf",
+              `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=0x16181c,setsar=1,fps=30`,
+              "-c:v",
+              "libx264",
+              "-pix_fmt",
+              "yuv420p",
+              "-crf",
+              "22",
+              "-preset",
+              "veryfast",
+              "-c:a",
+              "aac",
+              "-b:a",
+              "128k",
+              "-threads",
+              "2",
+              segOut,
+            ];
+        await runMedia(args, signal, 90000, dir);
+        const verified = await inspectPresenterFile(segOut, signal);
+        segDuration = verified.duration;
+        subtitleScenes.push({
+          start: timelineCursor,
+          end: timelineCursor + segDuration,
+          caption: segment.caption.slice(0, 64),
+        });
+        timelineCursor += segDuration;
+      } else {
+        const imgPath = join(dir, `img-${index}.png`);
+        await prepareProductImage(segment.content, imgPath);
+        const segDuration = Math.max(2, Math.min(15, segment.durationSec || 4));
+        await runMedia(
+          [
+            "-y",
+            "-loop",
+            "1",
+            "-t",
+            String(segDuration),
+            "-protocol_whitelist",
+            "file,pipe",
+            "-f",
+            "image2",
+            "-i",
+            imgPath,
+            "-f",
+            "lavfi",
+            "-t",
+            String(segDuration),
+            "-i",
+            "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-vf",
+            `scale=${width}:${height},setsar=1,fps=30`,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "22",
+            "-preset",
+            "veryfast",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-shortest",
+            "-threads",
+            "2",
+            segOut,
+          ],
+          signal,
+          60000,
+          dir,
+        );
+        subtitleScenes.push({
+          start: timelineCursor,
+          end: timelineCursor + segDuration,
+          caption: segment.caption.slice(0, 64),
+        });
+        timelineCursor += segDuration;
+      }
+      normalizedPaths.push(segOut);
+    }
+
+    const concatListPath = join(dir, "concat.txt");
+    await writeFile(
+      concatListPath,
+      normalizedPaths.map((p) => `file '${p.replaceAll("'", "'\\''")}'`).join("\n"),
+      { signal },
+    );
+
+    const mergedPath = join(dir, "merged.mp4");
+    await runMedia(
+      [
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        concatListPath,
+        "-c",
+        "copy",
+        mergedPath,
+      ],
+      signal,
+      90000,
+      dir,
+    );
+
+    const outputPath = join(dir, "final.mp4");
+    const captions = makeSubtitles(subtitleScenes, timelineCursor);
+    if (captions) {
+      await writeFile(join(dir, "captions.ass"), captions, { signal });
+      await runMedia(
+        [
+          "-y",
+          ...movieInput,
+          mergedPath,
+          "-vf",
+          "ass=captions.ass",
+          "-c:v",
+          "libx264",
+          "-pix_fmt",
+          "yuv420p",
+          "-crf",
+          "22",
+          "-preset",
+          "veryfast",
+          "-c:a",
+          "copy",
+          "-movflags",
+          "+faststart",
+          "-threads",
+          "2",
+          "-fs",
+          String(maxVideoBytes),
+          outputPath,
+        ],
+        signal,
+        120000,
+        dir,
+      );
+    } else {
+      await runMedia(
+        [
+          "-y",
+          ...movieInput,
+          mergedPath,
+          "-c",
+          "copy",
+          "-movflags",
+          "+faststart",
+          outputPath,
+        ],
+        signal,
+        60000,
+        dir,
+      );
+    }
+
+    const finalInfo = await inspectPresenterFile(outputPath, signal);
+    return {
+      content: await readFile(outputPath, { signal }),
+      duration: finalInfo.duration,
+      width,
+      height,
+    };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}

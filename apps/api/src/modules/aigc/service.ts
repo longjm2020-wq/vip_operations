@@ -25,6 +25,7 @@ import { startVideoCheck, videoCheckStatus } from "./video-check.js";
 import { downloadPublicReference } from "./public-reference-download.js";
 import type { Actor } from "../../core.js";
 import { handleCommerceVideo, processCommerceVideo } from "./commerce-video.js";
+import { processCommerceTalkWorkflow } from "./commerce-talk-workflow.js";
 
 const PREFIX = "/api/v1/aigc";
 const asUser = (actor: Actor): StudioUser => ({
@@ -144,7 +145,9 @@ export function createAigcService() {
     const current = studio;
     if (commerceBusy || !current) return;
     commerceBusy = true;
-    void processCommerceVideo(current, () => !closed && studio === current)
+    const isAlive = () => !closed && studio === current;
+    void processCommerceVideo(current, isAlive)
+      .then(() => processCommerceTalkWorkflow(current, isAlive))
       .catch(() => {})
       .finally(() => { commerceBusy = false; });
   }, 2500);
@@ -218,7 +221,7 @@ export function createAigcService() {
           });
       }
       if (suffix.startsWith("/commerce-video/") && actor) {
-        await handleCommerceVideo(studio, actor, suffix.slice("/commerce-video".length), req, res, () => jsonBody(req));
+        await handleCommerceVideo(studio, actor, suffix.slice("/commerce-video".length), req, res, () => jsonBody(req, 262_144));
         return;
       }
       if (suffix === "/assets/import-reference" && req.method === "POST" && actor) {
@@ -333,15 +336,15 @@ export function createAigcService() {
     },
   };
 }
-async function jsonBody(req: Request) {
+async function jsonBody(req: Request, maxBytes = 32_768) {
   if (!req.is("application/json"))
     throw Object.assign(new Error("请使用 JSON 请求"), { statusCode: 415 });
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const bytes of req) {
     size += bytes.length;
-    if (size > 32_768)
-      throw Object.assign(new Error("设置内容过长"), { statusCode: 413 });
+    if (size > maxBytes)
+      throw Object.assign(new Error("请求内容过长"), { statusCode: 413 });
     chunks.push(bytes);
   }
   try {

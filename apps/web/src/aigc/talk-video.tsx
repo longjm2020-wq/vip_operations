@@ -31,6 +31,7 @@ import {
   bailianVoiceModelLabel,
 } from "./commerce-bailian-voice";
 import { LipSync, useLipSync, type LipSyncQuery } from "./lip-sync";
+import { CommerceTalkWorkflow } from "./talk-workflow";
 import "./talk-video.css";
 
 const path = "/commerce-video";
@@ -179,7 +180,7 @@ export function TalkVideo() {
   );
 }
 
-type TalkMode = "lip-sync" | "commerce";
+type TalkMode = "lip-sync" | "commerce" | "workflow";
 
 function TalkVideoWorkspace({
   account,
@@ -197,24 +198,35 @@ function TalkVideoWorkspace({
     connection.data?.configured ? "lip-sync" : "commerce",
   );
   const selected = params.get("mode");
-  const mode =
-    !canUseCommerce || selected === "lip-sync"
-      ? "lip-sync"
-      : selected === "commerce" || linkedCommerce
-        ? "commerce"
-        : defaultMode;
+  const hasWorkflowLink = Boolean(
+    params.has("workflow") || params.get("extImport") === "1",
+  );
+  const mode: TalkMode = !canUseCommerce
+    ? "lip-sync"
+    : selected === "workflow" || hasWorkflowLink
+      ? "workflow"
+      : selected === "lip-sync"
+        ? "lip-sync"
+        : selected === "commerce" || linkedCommerce
+          ? "commerce"
+          : defaultMode;
   const portrait = mode === "lip-sync";
+  const isWorkflow = mode === "workflow";
   return (
     <section className="talk-video" aria-labelledby="talk-video-title">
       <Link to="/aigc">
         <ArrowLeftOutlined /> 创作空间
       </Link>
       <header className="talk-video-heading">
-        <h1 id="talk-video-title">{portrait ? "数字人口播" : "服装口播"}</h1>
+        <h1 id="talk-video-title">
+          {portrait ? "数字人口播" : isWorkflow ? "服装口播 · 爆款复刻工作流" : "服装口播"}
+        </h1>
         <p>
           {portrait
             ? "上传人物照片和原声录音，生成对口型视频。"
-            : "选款并填写拍摄要求，生成带字幕的竖屏视频。"}
+            : isWorkflow
+              ? "爆款逆向拆解、分镜脚本与分镜图、CozyClay 三维预演及多模型成片合成（支持全自动 / 人工介入）。"
+              : "选款并填写拍摄要求，生成带字幕的竖屏视频。"}
         </p>
       </header>
       {canUseCommerce && (
@@ -225,6 +237,7 @@ function TalkVideoWorkspace({
           options={[
             { value: "lip-sync", label: "原声对口型" },
             { value: "commerce", label: "商品口播" },
+            { value: "workflow", label: "爆款复刻工作流" },
           ]}
           onChange={(value) =>
             setParams(
@@ -240,6 +253,8 @@ function TalkVideoWorkspace({
       )}
       {portrait ? (
         <LipSync account={account} connection={connection} />
+      ) : isWorkflow ? (
+        <CommerceTalkWorkflow account={account} />
       ) : (
         <CommerceTalkVideo account={account} fal={connection.data} />
       )}

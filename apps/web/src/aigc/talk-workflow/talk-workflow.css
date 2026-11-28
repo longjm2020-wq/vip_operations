@@ -1,0 +1,194 @@
+.wf-root {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.wf-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+}
+
+.wf-panel {
+  border-radius: 12px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.wf-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.wf-panel-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.wf-muted {
+  color: var(--app-secondary);
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+
+.wf-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 12px;
+}
+
+.wf-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 12px;
+}
+
+.wf-card {
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-bg);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wf-shot-card {
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-bg);
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .wf-shot-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wf-shot-thumb {
+  width: 120px;
+  aspect-ratio: 9 / 16;
+  border-radius: 8px;
+  border: 1px dashed var(--app-border);
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--app-secondary);
+  text-align: center;
+  padding: 6px;
+}
+
+.wf-shot-thumb img,
+.wf-shot-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.wf-asset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wf-asset-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  font-size: 12px;
+}
+
+.wf-asset-chip img {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.wf-file-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--app-border);
+  background: var(--app-bg);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.wf-file-btn-sm {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.wf-file-btn input[type="file"] {
+  display: none;
+}
+
+.wf-cozyclay-upload-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.wf-shot-binding-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wf-shot-binding-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+}
+
+.wf-shot-binding-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wf-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--app-border);
+}

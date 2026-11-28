@@ -93,6 +93,7 @@ export function ServiceSettings({
           bailianWorkspaceId: config.bailianWorkspaceId || "",
           useSavedQwenConnection: reuseQwen,
           opentalkingBaseUrl: config.opentalkingBaseUrl || "",
+          cozyclayBaseUrl: config.cozyclayBaseUrl || "",
           runninghubWorkflowId: config.runninghubWorkflowId || "",
           secrets: keys,
         }),
@@ -413,6 +414,27 @@ export function ServiceSettings({
                         <>
                           {field("runninghubWorkflowId", "RunningHub 工作流 ID", "选填")}
                           {secretField("RUNNINGHUB_API_KEY")}
+                        </>
+                      ),
+                    },
+                    {
+                      key: "cozyclay",
+                      label: label("CozyClay 三维预演", "AI 视频创作前 3D 机位与走位预演"),
+                      extra: (
+                        <Tag color={config.cozyclayBaseUrl ? "blue" : "default"}>
+                          {config.cozyclayBaseUrl ? "已配置" : "选配"}
+                        </Tag>
+                      ),
+                      children: (
+                        <>
+                          {field(
+                            "cozyclayBaseUrl",
+                            "CozyClay 独立部署 Web 地址",
+                            "例如 https://cozyclay.example.com 或 http://localhost:5173",
+                          )}
+                          <p className="aigc-connection-note">
+                            配置后可在「服装口播 → 爆款复刻工作流」中内嵌打开 CozyClay 进行三维预演与工程联动（支持 HTTPS 或本机 localhost）。
+                          </p>
                         </>
                       ),
                     },

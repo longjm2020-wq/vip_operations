@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "XUTI 服装口播 · 爆款一键拆解复刻",
+  "version": "1.0.0",
+  "description": "浏览抖音、小红书同行爆款视频时，右键一键发送到 XUTI 服装口播工作台进行逆向拆解、分镜重构与视频复刻。",
+  "permissions": [
+    "contextMenus",
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.douyin.com/*",
+    "https://*.iesdouyin.com/*",
+    "https://*.xiaohongshu.com/*",
+    "https://*.rednote.com/*",
+    "https://*.xhslink.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content-xuti.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "XUTI 爆款拆解配置",
+    "default_popup": "options.html"
+  }
+}

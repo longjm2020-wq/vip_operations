@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>XUTI 爆款拆解插件设置</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        min-width: 340px;
+        background: #14161a;
+        color: #f0f2f5;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+        font-size: 13px;
+      }
+      h2 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+      p {
+        margin: 0 0 12px;
+        color: #9ca3af;
+        line-height: 1.5;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid #2e333d;
+        background: #0d0f12;
+        color: #fff;
+        margin-bottom: 12px;
+      }
+      button {
+        width: 100%;
+        padding: 8px 12px;
+        border: none;
+        border-radius: 6px;
+        background: #1677ff;
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #4096ff;
+      }
+      #status {
+        margin-top: 10px;
+        color: #52c41a;
+        min-height: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>XUTI 服装口播 · 爆款拆解插件</h2>
+    <p>
+      配置你的 XUTI 系统地址。插件会自动复用当前浏览器已登录的 XUTI 会话，无需额外填写 API Token。
+    </p>
+    <label for="origin">XUTI 站点地址（例如 https://xuti.example.com）</label>
+    <input id="origin" type="url" placeholder="http://localhost:5173" />
+    <button id="save">保存设置</button>
+    <div id="status"></div>
+    <script src="options.js"></script>
+  </body>
+</html>
