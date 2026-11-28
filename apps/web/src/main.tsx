@@ -372,7 +372,7 @@ function Workspace({ user }: { user: Row }) {
           </Link>
           {!navCollapsed && (
             <div className="sidebar-caption" title={coreFeatureSummary}>
-              内部管理系统
+              AI智能工作台
             </div>
           )}
           <Menu
