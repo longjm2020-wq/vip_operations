@@ -338,6 +338,7 @@ a {
   margin: 0 auto;
 }
 .content.selection-workspace-content,
+.content.compact-table-content,
 .content:has(.selection-card, .sheet-workspace) {
   padding: 8px;
 }

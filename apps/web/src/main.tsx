@@ -299,6 +299,7 @@ function Workspace({ user }: { user: Row }) {
   const activeWorkspace = visibleItems.find((i) => i.key === activeKey);
   const tableDetail = location.pathname.startsWith("/project-tables/");
   const collaborationTable = location.pathname.startsWith("/style-selections") || location.pathname === "/products" || tableDetail;
+  const inventoryTable = location.pathname === "/operations/vip/inventory";
   const vipWorkspaceRoute = resolveVipWorkspaceRoute(location.pathname);
   const {
     tabs: vipTabs,
@@ -480,7 +481,7 @@ function Workspace({ user }: { user: Row }) {
           {/* Commit the route marker with its content, after lazy routes resolve. */}
           <PageResourceBoundary routeContent>
           <Layout.Content
-            className={`content${collaborationTable ? " selection-workspace-content" : ""}`}
+            className={`content${collaborationTable ? " selection-workspace-content" : ""}${inventoryTable ? " compact-table-content" : ""}`}
             data-voice-page-root="true"
             data-voice-page-path={location.pathname + location.search + location.hash}
           >
