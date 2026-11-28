@@ -332,10 +332,14 @@ a {
   }
 }
 .content {
-  padding: 8px;
+  padding: 8px 24px;
   max-width: none;
   width: 100%;
   margin: 0 auto;
+}
+.content.selection-workspace-content,
+.content:has(.selection-card, .sheet-workspace) {
+  padding: 8px;
 }
 .account-menu-trigger.ant-btn {
   height: 36px;

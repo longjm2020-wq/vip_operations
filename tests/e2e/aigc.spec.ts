@@ -460,7 +460,7 @@ test("the apparel entry opens and submits a mixed product batch", async ({ page 
       topGap: Math.round(rect.top - contentRect.top),
     };
   });
-  expect(homeSpacing).toEqual({ leftGap: 8, rightGap: 8, topGap: 8 });
+  expect(homeSpacing).toEqual({ leftGap: 24, rightGap: 24, topGap: 8 });
   await page.getByRole("button", { name: /服装口播.*商品讲解/ }).click();
   await expect(page.getByRole("heading", { name: "服装口播" })).toBeVisible();
   const topbarNav = page.locator(".topbar .workspace-subnav");
