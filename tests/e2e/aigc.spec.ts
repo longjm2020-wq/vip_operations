@@ -489,10 +489,54 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
 }) => {
   await fixture(page, "dark", true, true);
   const workflowId = randomUUID();
+  const charId = randomUUID();
   let storedWorkflow: any = null;
+  let storedCharacters: any[] = [];
   await page.route("**/api/v1/aigc/digital-human/lip-sync", (route) =>
     route.fulfill({ json: { configured: true, jobs: [] } }),
   );
+  await page.route("**/api/v1/aigc/commerce-video/options", (route) =>
+    route.fulfill({
+      json: {
+        available: true,
+        presenters: [],
+        voices: [{ id: "bailian:v1", name: "小雅克隆音", kind: "cloned", provider: "bailian", model: "cosyvoice-v3.5-flash" }],
+      },
+    }),
+  );
+  await page.route("**/api/v1/aigc/commerce-video/characters**", async (route) => {
+    const url = new URL(route.request().url());
+    const method = route.request().method();
+    if (url.pathname.endsWith("/characters") && method === "GET") {
+      return route.fulfill({ json: { characters: storedCharacters } });
+    }
+    if (url.pathname.endsWith("/characters") && method === "POST") {
+      const body = route.request().postDataJSON();
+      const created = {
+        id: charId,
+        ...body,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      storedCharacters = [created];
+      return route.fulfill({ status: 201, json: { character: created } });
+    }
+    if (url.pathname.endsWith("/views") && method === "POST") {
+      storedCharacters = storedCharacters.map((c) =>
+        c.id === charId
+          ? {
+              ...c,
+              faceUrl: "/mock/face.png",
+              frontUrl: "/mock/front.png",
+              backUrl: "/mock/back.png",
+              sideUrl: "/mock/side.png",
+            }
+          : c,
+      );
+      return route.fulfill({ status: 201, json: { character: storedCharacters[0] } });
+    }
+    return route.fulfill({ status: 404, json: { error: "unknown char route" } });
+  });
   await page.route("**/api/v1/aigc/commerce-video/workflows**", async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
@@ -605,6 +649,27 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await timeline.getByRole("button", { name: "新增分镜" }).click();
   await expect(timeline.getByText("新增分镜 1")).toBeVisible();
   await expect(page.getByLabel("参数检查器").getByText("分镜参数 · S01")).toBeVisible();
+
+  // 切到「素材」面板测试数字人角色库（面部 + 三视图 + 克隆音色）创建与绑定
+  await page.getByRole("tab", { name: "素材" }).click();
+  await expect(page.getByLabel("数字人角色库")).toBeVisible();
+  await page.getByRole("button", { name: "新建角色" }).click();
+  const charDialog = page.getByRole("dialog", { name: /新建数字人角色/ });
+  await charDialog.getByLabel("数字人角色名称").fill("主理人小雅");
+  await charDialog.getByLabel("角色人设与身形描述").fill("165cm 梨形身材，通勤松弛感");
+  const mockImg = await sharp({
+    create: { width: 120, height: 160, channels: 3, background: "#435ee5" },
+  })
+    .png()
+    .toBuffer();
+  await charDialog.getByLabel("上传面部特写").setInputFiles({ name: "face.png", mimeType: "image/png", buffer: mockImg });
+  await charDialog.getByLabel("上传正面视图").setInputFiles({ name: "front.png", mimeType: "image/png", buffer: mockImg });
+  await charDialog.getByLabel("上传背面视图").setInputFiles({ name: "back.png", mimeType: "image/png", buffer: mockImg });
+  await charDialog.getByLabel("上传侧面视图").setInputFiles({ name: "side.png", mimeType: "image/png", buffer: mockImg });
+  await charDialog.getByRole("button", { name: "保存至角色库" }).click();
+  await expect(charDialog).toBeHidden();
+  await expect(page.getByLabel("数字人角色库").getByText("主理人小雅")).toBeVisible();
+  await expect(page.getByLabel("数字人角色库").getByText("4/4 视图")).toBeVisible();
 
   // 切到「剪辑」面板执行 AI 自动编排后期并校验导出 AE 脚本按钮与时间轴徽标
   await page.getByRole("tab", { name: "剪辑" }).click();

@@ -41,6 +41,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import type {
   AiEditWorkflowInput,
+  WorkflowCharacterAngle,
   WorkflowEffect,
   WorkflowFilter,
   WorkflowMotion,
@@ -51,8 +52,10 @@ import type {
   WorkflowTransition,
 } from "../../../../../packages/contracts/src/commerce-talk-workflow";
 import { studioApi } from "../api";
+import { CharacterLibraryPanel } from "./character-library";
 import { CozyClayPrevisPanel } from "./cozyclay-panel";
 import {
+  characterAngleLabels,
   defaultShotPostEdit,
   effectLabels,
   filterLabels,
@@ -339,6 +342,7 @@ export function CommerceTalkWorkflow({
           deconstructData: target.deconstructData,
           assetsConfig: {
             presenterId: target.assetsConfig.presenterId,
+            characterLibraryIds: target.assetsConfig.characterLibraryIds || [],
             productId: target.assetsConfig.productId,
             productStyleNo: target.assetsConfig.productStyleNo,
             productImageIds: target.assetsConfig.productImageIds,
@@ -978,20 +982,45 @@ export function CommerceTalkWorkflow({
               </div>
             )}
 
-            {/* 标签 3：主播、商品、角色、道具、场景素材 */}
+            {/* 标签 3：数字人角色库（面部+三视图+音色）与商品/角色/道具/场景素材 */}
             {libTab === "assets" && (
-              !draft ? (
-                <Alert
-                  type="info"
-                  showIcon
-                  title="请先在「导入」页新建或打开一个工作流"
+              <>
+                <CharacterLibraryPanel
+                  account={account}
+                  enabled={canUseCommerce}
+                  boundIds={draft?.assetsConfig.characterLibraryIds || []}
+                  disabled={active}
+                  onToggleBind={
+                    draft
+                      ? (characterId, checked) =>
+                          patchDraft((cur) => {
+                            const prevIds = cur.assetsConfig.characterLibraryIds || [];
+                            const nextIds = checked
+                              ? [...new Set([...prevIds, characterId])]
+                              : prevIds.filter((id) => id !== characterId);
+                            return {
+                              ...cur,
+                              assetsConfig: {
+                                ...cur.assetsConfig,
+                                characterLibraryIds: nextIds,
+                              },
+                            };
+                          })
+                      : undefined
+                  }
                 />
-              ) : (
-                <>
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head">
-                      <span>数字人主播与绑定商品</span>
-                    </div>
+                {!draft ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="新建或打开工作流后，可勾选上方角色库角色并绑定商品/道具/场景参与脚本出镜"
+                  />
+                ) : (
+                  <>
+                    <div className="wf-section-card">
+                      <div className="wf-section-card-head">
+                        <span>数字人主播与绑定商品</span>
+                      </div>
                     <Select
                       size="small"
                       placeholder="选择数字人主播（含克隆音色与授权照）"
@@ -1142,7 +1171,8 @@ export function CommerceTalkWorkflow({
                     )}
                   </div>
                 </>
-              )
+              )}
+              </>
             )}
 
             {/* 标签 3：爆款逆向拆解结果 */}
@@ -1823,6 +1853,44 @@ export function CommerceTalkWorkflow({
                   />
                 </div>
                 <div className="wf-prop-row">
+                  <span className="wf-prop-label">出镜数字人</span>
+                  <Select
+                    size="small"
+                    allowClear
+                    placeholder="从角色库选择出镜数字人"
+                    value={selectedShot.characterId}
+                    disabled={active}
+                    options={(catalog?.characters || []).map((c) => ({
+                      value: c.id,
+                      label: `${c.name}${c.voiceName ? ` · ${c.voiceName}` : ""}`,
+                    }))}
+                    onChange={(characterId) => {
+                      const picked = (catalog?.characters || []).find(
+                        (c) => c.id === characterId,
+                      );
+                      patchShot(selectedShot.id, (s) => ({
+                        ...s,
+                        characterId: characterId || undefined,
+                        characterNames: picked ? [picked.name] : s.characterNames,
+                      }));
+                    }}
+                  />
+                </div>
+                <div className="wf-prop-row">
+                  <span className="wf-prop-label">出镜视角</span>
+                  <Select<WorkflowCharacterAngle>
+                    size="small"
+                    value={selectedShot.characterAngle || "auto"}
+                    disabled={active}
+                    options={Object.entries(characterAngleLabels).map(
+                      ([value, label]) => ({ value, label }),
+                    )}
+                    onChange={(characterAngle) =>
+                      patchShot(selectedShot.id, (s) => ({ ...s, characterAngle }))
+                    }
+                  />
+                </div>
+                <div className="wf-prop-row">
                   <span className="wf-prop-label">分镜时长</span>
                   <InputNumber
                     size="small"
@@ -2339,6 +2407,11 @@ export function CommerceTalkWorkflow({
                         </div>
                         <span className="wf-tl-clip-sub">{shot.title}</span>
                         <div className="wf-tl-clip-badges">
+                          {shot.characterAngle && shot.characterAngle !== "auto" && (
+                            <span className="wf-tl-clip-badge">
+                              {characterAngleLabels[shot.characterAngle]}
+                            </span>
+                          )}
                           {shot.postEdit?.transition && shot.postEdit.transition !== "none" && (
                             <span className="wf-tl-clip-badge">
                               {transitionLabels[shot.postEdit.transition]}

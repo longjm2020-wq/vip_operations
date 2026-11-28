@@ -52,6 +52,59 @@ export const workflowShotTypes = [
 ] as const;
 export type WorkflowShotType = (typeof workflowShotTypes)[number];
 
+/** 数字人出镜视角与站位（打破固定正面口播局限，支持三视图多角度出镜） */
+export const workflowCharacterAngles = [
+  "auto",
+  "front_closeup",
+  "front_medium",
+  "side_profile",
+  "back_turn",
+  "walking_full",
+  "over_shoulder",
+] as const;
+export type WorkflowCharacterAngle = (typeof workflowCharacterAngles)[number];
+
+/** 数字人角色库单条定义（面部 + 正面/背面/侧面三视图 + 克隆音色） */
+export const digitalHumanCharacterSchema = z
+  .object({
+    id: z.string().uuid(),
+    name: z.string().trim().min(1).max(60),
+    persona: z.string().trim().max(400).default(""),
+    faceAssetId: z.string().uuid().optional(),
+    frontAssetId: z.string().uuid().optional(),
+    backAssetId: z.string().uuid().optional(),
+    sideAssetId: z.string().uuid().optional(),
+    faceUrl: z.string().max(500).optional(),
+    frontUrl: z.string().max(500).optional(),
+    backUrl: z.string().max(500).optional(),
+    sideUrl: z.string().max(500).optional(),
+    voiceId: z.string().trim().max(180).default(""),
+    voiceName: z.string().trim().max(120).default(""),
+    voiceProvider: z.string().trim().max(40).default(""),
+    voiceModel: z.string().trim().max(80).default(""),
+    authorized: z.boolean().default(false),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .strict();
+export type DigitalHumanCharacter = z.infer<typeof digitalHumanCharacterSchema>;
+
+/** 创建/更新数字人角色请求体 */
+export const upsertDigitalHumanCharacterSchema = z
+  .object({
+    name: z.string().trim().min(1).max(60),
+    persona: z.string().trim().max(400).default(""),
+    voiceId: z.string().trim().max(180).default(""),
+    voiceName: z.string().trim().max(120).default(""),
+    voiceProvider: z.string().trim().max(40).default(""),
+    voiceModel: z.string().trim().max(80).default(""),
+    authorized: z.boolean().default(true),
+  })
+  .strict();
+export type UpsertDigitalHumanCharacterInput = z.infer<
+  typeof upsertDigitalHumanCharacterSchema
+>;
+
 /** 镜头转场预设（对应 FFmpeg xfade 与 AE 转场关键帧） */
 export const workflowTransitions = [
   "none",
@@ -231,6 +284,7 @@ export type WorkflowDeconstructData = z.infer<typeof workflowDeconstructSchema>;
 export const workflowAssetsConfigSchema = z
   .object({
     presenterId: z.string().uuid().optional(),
+    characterLibraryIds: z.array(z.string().uuid()).max(6).default([]),
     productId: z.string().regex(/^\d+$/).optional(),
     productStyleNo: z.string().trim().max(80).optional(),
     productImageIds: z.array(z.string().min(1).max(100)).max(8).default([]),
@@ -281,6 +335,8 @@ export const workflowShotSchema = z
     props: z.string().trim().max(300).default(""),
     scene: z.string().trim().max(400).default(""),
     characterNames: z.array(z.string().trim().max(60)).max(6).default([]),
+    characterId: z.string().uuid().optional(),
+    characterAngle: z.enum(workflowCharacterAngles).optional(),
     productImageId: z.string().max(100).optional(),
     durationSec: z.number().min(2).max(30).default(5),
     storyboardPrompt: z.string().trim().max(2000).default(""),

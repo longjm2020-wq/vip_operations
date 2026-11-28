@@ -1,5 +1,7 @@
 import type {
+  DigitalHumanCharacter,
   WorkflowAssetsConfig,
+  WorkflowCharacterAngle,
   WorkflowCozyClayState,
   WorkflowDeconstructData,
   WorkflowEffect,
@@ -97,6 +99,7 @@ export type WorkflowCatalog = {
     voiceModel?: string;
     engine?: "fal";
   }>;
+  characters?: DigitalHumanCharacter[];
   defaults: {
     deconstructModel: string;
     scriptModel: string;
@@ -130,6 +133,16 @@ export const shotTypeLabels: Record<WorkflowShot["type"], string> = {
   previs_video: "CozyClay 三维预演视频",
   broll_video: "AI 穿搭展示（B-roll）",
   product_insert: "商品实拍特写",
+};
+
+export const characterAngleLabels: Record<WorkflowCharacterAngle, string> = {
+  auto: "智能匹配脚本角度",
+  front_closeup: "正面近景特写",
+  front_medium: "正面中景展示",
+  side_profile: "45°~90° 侧面轮廓",
+  back_turn: "背面展示 / 回眸转身",
+  walking_full: "全身动态走位",
+  over_shoulder: "过肩 / 对镜自拍",
 };
 
 export const transitionLabels: Record<WorkflowTransition, string> = {

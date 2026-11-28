@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import sharp from "sharp";
+import {
+  characterAnglePromptHint,
+  pickCharacterViewAssetIds,
+} from "../../apps/api/src/modules/aigc/digital-human-characters.js";
 import { renderWorkflowVideo } from "../../apps/api/src/modules/workspace/commerce-video-render.js";
 import {
   buildAfterEffectsScript,
@@ -23,6 +27,7 @@ const sampleShots: WorkflowShot[] = [
     props: "",
     scene: "",
     characterNames: ["主播"],
+    characterAngle: "front_medium",
     durationSec: 3,
     storyboardPrompt: "",
     status: "pending",
@@ -38,6 +43,7 @@ const sampleShots: WorkflowShot[] = [
     props: "",
     scene: "",
     characterNames: [],
+    characterAngle: "side_profile",
     durationSec: 3,
     storyboardPrompt: "",
     status: "pending",
@@ -148,4 +154,29 @@ describe("AI 代码自动化智能剪辑与 AE 后期引擎", () => {
     expect(result.duration).toBeGreaterThan(3.0);
     expect(result.duration).toBeLessThan(4.3);
   }, 60_000);
+
+  it("按分镜出镜视角智能挑选数字人面部与正/背/侧三视图组合", () => {
+    const char = {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "主理人小雅",
+      persona: "165cm 通勤御姐风",
+      faceAssetId: "face-id",
+      frontAssetId: "front-id",
+      backAssetId: "back-id",
+      sideAssetId: "side-id",
+      voiceId: "bailian:voice-1",
+      voiceName: "温柔主播音",
+      voiceProvider: "bailian",
+      voiceModel: "cosyvoice-v3.5-flash",
+      authorized: true,
+      createdAt: "2026-11-28T00:00:00.000Z",
+      updatedAt: "2026-11-28T00:00:00.000Z",
+    };
+    expect(pickCharacterViewAssetIds(char, "back_turn")[0]).toBe("back-id");
+    expect(pickCharacterViewAssetIds(char, "side_profile")[0]).toBe("side-id");
+    expect(pickCharacterViewAssetIds(char, "front_closeup")[0]).toBe("face-id");
+    expect(pickCharacterViewAssetIds(char, "walking_full")[0]).toBe("front-id");
+    expect(characterAnglePromptHint("back_turn")).toContain("背面");
+    expect(characterAnglePromptHint("side_profile")).toContain("侧面");
+  });
 });

@@ -48,6 +48,7 @@ import {
   readBailianCommerceVoice,
 } from "./bailian-commerce-voice.js";
 import { handleCommerceTalkWorkflow } from "./commerce-talk-workflow.js";
+import { handleDigitalHumanCharacters } from "./digital-human-characters.js";
 
 const prefix = "/api/v1/aigc/commerce-video";
 const photoId = z.string().min(1).max(100);
@@ -272,6 +273,9 @@ export async function handleCommerceVideo(
   requirePermission(actor, "product.read");
   if (suffix === "/workflows" || suffix.startsWith("/workflows/")) {
     return handleCommerceTalkWorkflow(studio, actor, suffix, req, res, readBody);
+  }
+  if (suffix === "/characters" || suffix.startsWith("/characters/")) {
+    return handleDigitalHumanCharacters(studio, actor, suffix, req, res, readBody);
   }
   if (suffix === "/options" && req.method === "GET") {
     const options = await commercePresenterOptions(studio, actor);

@@ -80,6 +80,12 @@ import {
   startCommercePresenterVideo,
 } from "./commerce-presenter.js";
 import { commerceProduct, commerceProductImage } from "./commerce-products.js";
+import {
+  characterAnglePromptHint,
+  listDigitalHumanCharacters,
+  loadDigitalHumanCharactersByIds,
+  pickCharacterViewAssetIds,
+} from "./digital-human-characters.js";
 import { maxAssetBytes } from "./persistence.js";
 import { downloadPublicReference } from "./public-reference-download.js";
 
@@ -336,6 +342,7 @@ export async function workflowCatalog(studio: Studio, actor: Actor) {
     note: magi2VideoModelSpec.note,
   });
 
+  const characters = await listDigitalHumanCharacters(actor).catch(() => []);
   return {
     scriptModels,
     imageModels,
@@ -345,6 +352,7 @@ export async function workflowCatalog(studio: Studio, actor: Actor) {
     cozyclayBaseUrl: String((studio.config as Record<string, any>).cozyclayBaseUrl || ""),
     presenters: presenterOptions.presenters,
     bailian: presenterOptions.bailian,
+    characters,
     defaults: {
       deconstructModel: "openrouter|google/gemini-4-neon",
       scriptModel: "openrouter|openai/gpt-6.2-astra",
@@ -1217,22 +1225,37 @@ export async function processCommerceTalkWorkflow(
       return;
     }
 
-    // 阶段 C：融合数字人/角色/商品/道具/场景/需求重构分镜脚本
+    // 阶段 C：融合数字人角色库（面部+三视图+音色）/商品/道具/场景/需求重构多角度出镜分镜脚本
     if (stage === "scripting") {
       const product = assetsConfig.productId
         ? await commerceProduct(actor, assetsConfig.productId).catch(() => undefined)
         : undefined;
+      const boundCharacters = await loadDigitalHumanCharactersByIds(
+        actor,
+        assetsConfig.characterLibraryIds || [],
+      );
       const systemPrompt =
-        '你是服装口播分镜导演。请结合「同行爆款拆解结构」「我的商品真实资料」「角色/道具/场景」「拍摄需求」重新创作可直接拍摄与 AI 生成的分镜脚本。严格输出 JSON：{"shots":[{"id":"S01","order":1,"title":"开场痛点钩子","type":"talking_head|previs_video|broll_video|product_insert","caption":"自然普通话口播台词（6至42字，严禁编造未提供的面料/价格）","camera":"景别与机位描述","action":"人物动作与服装展示细节","props":"涉及道具或服饰细节","scene":"场景光影与环境","characterNames":["主播"],"durationSec":5,"storyboardPrompt":"用于生图模型的高质量竖屏9:16分镜画面提示词"}]}。口播开头与结尾优先使用 talking_head，动作走位/交互展示用 previs_video 或 broll_video，细节特写用 product_insert。共生成 3 至 8 镜，只输出合法 JSON。';
+        '你是服装口播分镜导演。请结合「同行爆款拆解结构」「我的商品真实资料」「数字人角色库（具备面部与正面/背面/侧面三视图）」「道具/场景」「拍摄需求」创作可直接拍摄与 AI 生成的多角度出镜分镜脚本。重要原则：数字人可以自然参与全片各类镜头出镜，严禁局限于固定一个角度位置进行呆板口播，应合理编排正面近景（front_closeup）、正面中景（front_medium）、45°/90°侧面轮廓（side_profile）、背面展示/回眸（back_turn）、全身走动交互（walking_full）、过肩/对镜视角（over_shoulder）。严格输出 JSON：{"shots":[{"id":"S01","order":1,"title":"开场痛点钩子","type":"talking_head|previs_video|broll_video|product_insert","characterId":"绑定角色库ID（可选）","characterAngle":"front_closeup|front_medium|side_profile|back_turn|walking_full|over_shoulder|auto","caption":"自然普通话口播台词（6至42字，严禁编造未提供的面料/价格）","camera":"景别与机位描述","action":"人物动作、走位转身与服装展示细节","props":"涉及道具或服饰细节","scene":"场景光影与环境","characterNames":["角色名"],"durationSec":5,"storyboardPrompt":"用于生图模型的高质量竖屏9:16分镜画面提示词"}]}。共生成 3 至 8 镜，只输出合法 JSON。';
       const userPayload = JSON.stringify({
         爆款拆解结构: wf.deconstruct_data || {},
         商品资料: product?.facts || { 说明: "未绑定档案商品，按拍摄需求中性表达" },
-        角色列表: (assetsConfig.characters || []).map((c) => c.name),
+        数字人角色库: boundCharacters.map((c) => ({
+          id: c.id,
+          name: c.name,
+          persona: c.persona,
+          已备视图: [
+            c.faceAssetId ? "面部" : null,
+            c.frontAssetId ? "正面" : null,
+            c.backAssetId ? "背面" : null,
+            c.sideAssetId ? "侧面" : null,
+          ].filter(Boolean),
+        })),
+        补充角色图: (assetsConfig.characters || []).map((c) => c.name),
         道具列表: (assetsConfig.props || []).map((p) => p.name),
         场景列表: (assetsConfig.scenes || []).map((s) => s.name),
         场景模式: assetsConfig.sceneMode || "smart",
         目标时长秒: assetsConfig.targetDurationSec || 20,
-        拍摄需求: assetsConfig.creativeBrief || "自然真实服装带货口播",
+        拍摄需求: assetsConfig.creativeBrief || "自然真实服装带货口播，多机位多角度出镜",
       });
       const raw = await callWorkflowLlm(
         studio,
@@ -1244,6 +1267,8 @@ export async function processCommerceTalkWorkflow(
       if (!rawShots.length)
         throw Error("脚本模型未返回有效分镜，请补充拍摄需求后重试");
       const productImageIds = assetsConfig.productImageIds || [];
+      const validCharIds = new Set(boundCharacters.map((c) => c.id));
+      const defaultChar = boundCharacters[0];
       const shots: WorkflowShot[] = rawShots.slice(0, 12).map((item: any, idx: number) =>
         workflowShotSchema.parse({
           id: `S${String(idx + 1).padStart(2, "0")}`,
@@ -1266,7 +1291,30 @@ export async function processCommerceTalkWorkflow(
           scene: String(item.scene || "").slice(0, 400),
           characterNames: Array.isArray(item.characterNames)
             ? item.characterNames.slice(0, 4).map((n: unknown) => String(n).slice(0, 60))
-            : ["主播"],
+            : defaultChar
+              ? [defaultChar.name]
+              : ["主播"],
+          characterId:
+            typeof item.characterId === "string" && validCharIds.has(item.characterId)
+              ? item.characterId
+              : defaultChar?.id,
+          characterAngle: [
+            "auto",
+            "front_closeup",
+            "front_medium",
+            "side_profile",
+            "back_turn",
+            "walking_full",
+            "over_shoulder",
+          ].includes(item.characterAngle)
+            ? item.characterAngle
+            : idx === 0
+              ? "front_medium"
+              : idx % 3 === 1
+                ? "side_profile"
+                : idx % 3 === 2
+                  ? "walking_full"
+                  : "back_turn",
           productImageId: productImageIds.length
             ? productImageIds[idx % productImageIds.length]
             : undefined,
@@ -1298,15 +1346,23 @@ export async function processCommerceTalkWorkflow(
       });
       const imageReady = imageRouteConfigured(studio.config, imgRoute);
 
-      // 收集参考图（角色 + 商品 + 道具 + 场景）
-      const refBuffers: Buffer[] = [];
+      // 收集公共参考图（补充角色 + 商品 + 道具 + 场景）以及角色库多视图映射
+      const boundCharacters = await loadDigitalHumanCharactersByIds(
+        actor,
+        [
+          ...(assetsConfig.characterLibraryIds || []),
+          ...shots.map((s) => s.characterId || ""),
+        ],
+      );
+      const characterMap = new Map(boundCharacters.map((c) => [c.id, c]));
+      const baseRefBuffers: Buffer[] = [];
       for (const item of [
         ...(assetsConfig.characters || []).slice(0, 2),
         ...(assetsConfig.props || []).slice(0, 2),
         ...(assetsConfig.scenes || []).slice(0, 1),
       ]) {
         const loaded = await studio.store.readAsset(item.assetId);
-        if (loaded?.buffer) refBuffers.push(loaded.buffer);
+        if (loaded?.buffer) baseRefBuffers.push(loaded.buffer);
       }
       if (assetsConfig.productId && assetsConfig.productImageIds?.length) {
         const product = await commerceProduct(actor, assetsConfig.productId).catch(
@@ -1319,22 +1375,23 @@ export async function processCommerceTalkWorkflow(
               const img = await commerceProductImage(p.source, product.tableId).catch(
                 () => undefined,
               );
-              if (img?.content) refBuffers.push(img.content);
+              if (img?.content) baseRefBuffers.push(img.content);
             }
           }
         }
       }
 
-      if (imageReady && refBuffers.length >= 2) {
-        const dataUris = await Promise.all(
-          refBuffers.slice(0, 6).map(async (buf) => {
-            const jpg = await sharp(buf)
-              .resize({ width: 1280, height: 1280, fit: "inside", withoutEnlargement: true })
-              .jpeg({ quality: 84 })
-              .toBuffer();
-            return `data:image/jpeg;base64,${jpg.toString("base64")}`;
-          }),
-        );
+      const toDataUri = async (buf: Buffer) => {
+        const jpg = await sharp(buf)
+          .resize({ width: 1280, height: 1280, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 84 })
+          .toBuffer();
+        return `data:image/jpeg;base64,${jpg.toString("base64")}`;
+      };
+
+      let hadEnoughRefs = baseRefBuffers.length >= 2 || boundCharacters.length > 0;
+      if (imageReady && hadEnoughRefs) {
+        const baseDataUris = await Promise.all(baseRefBuffers.slice(0, 4).map(toDataUri));
         for (let i = 0; i < shots.length; i++) {
           if (!active()) return;
           const shot = shots[i];
@@ -1343,9 +1400,31 @@ export async function processCommerceTalkWorkflow(
             continue;
           }
           try {
+            // 优先按分镜视角注入该数字人角色的面部 + 正/背/侧对应三视图
+            const shotChar =
+              (shot.characterId ? characterMap.get(shot.characterId) : undefined) ||
+              boundCharacters[0];
+            const charViewUris: string[] = [];
+            if (shotChar) {
+              const viewIds = pickCharacterViewAssetIds(
+                shotChar,
+                shot.characterAngle || "auto",
+              ).slice(0, 3);
+              for (const vid of viewIds) {
+                const loaded = await studio.store.readAsset(vid);
+                if (loaded?.buffer) charViewUris.push(await toDataUri(loaded.buffer));
+              }
+            }
+            const shotImages = [...charViewUris, ...baseDataUris].slice(0, 6);
+            if (shotImages.length < 2) {
+              hadEnoughRefs = false;
+              shots[i] = { ...shot, status: "ready" };
+              continue;
+            }
+            const angleHint = characterAnglePromptHint(shot.characterAngle || "auto");
             const body = keyframeImageBody(imgRoute, {
-              prompt: `服装带货竖屏分镜图：${shot.storyboardPrompt || `${shot.camera}，${shot.action}，${shot.scene}`}。保持参考人物与服装外观一致，电影级真实棚拍光影，无文字水印。`,
-              images: dataUris,
+              prompt: `服装带货竖屏分镜图：${shot.storyboardPrompt || `${shot.camera}，${shot.action}，${shot.scene}`}。出镜视角要求：${angleHint}。${shotChar?.persona ? `出镜数字人特征：${shotChar.persona}。` : ""}严格保持参考数字人的面部五官、身形三视图与服装外观一致，电影级真实光影，无文字水印。`,
+              images: shotImages,
               aspectRatio: assetsConfig.aspectRatio || "9:16",
             });
             const taskId = await submitKeyframe(studio.config, imgRoute, body);
@@ -1404,8 +1483,8 @@ export async function processCommerceTalkWorkflow(
           : "review_storyboard";
       const notice = !imageReady
         ? "当前未配置 AgentAI 图像生图服务，已跳过自动生分镜图（你仍可手动上传分镜图或直接继续）。"
-        : refBuffers.length < 2
-          ? "自动生成分镜图需要至少 2 张参考图（角色/商品/场景），已进入审阅，你可补充素材后重试或手动上传。"
+        : !hadEnoughRefs
+          ? "自动生成分镜图需要至少 2 张参考图（数字人角色三视图/商品/场景），已进入审阅，你可补充素材后重试或手动上传。"
           : null;
       await db.$executeRawUnsafe(
         `UPDATE public.commerce_talk_workflows
@@ -1419,9 +1498,17 @@ export async function processCommerceTalkWorkflow(
       return;
     }
 
-    // 阶段 E：逐镜生产（克隆配音 + 对口型 / CozyClay 预演 H3 / 多模型视频生成）
+    // 阶段 E：逐镜生产（克隆配音 + 对口型 / 数字人多角度动态出镜 / CozyClay 预演 H3 / 多模型视频生成）
     if (stage === "producing") {
       const shots = ([...(wf.shots || [])] as WorkflowShot[]);
+      const boundCharacters = await loadDigitalHumanCharactersByIds(
+        actor,
+        [
+          ...(assetsConfig.characterLibraryIds || []),
+          ...shots.map((s) => s.characterId || ""),
+        ],
+      );
+      const characterMap = new Map(boundCharacters.map((c) => [c.id, c]));
       let allDone = true;
 
       for (let i = 0; i < shots.length; i++) {
@@ -1435,8 +1522,14 @@ export async function processCommerceTalkWorkflow(
           continue;
         }
 
-        // 2. 数字人口播对口型分镜（复用已跑通的百炼克隆音色 + fal MiniMax H3 Max Lip Sync）
-        if (shot.type === "talking_head") {
+        // 2. 固定正面数字人口播对口型分镜（当镜头为非正面多角度视角如侧身/背面/全身走动时，自动转为多模态视频生成以打破固定角度限制）
+        const isFixedFrontTalking =
+          shot.type === "talking_head" &&
+          Boolean(assetsConfig.presenterId) &&
+          !["side_profile", "back_turn", "walking_full", "over_shoulder"].includes(
+            shot.characterAngle || "auto",
+          );
+        if (isFixedFrontTalking) {
           if (!assetsConfig.presenterId) {
             throw Error("请先在「资产与模型」中选择已授权的数字人主播");
           }
@@ -1515,10 +1608,31 @@ export async function processCommerceTalkWorkflow(
                 );
               }
             }
+            // 自动注入该分镜出镜数字人的面部 + 匹配角度三视图（正/背/侧），实现跨角度高一致性出镜
+            const shotChar =
+              (shot.characterId ? characterMap.get(shot.characterId) : undefined) ||
+              boundCharacters[0];
+            if (shotChar) {
+              const viewIds = pickCharacterViewAssetIds(
+                shotChar,
+                shot.characterAngle || "auto",
+              ).slice(0, 3);
+              for (const vid of viewIds) {
+                const loaded = await studio.store.readAsset(vid);
+                if (loaded?.buffer && refImages.length < 4) {
+                  refImages.push(
+                    `data:image/jpeg;base64,${(await sharp(loaded.buffer).resize({ width: 1280, height: 1280, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 84 }).toBuffer()).toString("base64")}`,
+                  );
+                }
+              }
+            }
+            const angleHint = characterAnglePromptHint(shot.characterAngle || "auto");
             const prompt = [
               shot.type === "previs_video"
                 ? "严格遵循 CozyClay 三维预演机位、人物走位与服装道具轨迹。"
                 : "",
+              `出镜视角：${angleHint}。`,
+              shotChar?.persona ? `出镜数字人特征：${shotChar.persona}。` : "",
               shot.camera,
               shot.action,
               shot.props ? `道具细节：${shot.props}` : "",
