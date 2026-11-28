@@ -811,6 +811,20 @@ async function analyzeSmartCreateIntent(
             "创作剧本智能成片")
         : combinedText.slice(0, 22) || "AI 对话智能成片";
 
+  const userTurns =
+    input.messages.filter((m) => m.role === "user").length +
+    (input.prompt ? 1 : 0);
+  const needsClarification =
+    detectedIntent === "chat" &&
+    userTurns <= 1 &&
+    combinedText.length < 36 &&
+    !input.attachmentNames.length;
+
+  const chosenModel =
+    input.orchestratorModel ||
+    input.modelConfig?.scriptModel ||
+    `openrouter|${studio.config.openrouterModel || "openai/gpt-6.1-sol"}`;
+
   let intent = {
     detectedIntent,
     sourcePlatform,
@@ -823,6 +837,14 @@ async function analyzeSmartCreateIntent(
         ? "3:4"
         : "9:16") as "9:16" | "16:9" | "3:4",
     targetDurationSec: Number(combinedText.match(/(\d{1,2})\s*秒/)?.[1]) || 20,
+    readyToCreate: !needsClarification,
+    followUpQuestions: needsClarification
+      ? [
+          "风格偏向高级杂志感还是自然日常口播？",
+          "目标时长大约 15 秒还是 30 秒，需要突出哪些核心卖点？",
+        ]
+      : ([] as string[]),
+    modelUsed: chosenModel,
     intentSummary:
       detectedIntent === "viral_link"
         ? `已识别为${sourcePlatform === "douyin" ? "抖音" : sourcePlatform === "xhs" ? "小红书" : "外部"}爆款视频链接，将自动拉取并逆向拆解镜头与钩子。`
@@ -831,10 +853,12 @@ async function analyzeSmartCreateIntent(
           : `已识别为 AI 对话创作需求${input.attachmentNames.length ? `（含 ${input.attachmentNames.length} 个附件）` : ""}，已智能提炼拍摄方案并匹配场景/道具/服饰。`,
     assistantReply:
       detectedIntent === "viral_link"
-        ? "已识别到爆款参考链接，点击创建后将立即导入并执行逆向拆解，提取前 3 秒钩子与分镜节奏。"
+        ? "已识别到爆款参考链接，点击「确认创建项目」即可立即导入并逆向拆解镜头与钩子。"
         : detectedIntent === "script"
-          ? "已解析你的创作剧本，并自动拆分了初始分镜与参演资产建议。你可以继续补充修改，或直接创建项目进入时间轴精修。"
-          : `已理解你的创作意图：「${defaultTitle}」。已为你规划 ${/16:9|横屏/.test(combinedText) ? "16:9 横屏" : "9:16 竖屏"}、推荐场景与服饰道具。你可以继续对话微调，或直接点击创建项目。`,
+          ? "已解析你的创作剧本并拆好初始分镜。如需调整节奏或台词可直接告诉我，或点击「确认创建项目」。"
+          : needsClarification
+            ? `收到你的初步想法「${defaultTitle}」！为了帮你编排得更精准，可以再告诉我：风格偏向高级感还是自然口播？目标时长和重点卖点是什么？（也可直接点下方快捷回复或立即建项）`
+            : `已充分了解你的需求，为你规划了「${defaultTitle}」（${/16:9|横屏/.test(combinedText) ? "16:9 横屏" : "9:16 竖屏"}）。确认无误后点击下方「确认创建项目」即可开始制作。`,
     suggestedScenes,
     suggestedProps,
     suggestedGarments,
@@ -856,17 +880,17 @@ async function analyzeSmartCreateIntent(
         : ([] as WorkflowShot[]),
   };
 
-  // 若配置了大模型且有有效文本，调用 LLM 增强意图识别与剧本拆分（超时/异常自动回退启发式结果）
-  if (combinedText && (studio.config.openrouterApiKey || studio.config.videoSecrets?.AGENTAI_API_KEY)) {
+  // 若配置了大模型且有有效文本，调用所选强编排模型进行多轮需求澄清与意图编排（超时/异常自动回退）
+  if (combinedText && (studio.config.openrouterApiKey || studio.config.videoSecrets?.AGENTAI_API_KEY || chosenModel.startsWith("relay:"))) {
     try {
       const llmRaw = await callWorkflowLlm(
         studio,
-        input.modelConfig?.scriptModel,
-        '你是专业短视频导演与创作意图识别助手。请根据用户输入、对话历史、附件文件名和剧本文本，识别创作意图并输出严格 JSON：{"detectedIntent":"viral_link|script|chat","title":"简短项目标题(<=24字)","intentSummary":"一句话总结AI识别到的创作意图","assistantReply":"以导演口吻回复用户(<=100字)，说明已理解的创意要点并引导建项或补充","creativeBrief":"整理后的完整拍摄与剪辑需求","aspectRatio":"9:16|16:9|3:4","targetDurationSec":20,"suggestedScenes":["场景名称：关键词"],"suggestedProps":["道具1"],"suggestedGarments":["服饰1"],"hook":"前3秒钩子","summary":"整体结构总结","pacing":"节奏建议","sellingPoints":["核心卖点1"],"shots":[{"title":"分镜标题","caption":"台词/旁白","camera":"机位景别","action":"画面动作","durationSec":5}]}。仅在识别为 script 时输出 shots（3~8 镜），其他模式 shots 输出空数组。',
+        chosenModel,
+        '你是专业短视频总导演与多轮对话编排模型。请结合完整多轮对话历史、用户输入、附件与剧本文本，判断是否已充分了解创作需求并输出严格 JSON：{"detectedIntent":"viral_link|script|chat","readyToCreate":true,"followUpQuestions":["简短追问1"],"title":"简短项目标题(<=24字)","intentSummary":"一句话总结编排方案","assistantReply":"像专业导演一样自然简短地回复用户(<=120字)；若需求尚模糊则设 readyToCreate=false 并温和追问 1~2 个关键问题(如风格/卖点/时长/主角)，若需求已明确或用户贴了爆款链接/剧本则设 readyToCreate=true 并告知可直接建项","creativeBrief":"整理后的完整拍摄与剪辑需求","aspectRatio":"9:16|16:9|3:4","targetDurationSec":20,"suggestedScenes":["场景名称：关键词"],"suggestedProps":["道具1"],"suggestedGarments":["服饰1"],"hook":"前3秒钩子","summary":"整体结构总结","pacing":"节奏建议","sellingPoints":["核心卖点1"],"shots":[{"title":"分镜标题","caption":"台词/旁白","camera":"机位景别","action":"画面动作","durationSec":5}]}。仅在识别为 script 时输出 shots（3~8 镜），其他模式 shots 输出空数组。',
         JSON.stringify({
           mode: input.mode,
-          prompt: input.prompt,
-          messages: input.messages.slice(-8),
+          conversation: input.messages.slice(-12),
+          latestPrompt: input.prompt,
           scriptFileName: input.scriptFileName,
           scriptContent: input.scriptContent?.slice(0, 6000),
           attachmentNames: input.attachmentNames,
@@ -908,9 +932,16 @@ async function analyzeSmartCreateIntent(
       intent = {
         ...intent,
         detectedIntent,
+        readyToCreate:
+          typeof llmRaw.readyToCreate === "boolean"
+            ? llmRaw.readyToCreate
+            : detectedIntent !== "chat" || userTurns >= 2,
+        followUpQuestions: Array.isArray(llmRaw.followUpQuestions)
+          ? llmRaw.followUpQuestions.map((x: unknown) => String(x).slice(0, 80)).filter(Boolean).slice(0, 3)
+          : [],
         title: String(llmRaw.title || intent.title).slice(0, 60),
         intentSummary: String(llmRaw.intentSummary || intent.intentSummary).slice(0, 220),
-        assistantReply: String(llmRaw.assistantReply || intent.assistantReply).slice(0, 300),
+        assistantReply: String(llmRaw.assistantReply || intent.assistantReply).slice(0, 320),
         creativeBrief: String(llmRaw.creativeBrief || intent.creativeBrief).slice(0, 1500),
         aspectRatio:
           llmRaw.aspectRatio === "16:9" || llmRaw.aspectRatio === "3:4"

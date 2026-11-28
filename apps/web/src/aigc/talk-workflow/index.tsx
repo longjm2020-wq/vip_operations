@@ -106,6 +106,7 @@ type InspectorTab = "draft" | "shot";
 type PreviewSource = "auto" | "final" | "shot_clip" | "storyboard" | "reference";
 
 const LAYOUT_STORAGE_KEY = "xuti.wf.layout.v1";
+const ORCHESTRATOR_MODEL_KEY = "xuti.wf.orchestrator_model.v1";
 const DEFAULT_LEFT_WIDTH = 400;
 const DEFAULT_RIGHT_WIDTH = 330;
 const DEFAULT_TIMELINE_HEIGHT = 216;
@@ -185,6 +186,13 @@ export function CommerceTalkWorkflow({
   const [intentPreview, setIntentPreview] = useState<SmartIntentPreview | null>(
     null,
   );
+  const [orchestratorModel, setOrchestratorModel] = useState<string>(() => {
+    try {
+      return window.localStorage.getItem(ORCHESTRATOR_MODEL_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const [saving, setSaving] = useState(false);
   const [advancing, setAdvancing] = useState(false);
   const [aiEditing, setAiEditing] = useState(false);
@@ -416,6 +424,29 @@ export function CommerceTalkWorkflow({
   const catalog = catalogQuery.data;
   const active = isWorkflowActive(draft?.stage);
 
+  // 自动选择能力最强且已配置的编排模型作为默认值，并持久化用户的模型偏好
+  const effectiveOrchestratorModel = useMemo(() => {
+    const models = catalog?.scriptModels || [];
+    if (orchestratorModel && models.some((m) => m.id === orchestratorModel)) {
+      return orchestratorModel;
+    }
+    return (
+      models.find((m) => m.configured)?.id ||
+      catalog?.defaults?.scriptModel ||
+      models[0]?.id ||
+      undefined
+    );
+  }, [catalog?.defaults?.scriptModel, catalog?.scriptModels, orchestratorModel]);
+
+  const handleOrchestratorModelChange = (modelId: string) => {
+    setOrchestratorModel(modelId);
+    try {
+      window.localStorage.setItem(ORCHESTRATOR_MODEL_KEY, modelId);
+    } catch {
+      // 忽略存储限制
+    }
+  };
+
   const openWorkflow = (wf: WorkflowView) => {
     setDirty(false);
     setDraft(wf);
@@ -486,7 +517,13 @@ export function CommerceTalkWorkflow({
           scriptFileName: scriptAtt?.file.name,
           scriptContent: scriptAtt?.textContent,
           attachmentNames: payload.attachments.map((a) => a.file.name),
-          modelConfig: catalog?.defaults,
+          orchestratorModel: effectiveOrchestratorModel,
+          modelConfig: {
+            ...(catalog?.defaults || {}),
+            ...(effectiveOrchestratorModel
+              ? { scriptModel: effectiveOrchestratorModel }
+              : {}),
+          },
           previewOnly: true,
         },
       );
@@ -519,7 +556,13 @@ export function CommerceTalkWorkflow({
           scriptFileName: scriptAtt?.file.name,
           scriptContent: scriptAtt?.textContent,
           attachmentNames: payload.attachments.map((a) => a.file.name),
-          modelConfig: catalog?.defaults,
+          orchestratorModel: effectiveOrchestratorModel,
+          modelConfig: {
+            ...(catalog?.defaults || {}),
+            ...(effectiveOrchestratorModel
+              ? { scriptModel: effectiveOrchestratorModel }
+              : {}),
+          },
           previewOnly: false,
         });
       let latest = res.workflow;
@@ -1199,7 +1242,32 @@ export function CommerceTalkWorkflow({
             ))}
           </div>
 
-          {libTab === "cast" ? (
+          {libTab === "import" ? (
+            <SmartImportPanel
+              draft={draft}
+              orchestratorModel={effectiveOrchestratorModel}
+              orchestratorModels={catalog?.scriptModels || []}
+              onOrchestratorModelChange={handleOrchestratorModelChange}
+              creating={creating}
+              analyzing={analyzingIntent}
+              advancing={advancing}
+              active={active}
+              chatMessages={smartMessages}
+              intentPreview={intentPreview}
+              onAnalyzeChat={(p) => void analyzeSmartImport(p)}
+              onSmartCreate={(p) => void smartCreateWorkflow(p)}
+              onCreateBlank={() => void createBlankWorkflow()}
+              onUploadReferenceVideo={(file) =>
+                void uploadAsset("referenceVideo", file)
+              }
+              onPreviewReference={() => setPreviewSource("reference")}
+              onRunDeconstruct={() => void advance("deconstruct")}
+              onClearChat={() => {
+                setSmartMessages([]);
+                setIntentPreview(null);
+              }}
+            />
+          ) : libTab === "cast" ? (
             <CastConfigPanel
               account={account}
               canUseCommerce={canUseCommerce}
@@ -1251,32 +1319,7 @@ export function CommerceTalkWorkflow({
             />
           ) : (
             <div className="wf-pane-scroll">
-              {/* 标签 1：AI 智能导入（AI 对话创建+附件 / 爆款链接复刻拆解 / 导入创作剧本） */}
-              {libTab === "import" && (
-                <SmartImportPanel
-                  draft={draft}
-                  creating={creating}
-                  analyzing={analyzingIntent}
-                  advancing={advancing}
-                  active={active}
-                  chatMessages={smartMessages}
-                  intentPreview={intentPreview}
-                  onAnalyzeChat={(p) => void analyzeSmartImport(p)}
-                  onSmartCreate={(p) => void smartCreateWorkflow(p)}
-                  onCreateBlank={() => void createBlankWorkflow()}
-                  onUploadReferenceVideo={(file) =>
-                    void uploadAsset("referenceVideo", file)
-                  }
-                  onPreviewReference={() => setPreviewSource("reference")}
-                  onRunDeconstruct={() => void advance("deconstruct")}
-                  onClearChat={() => {
-                    setSmartMessages([]);
-                    setIntentPreview(null);
-                  }}
-                />
-              )}
-
-            {/* 标签 3：爆款逆向拆解结果 */}
+              {/* 标签 2：爆款逆向拆解结果 */}
             {libTab === "deconstruct" && (
               !draft ? (
                 <Alert

@@ -1,19 +1,19 @@
-import { useMemo, useState } from "react";
-import { Button, Input, Segmented, Space, Tag } from "antd";
+import { useEffect, useRef, useState } from "react";
+import { Button, Input, Select, Space, Tag, Tooltip } from "antd";
 import {
+  ArrowUpOutlined,
   CloseOutlined,
+  DeleteOutlined,
   FileTextOutlined,
-  LinkOutlined,
-  MessageOutlined,
   PaperClipOutlined,
   PlayCircleOutlined,
+  PlusOutlined,
   RobotOutlined,
-  SendOutlined,
   ThunderboltOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
 import type { SmartCreateMode } from "../../../../../packages/contracts/src/commerce-talk-workflow";
-import type { WorkflowView } from "./types";
+import type { WorkflowCatalog, WorkflowView } from "./types";
 
 export type SmartAttachment = {
   id: string;
@@ -34,24 +34,45 @@ export type SmartIntentPreview = {
   assistantReply: string;
   aspectRatio: string;
   targetDurationSec: number;
+  readyToCreate?: boolean;
+  followUpQuestions?: string[];
+  modelUsed?: string;
   suggestedScenes: string[];
   suggestedProps: string[];
   suggestedGarments: string[];
 };
 
-const intentBadgeLabels: Record<"viral_link" | "script" | "chat", string> = {
-  viral_link: "爆款视频链接复刻拆解",
-  script: "创作剧本智能解析建项",
-  chat: "AI 对话需求智能建项",
+const intentLabels: Record<"viral_link" | "script" | "chat", string> = {
+  viral_link: "爆款链接复刻",
+  script: "剧本解析拆镜",
+  chat: "AI 对话编排",
 };
 
+const quickStarters = [
+  {
+    label: "聊创意做短视频",
+    prompt: "我想拍一条 15 秒秋冬风衣显瘦穿搭短视频，暖调通勤风，先帮我规划一下",
+  },
+  {
+    label: "贴爆款链接复刻",
+    prompt: "帮我复刻拆解这条爆款视频：",
+  },
+  {
+    label: "导入剧本拆镜",
+    prompt: "第1镜：开场3秒特写展示面料质感，台词：这件风衣显瘦绝了\n第2镜：全身走位展示版型",
+  },
+];
+
 /**
- * 智能导入与 AI 对话创建面板：
- * 统一支持 AI 对话创建（可传附件）、抖音/小红书爆款链接复刻拆解、导入创作剧本创建，
- * 均由 AI 赋能智能识别创作意图。
+ * 极简大圆角 AI 编排对话框（参照「我的工作台」小序对话框风格）：
+ * - 上方：纯净多轮对话流 + 智能追问快捷回复 + 编排方案确认卡
+ * - 底部：大圆角一体化输入框（左下「+」传附件 +「自动识别 ▾」；右下「编排模型 ▾」+ 蓝色圆形发送键）
  */
 export function SmartImportPanel({
   draft,
+  orchestratorModel,
+  orchestratorModels,
+  onOrchestratorModelChange,
   creating,
   analyzing,
   advancing,
@@ -67,6 +88,9 @@ export function SmartImportPanel({
   onClearChat,
 }: {
   draft: WorkflowView | null;
+  orchestratorModel?: string;
+  orchestratorModels: NonNullable<WorkflowCatalog["scriptModels"]>;
+  onOrchestratorModelChange: (modelId: string) => void;
   creating: boolean;
   analyzing: boolean;
   advancing: boolean;
@@ -92,26 +116,11 @@ export function SmartImportPanel({
   const [mode, setMode] = useState<SmartCreateMode>("auto");
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<SmartAttachment[]>([]);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-  // 本地实时预判用户输入意图，给予即时视觉反馈
-  const liveIntent = useMemo<"viral_link" | "script" | "chat" | null>(() => {
-    const trimmed = prompt.trim();
-    const hasScriptFile = attachments.some((a) => a.kind === "script");
-    if (!trimmed && !attachments.length && !chatMessages.length) return null;
-    if (mode !== "auto") return mode;
-    if (/https?:\/\/|douyin\.com|iesdouyin\.com|xiaohongshu\.com|xhslink\.com|rednote\.com/i.test(trimmed)) {
-      return "viral_link";
-    }
-    if (
-      hasScriptFile ||
-      /(第[一二三四五六七八九十\d]+[场镜幕]|分镜\s*\d+|镜头\s*\d+|台词[:：]|旁白[:：]|景别)/i.test(
-        trimmed,
-      )
-    ) {
-      return "script";
-    }
-    return "chat";
-  }, [attachments, chatMessages.length, mode, prompt]);
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [chatMessages.length, intentPreview]);
 
   const handleAddFiles = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -147,78 +156,120 @@ export function SmartImportPanel({
     setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const hasContent =
-    Boolean(prompt.trim()) ||
-    attachments.length > 0 ||
-    chatMessages.length > 0;
+  const sendMessage = (overrideText?: string) => {
+    const text = (overrideText ?? prompt).trim();
+    if (!text && !attachments.length) return;
+    onAnalyzeChat({ mode, prompt: text, attachments });
+    if (overrideText === undefined) setPrompt("");
+  };
 
-  const placeholder =
-    mode === "viral_link"
-      ? "粘贴抖音 / 小红书爆款视频分享链接或文案，AI 将自动拉取并逆向拆解..."
-      : mode === "script"
-        ? "粘贴创作剧本（分场/分镜/台词），或点击下方「上传附件」导入 .txt / .md / .srt 剧本文件..."
-        : mode === "chat"
-          ? "像和导演聊天一样描述你的想法，例如：拍一条 15 秒秋冬风衣显瘦穿搭短视频，暖调通勤风，可附带参考图/视频..."
-          : "输入 AI 创作对话、粘贴抖音/小红书爆款链接，或直接粘贴/上传创作剧本，AI 将自动识别意图...";
+  const triggerCreate = () => {
+    onSmartCreate({ mode, prompt: prompt.trim(), attachments });
+    setPrompt("");
+    setAttachments([]);
+  };
 
-  const primaryLabel = !hasContent
-    ? "新建空白工作流"
-    : liveIntent === "viral_link"
-      ? "AI 识别链接并复刻拆解"
-      : liveIntent === "script"
-        ? "AI 解析剧本并创建项目"
-        : "AI 识别意图并创建项目";
+  const hasConversation = chatMessages.length > 0 || Boolean(intentPreview);
 
   return (
-    <div className="wf-smart-import" aria-label="AI 智能导入面板">
-      <div className="wf-import-dropzone wf-smart-import-box">
-        <div className="wf-smart-import-head">
-          <span className="wf-smart-import-title">
-            <RobotOutlined /> AI 智能识别创建项目
-          </span>
-          <Tag color="blue" style={{ margin: 0 }}>
-            AI 意图赋能
-          </Tag>
-        </div>
-
-        <Segmented<SmartCreateMode>
-          size="small"
-          block
-          aria-label="选择导入创建方式"
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: "auto", label: "智能识别" },
-            { value: "chat", label: "AI 对话" },
-            { value: "viral_link", label: "爆款链接" },
-            { value: "script", label: "创作剧本" },
-          ]}
-        />
-
-        {/* AI 对话记录与实时意图识别结果 */}
-        {(chatMessages.length > 0 || intentPreview) && (
-          <div className="wf-smart-chat-box">
-            <div className="wf-smart-chat-head">
-              <span>AI 导演对话与意图识别</span>
-              <Button size="small" type="link" onClick={onClearChat}>
-                清空对话
-              </Button>
+    <div className="wf-director-chat" aria-label="AI 智能导入面板">
+      {/* 上方多轮对话流 */}
+      <div className="wf-director-messages">
+        {!hasConversation ? (
+          <div className="wf-director-welcome">
+            <div className="wf-director-welcome-icon">
+              <RobotOutlined />
             </div>
-            <div className="wf-smart-chat-list">
-              {chatMessages.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`wf-smart-bubble ${msg.role === "user" ? "is-user" : "is-ai"}`}
+            <h4>AI 编排导演</h4>
+            <p className="wf-muted">
+              多轮对话聊创意、粘贴抖音/小红书爆款链接，或点「+」上传图片、视频、剧本，沟通确认后一键建项。
+            </p>
+            <div className="wf-director-starters">
+              {quickStarters.map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  className="wf-director-starter"
+                  onClick={() => setPrompt(item.prompt)}
                 >
-                  {msg.content}
-                </div>
+                  {item.label}
+                </button>
               ))}
             </div>
+            <Button
+              size="small"
+              type="link"
+              loading={creating}
+              onClick={onCreateBlank}
+            >
+              新建空白工作流
+            </Button>
+          </div>
+        ) : (
+          <>
+            <div className="wf-director-conv-bar">
+              <span className="wf-muted">多轮编排对话</span>
+              <Space size={4}>
+                <Button
+                  size="small"
+                  type="link"
+                  loading={creating}
+                  onClick={onCreateBlank}
+                >
+                  新建空白工作流
+                </Button>
+                <Tooltip title="清空对话">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<DeleteOutlined />}
+                    aria-label="清空对话"
+                    onClick={() => {
+                      onClearChat();
+                      setAttachments([]);
+                    }}
+                  />
+                </Tooltip>
+              </Space>
+            </div>
+
+            {chatMessages.map((msg, idx) => (
+              <div
+                key={idx}
+                className={`wf-smart-bubble ${msg.role === "user" ? "is-user" : "is-ai"}`}
+              >
+                {msg.content}
+              </div>
+            ))}
+
+            {analyzing && (
+              <div className="wf-smart-bubble is-ai wf-muted">
+                AI 编排导演正在思考...
+              </div>
+            )}
+
+            {/* AI 追问快捷选项（多轮澄清） */}
+            {intentPreview?.followUpQuestions?.length ? (
+              <div className="wf-director-followups">
+                {intentPreview.followUpQuestions.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    className="wf-director-starter"
+                    onClick={() => setPrompt(q)}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {/* 编排方案确认卡 */}
             {intentPreview && (
               <div className="wf-smart-intent-card">
                 <div className="wf-smart-intent-row">
-                  <Tag color="processing" style={{ margin: 0 }}>
-                    {intentBadgeLabels[intentPreview.detectedIntent]}
+                  <Tag color="blue" style={{ margin: 0 }}>
+                    {intentLabels[intentPreview.detectedIntent]}
                   </Tag>
                   <span className="wf-muted">
                     {intentPreview.aspectRatio} · {intentPreview.targetDurationSec}s
@@ -228,21 +279,26 @@ export function SmartImportPanel({
                   建议项目：{intentPreview.title}
                 </div>
                 <p className="wf-muted">{intentPreview.intentSummary}</p>
+                <Button
+                  size="small"
+                  type={intentPreview.readyToCreate === false ? "default" : "primary"}
+                  icon={<ThunderboltOutlined />}
+                  loading={creating}
+                  onClick={triggerCreate}
+                >
+                  {intentPreview.readyToCreate === false
+                    ? "跳过追问，直接创建项目"
+                    : "确认创建项目"}
+                </Button>
               </div>
             )}
-          </div>
+            <div ref={chatEndRef} />
+          </>
         )}
+      </div>
 
-        <Input.TextArea
-          rows={mode === "script" ? 4 : 3}
-          aria-label="AI 创作意图输入框"
-          placeholder={placeholder}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          disabled={creating || analyzing}
-        />
-
-        {/* 已添加附件列表（图片/视频/剧本） */}
+      {/* 底部极简大圆角 AI 对话框（参照工作台小序输入框） */}
+      <div className="wf-director-composer">
         {attachments.length > 0 && (
           <div className="wf-asset-chips" aria-label="已上传附件">
             {attachments.map((att) => (
@@ -268,77 +324,109 @@ export function SmartImportPanel({
           </div>
         )}
 
-        {/* 底部工具条：上传附件 / AI 对话识别 / 创建项目 */}
-        <div className="wf-smart-import-actions">
-          <label className="wf-file-btn wf-file-btn-sm">
-            <PaperClipOutlined /> 上传附件（图/视频/剧本）
-            <input
-              type="file"
-              aria-label="上传创作附件"
-              multiple
-              accept="image/*,video/mp4,video/quicktime,video/webm,.txt,.md,.srt,.json"
-              disabled={creating || analyzing}
-              onChange={(e) => {
-                void handleAddFiles(e.target.files);
-                e.target.value = "";
-              }}
-            />
-          </label>
-          {liveIntent && (
-            <span className="wf-smart-live-hint">
-              {liveIntent === "viral_link" ? (
-                <LinkOutlined />
-              ) : liveIntent === "script" ? (
-                <FileTextOutlined />
-              ) : (
-                <MessageOutlined />
-              )}{" "}
-              {intentBadgeLabels[liveIntent]}
-            </span>
-          )}
-        </div>
+        <Input.TextArea
+          autoSize={{ minRows: 2, maxRows: 5 }}
+          variant="borderless"
+          className="wf-director-textarea"
+          aria-label="AI 创作意图输入框"
+          placeholder="告诉我你想创作什么，支持对话、贴爆款链接或剧本..."
+          value={prompt}
+          disabled={creating || analyzing}
+          onChange={(e) => setPrompt(e.target.value)}
+          onPressEnter={(e) => {
+            if (!e.shiftKey) {
+              e.preventDefault();
+              sendMessage();
+            }
+          }}
+        />
 
-        <Space style={{ width: "100%" }} direction="vertical" size={6}>
-          {hasContent && (
+        <div className="wf-director-composer-bar">
+          {/* 左下：「+」上传附件 +「自动识别 ▾」 */}
+          <div className="wf-director-bar-left">
+            <Tooltip title="上传图片、参考视频或剧本附件">
+              <label className="wf-director-plus-btn">
+                <PlusOutlined />
+                <input
+                  type="file"
+                  aria-label="上传创作附件"
+                  multiple
+                  accept="image/*,video/mp4,video/quicktime,video/webm,.txt,.md,.srt,.json"
+                  disabled={creating || analyzing}
+                  onChange={(e) => {
+                    void handleAddFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </Tooltip>
+            <Select<SmartCreateMode>
+              size="small"
+              variant="borderless"
+              popupMatchSelectWidth={120}
+              aria-label="选择意图识别模式"
+              className="wf-director-mode-select"
+              value={mode}
+              onChange={setMode}
+              options={[
+                { value: "auto", label: "自动识别" },
+                { value: "chat", label: "AI 对话" },
+                { value: "viral_link", label: "爆款链接" },
+                { value: "script", label: "创作剧本" },
+              ]}
+            />
+          </div>
+
+          {/* 右下：胶囊编排模型选择器 + 圆形蓝色发送按钮 */}
+          <div className="wf-director-bar-right">
+            <Select
+              size="small"
+              popupMatchSelectWidth={240}
+              aria-label="选择编排模型"
+              className="wf-director-model-pill"
+              placeholder="编排模型"
+              value={orchestratorModel}
+              options={orchestratorModels.map((m) => ({
+                value: m.id,
+                label: `${m.label}${m.configured ? "" : "（未配置）"}`,
+              }))}
+              onChange={onOrchestratorModelChange}
+            />
             <Button
-              block
-              icon={<SendOutlined />}
+              type="primary"
+              shape="circle"
+              className="wf-director-send-btn"
+              aria-label="发送给 AI 编排导演"
+              icon={<ArrowUpOutlined />}
               loading={analyzing}
-              disabled={creating}
-              onClick={() => {
-                const text = prompt.trim();
-                onAnalyzeChat({ mode, prompt: text, attachments });
-                if (mode === "chat" && text) setPrompt("");
-              }}
-            >
-              发送给 AI 识别 / 完善意图
-            </Button>
-          )}
-          <Button
-            block
-            type="primary"
-            icon={<ThunderboltOutlined />}
-            loading={creating}
-            disabled={analyzing}
-            onClick={() => {
-              if (!hasContent) {
-                onCreateBlank();
-                return;
-              }
-              onSmartCreate({ mode, prompt: prompt.trim(), attachments });
-              setPrompt("");
-              setAttachments([]);
-            }}
-          >
-            {primaryLabel}
-          </Button>
-        </Space>
+              disabled={creating || (!prompt.trim() && !attachments.length)}
+              onClick={() => sendMessage()}
+            />
+          </div>
+        </div>
       </div>
 
+      {/* 已有草稿时，底部保留极简参考视频快捷条 */}
       {draft && (
-        <div className="wf-section-card">
-          <div className="wf-section-card-head">
-            <span>当前草稿参考视频</span>
+        <div className="wf-director-refbar">
+          <span className="wf-muted">参考视频</span>
+          <Space size={4}>
+            {draft.referenceVideoUrl && (
+              <>
+                <Button size="small" type="link" onClick={onPreviewReference}>
+                  预览
+                </Button>
+                <Button
+                  size="small"
+                  type="link"
+                  loading={advancing}
+                  disabled={active}
+                  onClick={onRunDeconstruct}
+                >
+                  拆解
+                </Button>
+              </>
+            )}
             <label className="wf-file-btn wf-file-btn-sm">
               <UploadOutlined /> 上传本地视频
               <input
@@ -352,31 +440,7 @@ export function SmartImportPanel({
                 }}
               />
             </label>
-          </div>
-          {draft.referenceVideoUrl ? (
-            <Space wrap>
-              <Button
-                size="small"
-                icon={<PlayCircleOutlined />}
-                onClick={onPreviewReference}
-              >
-                在播放器预览原片
-              </Button>
-              <Button
-                size="small"
-                type="primary"
-                loading={advancing}
-                disabled={active}
-                onClick={onRunDeconstruct}
-              >
-                执行逆向拆解
-              </Button>
-            </Space>
-          ) : (
-            <p className="wf-muted">
-              尚未上传参考视频；你也可以直接切到「参演配置」管理角色库 / 服饰库 / 道具库 / 场景库，或点击时间轴「+ 新增分镜」开始编排。
-            </p>
-          )}
+          </Space>
         </div>
       )}
     </div>

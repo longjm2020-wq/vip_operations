@@ -481,6 +481,7 @@ export const smartCreateWorkflowInputSchema = z
     scriptFileName: z.string().trim().max(160).optional(),
     scriptContent: z.string().trim().max(20000).optional(),
     attachmentNames: z.array(z.string().trim().max(160)).max(10).default([]),
+    orchestratorModel: z.string().trim().max(200).optional(),
     modelConfig: workflowModelConfigSchema.partial().optional(),
     previewOnly: z.boolean().default(false),
   })

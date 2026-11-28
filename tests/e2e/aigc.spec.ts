@@ -675,14 +675,14 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   const leftBoxAfter = await leftPane.boundingBox();
   expect(leftBoxAfter!.width).toBeGreaterThan(leftBoxBefore!.width + 30);
 
-  // 校验 AI 智能导入面板（支持 AI 对话识别意图、爆款链接、创作剧本与上传附件）
+  // 校验极简大圆角 AI 编排对话框（支持选择强编排模型、多轮对话了解需求并建项）
   const importPanel = page.getByLabel("AI 智能导入面板");
   await expect(importPanel).toBeVisible();
+  await expect(importPanel.getByLabel("选择编排模型")).toBeVisible();
   await importPanel.getByLabel("AI 创作意图输入框").fill("拍一条 15 秒秋冬显瘦风衣穿搭短视频，暖调通勤风");
-  await importPanel.getByRole("button", { name: "发送给 AI 识别 / 完善意图" }).click();
+  await importPanel.getByRole("button", { name: "发送给 AI 编排导演" }).click();
   await expect(importPanel.getByText("建议项目：秋冬显瘦风衣智能成片")).toBeVisible();
   await importPanel.getByRole("button", { name: "清空对话" }).click();
-  await importPanel.getByLabel("AI 创作意图输入框").fill("");
 
   await page.getByRole("button", { name: "新建空白工作流" }).click();
   await expect(page.getByLabel("工作流名称")).toHaveValue("通勤外套爆款复刻");
