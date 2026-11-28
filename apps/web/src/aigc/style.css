@@ -40,7 +40,7 @@
 .aigc-navigation > .ant-tabs-nav { margin-bottom: 0; }
 .aigc-entry-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin: 14px 0;
 }

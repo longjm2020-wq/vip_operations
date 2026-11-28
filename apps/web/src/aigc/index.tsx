@@ -17,7 +17,6 @@ import {
 import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
-  AudioOutlined,
   DeleteOutlined,
   DownloadOutlined,
   FileImageOutlined,
@@ -308,12 +307,11 @@ function AigcStudio() {
     );
   const canReadProducts = user.permissions.includes("product.read");
   const entries = [
-    tools[0],
     {
       kind: "talk-video",
-      title: canReadProducts ? "服装口播" : "数字人口播",
-      icon: <AudioOutlined />,
-      description: canReadProducts ? "商品讲解、字幕与短片" : "上传照片与原声对口型",
+      title: "AI智能成片",
+      icon: <PlayCircleOutlined />,
+      description: canReadProducts ? "爆款复刻、多视图数字人与智能剪辑" : "上传照片与原声对口型",
     },
     ...tools.slice(1),
   ];

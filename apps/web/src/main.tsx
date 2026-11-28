@@ -344,7 +344,7 @@ function Workspace({ user }: { user: Row }) {
   const aigcTalkVideo = aigcParams?.get("view") === "talk-video";
   const aigcProject = Boolean(aigcParams?.get("project"));
   const aigcSubpageLabel = aigcTalkVideo
-    ? (!user.permissions.includes("product.read") ? "数字人口播" : "服装口播")
+    ? "AI智能成片"
     : aigcProject
       ? (aigcParams?.get("kind") === "detail"
           ? "电商详情页制作"
