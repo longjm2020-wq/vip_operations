@@ -526,10 +526,12 @@
   max-width: 152px;
 }
 
-.wf-director-model-pill .ant-select-selector {
+.wf-director-model-pill .ant-select-selector,
+.wf-director-model-pill.ant-select-focused .ant-select-selector {
   border-radius: 8px !important;
-  background: color-mix(in srgb, var(--app-surface) 88%, var(--app-bg)) !important;
-  border-color: var(--app-border) !important;
+  background: color-mix(in srgb, var(--app-surface) 78%, transparent) !important;
+  border: 0 !important;
+  box-shadow: none !important;
   font-size: 11px !important;
 }
 

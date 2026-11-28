@@ -1009,20 +1009,14 @@ export function CommerceTalkWorkflow({
   const libraryTabs: Array<{ key: LibraryTab; label: string; icon: React.ReactNode }> = [
     { key: "import", label: "导入", icon: <LinkOutlined /> },
     { key: "deconstruct", label: "拆解", icon: <FileTextOutlined /> },
-    { key: "cast", label: "参演配置", icon: <TeamOutlined /> },
+    { key: "cast", label: "参演", icon: <TeamOutlined /> },
     { key: "shots", label: "分镜", icon: <PictureOutlined /> },
     { key: "ai_edit", label: "剪辑", icon: <ScissorOutlined /> },
     { key: "previs", label: "预演", icon: <VideoCameraOutlined /> },
   ];
 
-  // 左上角工作台下拉菜单（收拢新建/导入、模型设置与最近工作流切换）
+  // 左上角工作台下拉菜单（收拢模型设置与最近工作流切换）
   const studioMenuItems: MenuProps["items"] = [
-    {
-      key: "new-import",
-      icon: <PlusOutlined />,
-      label: "新建 / 导入工作流",
-      onClick: () => setLibTab("import"),
-    },
     {
       key: "model-settings",
       icon: <ControlOutlined />,

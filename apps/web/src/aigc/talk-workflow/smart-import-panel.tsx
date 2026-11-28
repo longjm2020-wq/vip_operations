@@ -381,6 +381,7 @@ export function SmartImportPanel({
           <div className="wf-director-bar-right">
             <Select
               size="small"
+              variant="borderless"
               popupMatchSelectWidth={240}
               aria-label="选择编排模型"
               className="wf-director-model-pill"
