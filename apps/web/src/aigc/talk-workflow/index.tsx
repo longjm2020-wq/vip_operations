@@ -3,14 +3,17 @@ import {
   Alert,
   App,
   Button,
+  Dropdown,
   Input,
   InputNumber,
+  Modal,
   Segmented,
   Select,
   Space,
   Switch,
   Tag,
   Tooltip,
+  type MenuProps,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -18,10 +21,13 @@ import {
   AudioOutlined,
   ControlOutlined,
   DeleteOutlined,
+  DownOutlined,
   DownloadOutlined,
   ExpandOutlined,
   FileTextOutlined,
+  FolderOpenOutlined,
   LinkOutlined,
+  MenuOutlined,
   PauseCircleOutlined,
   PictureOutlined,
   PlayCircleOutlined,
@@ -88,8 +94,7 @@ type LibraryTab =
   | "cast"
   | "shots"
   | "ai_edit"
-  | "previs"
-  | "models";
+  | "previs";
 type InspectorTab = "draft" | "shot";
 type PreviewSource = "auto" | "final" | "shot_clip" | "storyboard" | "reference";
 
@@ -180,6 +185,7 @@ export function CommerceTalkWorkflow({
   // 工作台 UI 状态
   const [libTab, setLibTab] = useState<LibraryTab>("import");
   const [castSubTab, setCastSubTab] = useState<CastSubTab>("overview");
+  const [modelModalOpen, setModelModalOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("draft");
   const [previewSource, setPreviewSource] = useState<PreviewSource>("auto");
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
@@ -860,7 +866,41 @@ export function CommerceTalkWorkflow({
     { key: "shots", label: "分镜", icon: <PictureOutlined /> },
     { key: "ai_edit", label: "剪辑", icon: <ScissorOutlined /> },
     { key: "previs", label: "预演", icon: <VideoCameraOutlined /> },
-    { key: "models", label: "模型", icon: <ControlOutlined /> },
+  ];
+
+  // 左上角工作台下拉菜单（收拢新建/导入、模型设置与最近工作流切换）
+  const studioMenuItems: MenuProps["items"] = [
+    {
+      key: "new-import",
+      icon: <PlusOutlined />,
+      label: "新建 / 导入工作流",
+      onClick: () => setLibTab("import"),
+    },
+    {
+      key: "model-settings",
+      icon: <ControlOutlined />,
+      label: "模型设置",
+      onClick: () => setModelModalOpen(true),
+    },
+    { type: "divider" },
+    {
+      key: "recent-workflows",
+      icon: <FolderOpenOutlined />,
+      label: "切换最近工作流",
+      children: (listQuery.data?.workflows || []).length
+        ? (listQuery.data?.workflows || []).map((w) => ({
+            key: `wf-${w.id}`,
+            label: `${w.id === draft?.id ? "✓ " : ""}${w.title} · ${stageLabels[w.stage]}`,
+            onClick: () => openWorkflow(w),
+          }))
+        : [
+            {
+              key: "recent-empty",
+              disabled: true,
+              label: "暂无最近工作流",
+            },
+          ],
+    },
   ];
 
   const toggleKeywordInConfig = (
@@ -921,31 +961,18 @@ export function CommerceTalkWorkflow({
       }
       aria-label="爆款复刻集成工作台"
     >
-      {/* 1. 顶部工作台栏（对应剪映顶栏：项目切换 / 标题与模式 / 保存与导出） */}
+      {/* 1. 顶部工作台栏（对应剪映顶栏：左上菜单 / 标题与模式 / 保存与导出） */}
       <div className="wf-studio-bar">
         <div className="wf-studio-bar-left">
-          <Select
-            size="small"
-            style={{ width: 210 }}
-            placeholder="切换最近工作流"
-            value={draft?.id}
-            options={(listQuery.data?.workflows || []).map((w) => ({
-              value: w.id,
-              label: `${w.title} · ${stageLabels[w.stage]}`,
-            }))}
-            onChange={(id) => {
-              const found = listQuery.data?.workflows.find((w) => w.id === id);
-              if (found) openWorkflow(found);
-            }}
-          />
-          <Button
-            size="small"
-            type="text"
-            icon={<PlusOutlined />}
-            onClick={() => setLibTab("import")}
-          >
-            新建 / 导入
-          </Button>
+          <Dropdown menu={{ items: studioMenuItems }} trigger={["click"]}>
+            <Button
+              size="small"
+              icon={<MenuOutlined />}
+              aria-label="工作台菜单"
+            >
+              菜单 <DownOutlined style={{ fontSize: 10 }} />
+            </Button>
+          </Dropdown>
         </div>
 
         <div className="wf-studio-bar-center">
@@ -1502,128 +1529,6 @@ export function CommerceTalkWorkflow({
                   onSkip={() => void advance("skip_previs")}
                   onStartProduce={() => void advance("produce")}
                 />
-              )
-            )}
-
-            {/* 标签 6：各环节执行模型配置 */}
-            {libTab === "models" && (
-              !draft ? (
-                <Alert
-                  type="info"
-                  showIcon
-                  title="请先创建或打开工作流后再调整执行模型"
-                />
-              ) : (
-                <>
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head"><span>爆款逆向拆解模型</span></div>
-                    <Select
-                      size="small"
-                      value={draft.modelConfig.deconstructModel || catalog?.defaults.deconstructModel}
-                      disabled={active}
-                      options={(catalog?.scriptModels || []).map((m) => ({
-                        value: m.id,
-                        label: `${m.label}${m.configured ? "" : "（未配置）"}`,
-                      }))}
-                      onChange={(deconstructModel) =>
-                        patchDraft((cur) => ({
-                          ...cur,
-                          modelConfig: { ...cur.modelConfig, deconstructModel },
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head"><span>分镜脚本重构模型</span></div>
-                    <Select
-                      size="small"
-                      value={draft.modelConfig.scriptModel || catalog?.defaults.scriptModel}
-                      disabled={active}
-                      options={(catalog?.scriptModels || []).map((m) => ({
-                        value: m.id,
-                        label: `${m.label}${m.configured ? "" : "（未配置）"}`,
-                      }))}
-                      onChange={(scriptModel) =>
-                        patchDraft((cur) => ({
-                          ...cur,
-                          modelConfig: { ...cur.modelConfig, scriptModel },
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head"><span>分镜图生成模型</span></div>
-                    <Select
-                      size="small"
-                      value={draft.modelConfig.storyboardImageModel || catalog?.defaults.storyboardImageModel}
-                      disabled={active}
-                      options={(catalog?.imageModels || []).map((m) => ({
-                        value: m.id,
-                        label: `${m.label}${m.configured ? "" : "（未配置）"}`,
-                      }))}
-                      onChange={(storyboardImageModel) =>
-                        patchDraft((cur) => ({
-                          ...cur,
-                          modelConfig: { ...cur.modelConfig, storyboardImageModel },
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head"><span>克隆音频模型</span></div>
-                    <Select
-                      size="small"
-                      value={draft.modelConfig.voiceModel || catalog?.defaults.voiceModel}
-                      disabled={active}
-                      options={(catalog?.voiceModels || []).map((m) => ({
-                        value: m.id,
-                        label: `${m.label}（${m.cnyPer10k}元/万字）`,
-                      }))}
-                      onChange={(voiceModel) =>
-                        patchDraft((cur) => ({
-                          ...cur,
-                          modelConfig: { ...cur.modelConfig, voiceModel },
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head"><span>数字人对口型模型</span></div>
-                    <Select
-                      size="small"
-                      value={draft.modelConfig.lipSyncModel || catalog?.defaults.lipSyncModel}
-                      disabled={active}
-                      options={(catalog?.lipSyncModels || []).map((m) => ({
-                        value: m.id,
-                        label: `${m.label}${m.configured ? "" : "（未配置）"}`,
-                      }))}
-                      onChange={(lipSyncModel) =>
-                        patchDraft((cur) => ({
-                          ...cur,
-                          modelConfig: { ...cur.modelConfig, lipSyncModel },
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head"><span>默认视频生成模型</span></div>
-                    <Select
-                      size="small"
-                      value={draft.modelConfig.videoModel || catalog?.defaults.videoModel}
-                      disabled={active}
-                      options={(catalog?.videoModels || []).map((m) => ({
-                        value: m.id,
-                        label: `${m.label}${m.configured ? "" : "（未配置）"}`,
-                      }))}
-                      onChange={(videoModel) =>
-                        patchDraft((cur) => ({
-                          ...cur,
-                          modelConfig: { ...cur.modelConfig, videoModel },
-                        }))
-                      }
-                    />
-                  </div>
-                </>
               )
             )}
             </div>
@@ -2566,6 +2471,159 @@ export function CommerceTalkWorkflow({
         </div>
         <audio ref={audioPreviewRef} style={{ display: "none" }} />
       </section>
+
+      {/* 执行模型设置弹窗（由左上角「菜单 → 模型设置」打开） */}
+      <Modal
+        open={modelModalOpen}
+        width={560}
+        title="执行模型设置"
+        onCancel={() => setModelModalOpen(false)}
+        footer={
+          <Space>
+            <Button onClick={() => setModelModalOpen(false)}>关闭</Button>
+            {draft && (
+              <Button
+                type="primary"
+                icon={<SaveOutlined />}
+                loading={saving}
+                disabled={active || !dirty}
+                onClick={() => {
+                  void saveDraft().then((saved) => {
+                    if (saved) setModelModalOpen(false);
+                  });
+                }}
+              >
+                保存模型配置
+              </Button>
+            )}
+          </Space>
+        }
+      >
+        {!draft ? (
+          <Alert
+            type="info"
+            showIcon
+            title="请先新建或打开一个工作流，再针对该工作流调整各环节执行模型。"
+          />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="wf-section-card">
+              <div className="wf-section-card-head"><span>爆款逆向拆解模型</span></div>
+              <Select
+                size="small"
+                style={{ width: "100%" }}
+                value={draft.modelConfig.deconstructModel || catalog?.defaults.deconstructModel}
+                disabled={active}
+                options={(catalog?.scriptModels || []).map((m) => ({
+                  value: m.id,
+                  label: `${m.label}${m.configured ? "" : "（未配置）"}`,
+                }))}
+                onChange={(deconstructModel) =>
+                  patchDraft((cur) => ({
+                    ...cur,
+                    modelConfig: { ...cur.modelConfig, deconstructModel },
+                  }))
+                }
+              />
+            </div>
+            <div className="wf-section-card">
+              <div className="wf-section-card-head"><span>分镜脚本重构模型</span></div>
+              <Select
+                size="small"
+                style={{ width: "100%" }}
+                value={draft.modelConfig.scriptModel || catalog?.defaults.scriptModel}
+                disabled={active}
+                options={(catalog?.scriptModels || []).map((m) => ({
+                  value: m.id,
+                  label: `${m.label}${m.configured ? "" : "（未配置）"}`,
+                }))}
+                onChange={(scriptModel) =>
+                  patchDraft((cur) => ({
+                    ...cur,
+                    modelConfig: { ...cur.modelConfig, scriptModel },
+                  }))
+                }
+              />
+            </div>
+            <div className="wf-section-card">
+              <div className="wf-section-card-head"><span>分镜图生成模型</span></div>
+              <Select
+                size="small"
+                style={{ width: "100%" }}
+                value={draft.modelConfig.storyboardImageModel || catalog?.defaults.storyboardImageModel}
+                disabled={active}
+                options={(catalog?.imageModels || []).map((m) => ({
+                  value: m.id,
+                  label: `${m.label}${m.configured ? "" : "（未配置）"}`,
+                }))}
+                onChange={(storyboardImageModel) =>
+                  patchDraft((cur) => ({
+                    ...cur,
+                    modelConfig: { ...cur.modelConfig, storyboardImageModel },
+                  }))
+                }
+              />
+            </div>
+            <div className="wf-section-card">
+              <div className="wf-section-card-head"><span>克隆音频模型</span></div>
+              <Select
+                size="small"
+                style={{ width: "100%" }}
+                value={draft.modelConfig.voiceModel || catalog?.defaults.voiceModel}
+                disabled={active}
+                options={(catalog?.voiceModels || []).map((m) => ({
+                  value: m.id,
+                  label: `${m.label}（${m.cnyPer10k}元/万字）`,
+                }))}
+                onChange={(voiceModel) =>
+                  patchDraft((cur) => ({
+                    ...cur,
+                    modelConfig: { ...cur.modelConfig, voiceModel },
+                  }))
+                }
+              />
+            </div>
+            <div className="wf-section-card">
+              <div className="wf-section-card-head"><span>数字人对口型模型</span></div>
+              <Select
+                size="small"
+                style={{ width: "100%" }}
+                value={draft.modelConfig.lipSyncModel || catalog?.defaults.lipSyncModel}
+                disabled={active}
+                options={(catalog?.lipSyncModels || []).map((m) => ({
+                  value: m.id,
+                  label: `${m.label}${m.configured ? "" : "（未配置）"}`,
+                }))}
+                onChange={(lipSyncModel) =>
+                  patchDraft((cur) => ({
+                    ...cur,
+                    modelConfig: { ...cur.modelConfig, lipSyncModel },
+                  }))
+                }
+              />
+            </div>
+            <div className="wf-section-card">
+              <div className="wf-section-card-head"><span>默认视频生成模型</span></div>
+              <Select
+                size="small"
+                style={{ width: "100%" }}
+                value={draft.modelConfig.videoModel || catalog?.defaults.videoModel}
+                disabled={active}
+                options={(catalog?.videoModels || []).map((m) => ({
+                  value: m.id,
+                  label: `${m.label}${m.configured ? "" : "（未配置）"}`,
+                }))}
+                onChange={(videoModel) =>
+                  patchDraft((cur) => ({
+                    ...cur,
+                    modelConfig: { ...cur.modelConfig, videoModel },
+                  }))
+                }
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

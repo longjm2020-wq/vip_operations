@@ -719,6 +719,16 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await expect(castPanel.getByText(/参演道具/)).toBeVisible();
   await expect(castPanel.getByText(/拍摄场景/)).toBeVisible();
 
+  // 校验左上角「菜单」下拉收拢「新建 / 导入工作流」「模型设置」「切换最近工作流」，且左侧不再单独占「模型」标签
+  await expect(page.getByRole("tab", { name: "模型" })).toHaveCount(0);
+  await page.getByRole("button", { name: "工作台菜单" }).click();
+  await page.getByRole("menuitem", { name: "模型设置" }).click();
+  const modelDialog = page.getByRole("dialog", { name: "执行模型设置" });
+  await expect(modelDialog).toBeVisible();
+  await expect(modelDialog.getByText("爆款逆向拆解模型")).toBeVisible();
+  await modelDialog.locator(".ant-modal-footer").getByRole("button", { name: "关闭" }).click();
+  await expect(modelDialog).toBeHidden();
+
   // 切到「剪辑」面板执行 AI 自动编排后期并校验导出 AE 脚本按钮与时间轴徽标
   await page.getByRole("tab", { name: "剪辑" }).click();
   await page.getByLabel("AI 剪辑指令").fill("抖音爆款快切，前3秒白闪，暖调穿搭滤镜");
