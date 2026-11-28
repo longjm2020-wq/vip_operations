@@ -29,6 +29,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
   useSearchParams,
 } from "react-router-dom";
 import { create } from "zustand";
@@ -337,6 +338,23 @@ function Workspace({ user }: { user: Row }) {
       }] : children,
     };
   });
+  const navigate = useNavigate();
+  const aigcParams = location.pathname === "/aigc" ? new URLSearchParams(location.search) : null;
+  const aigcTalkVideo = aigcParams?.get("view") === "talk-video";
+  const aigcProject = Boolean(aigcParams?.get("project"));
+  const aigcSubpageLabel = aigcTalkVideo
+    ? (!user.permissions.includes("product.read") || aigcParams?.get("mode") === "lip-sync"
+        ? "数字人口播"
+        : aigcParams?.get("mode") === "workflow" || aigcParams?.has("workflow") || aigcParams?.get("extImport") === "1"
+          ? "服装口播 · 爆款复刻工作流"
+          : "服装口播")
+    : aigcProject
+      ? (aigcParams?.get("kind") === "detail"
+          ? "电商详情页制作"
+          : aigcParams?.get("kind") === "digital"
+            ? "数字人"
+            : "短视频制作")
+      : undefined;
   const routeBack=tableDetail ? {href:"/project-tables",label:"返回表格列表"}
     : location.pathname.startsWith("/projects/") ? {href:"/projects",label:"返回项目列表"}
     : selected && location.pathname!==selected && activeWorkspace?.children?.some(child=>child.key===selected)
@@ -409,7 +427,26 @@ function Workspace({ user }: { user: Row }) {
               className="workspace-subnav"
               aria-label={`${activeWorkspace?.label || "工作台"}功能导航`}
             >
-              {routeBack ? <div className="workspace-path"><Link to={routeBack.href} aria-label={routeBack.label}><ArrowLeftOutlined/> {routeBack.label}</Link></div> : vipWorkspaceRoute ? (
+              {aigcSubpageLabel ? (
+                <div className="workspace-path">
+                  <Button
+                    type="text"
+                    size="small"
+                    className="workspace-back-button"
+                    icon={<ArrowLeftOutlined />}
+                    onClick={() => {
+                      const event = new CustomEvent("xuti:aigc-navigate-home", { cancelable: true });
+                      if (window.dispatchEvent(event)) {
+                        navigate("/aigc");
+                      }
+                    }}
+                  >
+                    返回创作空间
+                  </Button>
+                  <span aria-hidden="true">/</span>
+                  <span aria-current="page">{aigcSubpageLabel}</span>
+                </div>
+              ) : routeBack ? <div className="workspace-path"><Link to={routeBack.href} aria-label={routeBack.label}><ArrowLeftOutlined/> {routeBack.label}</Link></div> : vipWorkspaceRoute ? (
                 <div className="workspace-path">
                   <VipWorkspaceRootDropdown activeTabKey={activeVipTabKey} />
                   <span aria-hidden="true">/</span>

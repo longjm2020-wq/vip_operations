@@ -12,7 +12,6 @@ import {
   Tag,
 } from "antd";
 import {
-  ArrowLeftOutlined,
   DownloadOutlined,
   LoadingOutlined,
   VideoCameraOutlined,
@@ -160,9 +159,6 @@ export function TalkVideo() {
   ) {
     return (
       <section className="talk-video">
-        <Link to="/aigc">
-          <ArrowLeftOutlined /> 创作空间
-        </Link>
         <p className="talk-video-state" role="status">
           <LoadingOutlined /> 正在读取口播服务
         </p>
@@ -214,9 +210,6 @@ function TalkVideoWorkspace({
   const isWorkflow = mode === "workflow";
   return (
     <section className="talk-video" aria-labelledby="talk-video-title">
-      <Link to="/aigc">
-        <ArrowLeftOutlined /> 创作空间
-      </Link>
       <header className="talk-video-heading">
         <h1 id="talk-video-title">
           {portrait ? "数字人口播" : isWorkflow ? "服装口播 · 爆款复刻工作流" : "服装口播"}

@@ -218,6 +218,15 @@ function AigcStudio() {
       });
     else go();
   };
+  useEffect(() => {
+    const onNavigateHome = (event: Event) => {
+      event.preventDefault();
+      navigate({});
+    };
+    window.addEventListener("xuti:aigc-navigate-home", onNavigateHome);
+    return () =>
+      window.removeEventListener("xuti:aigc-navigate-home", onNavigateHome);
+  });
   const open = (type: string, id: string) =>
     navigate({ kind: type, project: id });
   const create = async (type: string, framework?: string) => {
@@ -347,13 +356,6 @@ function AigcStudio() {
       <Spin spinning={loading}>
         {projectId ? (
           <>
-            <Button
-              type="text"
-              icon={<ArrowLeftOutlined />}
-              onClick={() => navigate({})}
-            >
-              返回创作空间
-            </Button>
             {projectError ? (
               <Alert
                 type="warning"

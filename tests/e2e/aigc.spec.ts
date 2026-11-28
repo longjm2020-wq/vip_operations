@@ -450,8 +450,22 @@ test("the apparel entry opens and submits a mixed product batch", async ({ page 
     return route.fulfill({ status: 404, json: { error: "unknown fixture" } });
   });
   await page.goto("/aigc");
+  await expect(page.locator(".page-footer")).toBeHidden();
+  const homeSpacing = await page.locator(".aigc-page").evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const contentRect = el.closest(".content")!.getBoundingClientRect();
+    return {
+      leftGap: Math.round(rect.left - contentRect.left),
+      rightGap: Math.round(contentRect.right - rect.right),
+      topGap: Math.round(rect.top - contentRect.top),
+    };
+  });
+  expect(homeSpacing).toEqual({ leftGap: 8, rightGap: 8, topGap: 8 });
   await page.getByRole("button", { name: /服装口播.*商品讲解/ }).click();
   await expect(page.getByRole("heading", { name: "服装口播" })).toBeVisible();
+  const topbarNav = page.locator(".topbar .workspace-subnav");
+  await expect(topbarNav.getByRole("button", { name: "返回创作空间" })).toBeVisible();
+  await expect(topbarNav.getByText("服装口播", { exact: true })).toBeVisible();
   await page.getByText("按款批量", { exact: true }).click();
   const search = page.getByRole("combobox", { name: "批量选择商品" });
   await search.fill("XUTI");
@@ -464,6 +478,8 @@ test("the apparel entry opens and submits a mixed product batch", async ({ page 
   await expect(progress.getByText("排队中")).toBeVisible();
   await expect(progress.getByText("商品档案缺少已上传的实拍图")).toBeVisible();
   expect(received).toMatchObject({ productIds: ["11", "12"], presenterId });
+  await topbarNav.getByRole("button", { name: "返回创作空间" }).click();
+  await expect(page.getByRole("heading", { name: "AIGC 创作空间" })).toBeVisible();
 });
 test("imports a share reference and keeps the current source when a replacement requires local upload", async ({ page }) => {
   await fixture(page);

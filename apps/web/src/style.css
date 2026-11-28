@@ -287,6 +287,8 @@ a {
 .workspace-subnav { overflow: hidden; }
 .workspace-path { min-width: 0; }
 .workspace-path > a, .workspace-path > span[aria-current] { overflow: hidden; text-overflow: ellipsis; }
+.workspace-path > .workspace-back-button.ant-btn { height: auto; padding: 0; border: 0; background: transparent; color: var(--app-accent); font-size: 13px; line-height: inherit; box-shadow: none; }
+.workspace-path > .workspace-back-button.ant-btn:hover, .workspace-path > .workspace-back-button.ant-btn:focus-visible { background: transparent; color: var(--app-accent); opacity: 0.85; }
 .content.selection-workspace-content { height: calc(100dvh - var(--workspace-topbar-height, 48px)); flex: none; box-sizing: border-box; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .selection-workspace-content > .page-heading { flex: none; }
 .selection-workspace-content > .selection-card { flex: 1; min-height: 0; }
@@ -455,7 +457,7 @@ a {
   letter-spacing: 1px;
 }
 
-.content:has(.selection-card, .sheet-workspace, .ant-table-wrapper) > .page-footer { display: none; }
+.content:has(.selection-card, .sheet-workspace, .ant-table-wrapper, .aigc-page, .talk-video) > .page-footer { display: none; }
 .table-operation-hints-trigger.ant-btn { flex: none; width: 24px; height: 24px; color: var(--app-secondary); }
 .table-operation-hints { width: min(360px, calc(100vw - 48px)); color: var(--app-secondary); font-size: 12px; line-height: 1.7; }
 .table-operation-hints p { margin: 0 0 8px; }
