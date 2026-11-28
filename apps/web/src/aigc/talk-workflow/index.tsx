@@ -19,6 +19,7 @@ import {
   ControlOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  EnvironmentOutlined,
   ExpandOutlined,
   FileTextOutlined,
   LinkOutlined,
@@ -30,9 +31,11 @@ import {
   RobotOutlined,
   SaveOutlined,
   ScissorOutlined,
+  SkinOutlined,
   StepBackwardOutlined,
   StepForwardOutlined,
   ThunderboltOutlined,
+  ToolOutlined,
   UploadOutlined,
   UserOutlined,
   VideoCameraOutlined,
@@ -52,6 +55,11 @@ import type {
   WorkflowTransition,
 } from "../../../../../packages/contracts/src/commerce-talk-workflow";
 import { studioApi } from "../api";
+import {
+  GarmentLibraryPanel,
+  PropLibraryPanel,
+  SceneLibraryPanel,
+} from "./asset-library-panels";
 import { CharacterLibraryPanel } from "./character-library";
 import { CozyClayPrevisPanel } from "./cozyclay-panel";
 import {
@@ -84,7 +92,10 @@ type ProductItem = {
 
 type LibraryTab =
   | "import"
-  | "assets"
+  | "characters"
+  | "scenes"
+  | "props"
+  | "garments"
   | "deconstruct"
   | "shots"
   | "ai_edit"
@@ -301,7 +312,7 @@ export function CommerceTalkWorkflow({
       });
       setShareText("");
       openWorkflow(created);
-      setLibTab(text ? "deconstruct" : "assets");
+      setLibTab(text ? "deconstruct" : "characters");
       void client.invalidateQueries({
         queryKey: ["commerce-workflow", account, "list"],
       });
@@ -340,6 +351,12 @@ export function CommerceTalkWorkflow({
             scenes: target.assetsConfig.scenes.map(
               ({ url: _u, ...rest }) => rest,
             ),
+            garments: (target.assetsConfig.garments || []).map(
+              ({ url: _u, ...rest }) => rest,
+            ),
+            sceneKeywords: target.assetsConfig.sceneKeywords || [],
+            propKeywords: target.assetsConfig.propKeywords || [],
+            garmentKeywords: target.assetsConfig.garmentKeywords || [],
             sceneMode: target.assetsConfig.sceneMode,
             creativeBrief: target.assetsConfig.creativeBrief,
             aspectRatio: target.assetsConfig.aspectRatio,
@@ -416,7 +433,7 @@ export function CommerceTalkWorkflow({
   };
 
   const uploadAsset = async (
-    slot: "referenceVideo" | "character" | "prop" | "scene" | "storyboard",
+    slot: "referenceVideo" | "character" | "prop" | "scene" | "garment" | "storyboard",
     file: File,
     shotId?: string,
   ) => {
@@ -708,13 +725,54 @@ export function CommerceTalkWorkflow({
 
   const libraryTabs: Array<{ key: LibraryTab; label: string; icon: React.ReactNode }> = [
     { key: "import", label: "导入", icon: <LinkOutlined /> },
-    { key: "assets", label: "角色库", icon: <UserOutlined /> },
+    { key: "characters", label: "角色库", icon: <UserOutlined /> },
+    { key: "scenes", label: "场景库", icon: <EnvironmentOutlined /> },
+    { key: "props", label: "道具库", icon: <ToolOutlined /> },
+    { key: "garments", label: "服饰库", icon: <SkinOutlined /> },
     { key: "deconstruct", label: "拆解", icon: <FileTextOutlined /> },
     { key: "shots", label: "分镜", icon: <PictureOutlined /> },
     { key: "ai_edit", label: "剪辑", icon: <ScissorOutlined /> },
     { key: "previs", label: "预演", icon: <VideoCameraOutlined /> },
     { key: "models", label: "模型", icon: <ControlOutlined /> },
   ];
+
+  const toggleKeywordInConfig = (
+    field: "sceneKeywords" | "propKeywords" | "garmentKeywords",
+    keyword: string,
+  ) => {
+    patchDraft((cur) => {
+      const prev = cur.assetsConfig[field] || [];
+      const exists = prev.includes(keyword);
+      const next = exists
+        ? prev.filter((k) => k !== keyword)
+        : [...prev, keyword].slice(0, field === "sceneKeywords" ? 12 : 16);
+      return {
+        ...cur,
+        assetsConfig: {
+          ...cur.assetsConfig,
+          [field]: next,
+        },
+      };
+    });
+  };
+
+  const applyRecommendedKeywords = (
+    field: "propKeywords" | "garmentKeywords",
+    keywords: string[],
+  ) => {
+    patchDraft((cur) => {
+      const prev = cur.assetsConfig[field] || [];
+      const merged = [...new Set([...prev, ...keywords])].slice(0, 16);
+      return {
+        ...cur,
+        assetsConfig: {
+          ...cur.assetsConfig,
+          [field]: merged,
+        },
+      };
+    });
+    message.success("已按剧情一键选用智能推荐项");
+  };
 
   const activePostEdit: WorkflowShotPostEdit = {
     ...defaultShotPostEdit,
@@ -938,7 +996,7 @@ export function CommerceTalkWorkflow({
                       </Space>
                     ) : (
                       <p className="wf-muted">
-                        尚未上传参考视频；你也可以直接切到「素材」配置商品与主播，或点击时间轴「+ 新增分镜」开始编排。
+                        尚未上传参考视频；你也可以直接切到「角色库 / 场景库 / 道具库 / 服饰库」配置创作资产，或点击时间轴「+ 新增分镜」开始编排。
                       </p>
                     )}
                   </div>
@@ -946,197 +1004,87 @@ export function CommerceTalkWorkflow({
               </>
             )}
 
-            {/* 标签 2：数字人角色库（面部+三视图+音色）与商品/道具/场景素材 */}
-            {libTab === "assets" && (
-              <>
-                <CharacterLibraryPanel
-                  account={account}
-                  enabled={canUseCommerce}
-                  boundIds={draft?.assetsConfig.characterLibraryIds || []}
-                  disabled={active}
-                  onToggleBind={
-                    draft
-                      ? (characterId, checked) =>
-                          patchDraft((cur) => {
-                            const prevIds = cur.assetsConfig.characterLibraryIds || [];
-                            const nextIds = checked
-                              ? [...new Set([...prevIds, characterId])]
-                              : prevIds.filter((id) => id !== characterId);
-                            return {
-                              ...cur,
-                              assetsConfig: {
-                                ...cur.assetsConfig,
-                                characterLibraryIds: nextIds,
-                              },
-                            };
-                          })
-                      : undefined
-                  }
-                />
-                {!draft ? (
-                  <Alert
-                    type="info"
-                    showIcon
-                    title="新建或打开工作流后，可勾选上方角色库角色并绑定商品/道具/场景参与脚本出镜"
-                  />
-                ) : (
-                  <>
-                    <div className="wf-section-card">
-                      <div className="wf-section-card-head">
-                        <span>数字人主播与绑定商品</span>
-                      </div>
-                    <Select
-                      size="small"
-                      placeholder="选择数字人主播（含克隆音色与授权照）"
-                      value={draft.assetsConfig.presenterId}
-                      disabled={active}
-                      options={(catalog?.presenters || []).map((p) => ({
-                        value: p.id,
-                        label: `${p.name}${p.voiceModel ? ` · ${p.voiceModel}` : ""}`,
-                      }))}
-                      onChange={(presenterId) =>
-                        patchDraft((cur) => ({
-                          ...cur,
-                          assetsConfig: { ...cur.assetsConfig, presenterId },
-                        }))
-                      }
-                    />
-                    <Select
-                      size="small"
-                      showSearch
-                      allowClear
-                      filterOption={false}
-                      placeholder="搜索并绑定商品款号"
-                      value={draft.assetsConfig.productId}
-                      disabled={active}
-                      onSearch={setProductSearch}
-                      options={(productsQuery.data?.products || []).map((p) => ({
-                        value: p.id,
-                        label: `${p.styleNo} · ${p.name}`,
-                      }))}
-                      onChange={(productId) => {
-                        const prod = productsQuery.data?.products.find(
-                          (p) => p.id === productId,
-                        );
-                        patchDraft((cur) => ({
-                          ...cur,
-                          assetsConfig: {
-                            ...cur.assetsConfig,
-                            productId,
-                            productStyleNo: prod?.styleNo,
-                            productImageIds:
-                              prod?.images.slice(0, 4).map((i) => i.id) || [],
-                          },
-                        }));
-                      }}
-                    />
-                    {selectedProduct && selectedProduct.images.length > 0 && (
-                      <div className="wf-asset-chips">
-                        {selectedProduct.images.map((img) => (
-                          <div key={img.id} className="wf-asset-chip">
-                            <img src={img.url} alt={img.color || "商品图"} />
-                            <span>{img.color || "实拍图"}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+            {/* 标签 2：角色库（纯粹聚焦新建角色与角色管理） */}
+            {libTab === "characters" && (
+              <CharacterLibraryPanel
+                account={account}
+                enabled={canUseCommerce}
+                boundIds={draft?.assetsConfig.characterLibraryIds || []}
+                disabled={active}
+                onToggleBind={
+                  draft
+                    ? (characterId, checked) =>
+                        patchDraft((cur) => {
+                          const prevIds = cur.assetsConfig.characterLibraryIds || [];
+                          const nextIds = checked
+                            ? [...new Set([...prevIds, characterId])]
+                            : prevIds.filter((id) => id !== characterId);
+                          return {
+                            ...cur,
+                            assetsConfig: {
+                              ...cur.assetsConfig,
+                              characterLibraryIds: nextIds,
+                            },
+                          };
+                        })
+                    : undefined
+                }
+              />
+            )}
 
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head">
-                      <span>角色形象图</span>
-                      <label className="wf-file-btn wf-file-btn-sm">
-                        <UploadOutlined /> 上传
-                        <input
-                          type="file"
-                          accept="image/*"
-                          disabled={active}
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            e.target.value = "";
-                            if (f) void uploadAsset("character", f);
-                          }}
-                        />
-                      </label>
-                    </div>
-                    {draft.assetsConfig.characters.length ? (
-                      <div className="wf-asset-chips">
-                        {draft.assetsConfig.characters.map((c) => (
-                          <div key={c.id} className="wf-asset-chip">
-                            {c.url && <img src={c.url} alt={c.name} />}
-                            <span>{c.name}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="wf-muted">暂无角色参考图</p>
-                    )}
-                  </div>
+            {/* 标签 3：场景库（自定义场景 + 40 种风格关键词场景） */}
+            {libTab === "scenes" && (
+              <SceneLibraryPanel
+                draft={draft}
+                disabled={active}
+                onUploadScene={(file) => void uploadAsset("scene", file)}
+                onToggleKeyword={(kw) => toggleKeywordInConfig("sceneKeywords", kw)}
+                onAddCustomKeyword={(kw) => toggleKeywordInConfig("sceneKeywords", kw)}
+              />
+            )}
 
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head">
-                      <span>道具参考图（衣架/包包/配饰）</span>
-                      <label className="wf-file-btn wf-file-btn-sm">
-                        <UploadOutlined /> 上传
-                        <input
-                          type="file"
-                          accept="image/*"
-                          disabled={active}
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            e.target.value = "";
-                            if (f) void uploadAsset("prop", f);
-                          }}
-                        />
-                      </label>
-                    </div>
-                    {draft.assetsConfig.props.length ? (
-                      <div className="wf-asset-chips">
-                        {draft.assetsConfig.props.map((p) => (
-                          <div key={p.id} className="wf-asset-chip">
-                            {p.url && <img src={p.url} alt={p.name} />}
-                            <span>{p.name}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="wf-muted">暂无道具参考图</p>
-                    )}
-                  </div>
+            {/* 标签 4：道具库（自定义道具 + 剧情智能推荐道具） */}
+            {libTab === "props" && (
+              <PropLibraryPanel
+                draft={draft}
+                disabled={active}
+                onUploadProp={(file) => void uploadAsset("prop", file)}
+                onToggleKeyword={(kw) => toggleKeywordInConfig("propKeywords", kw)}
+                onApplyRecommended={(kws) =>
+                  applyRecommendedKeywords("propKeywords", kws)
+                }
+              />
+            )}
 
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head">
-                      <span>场景背景图</span>
-                      <label className="wf-file-btn wf-file-btn-sm">
-                        <UploadOutlined /> 上传
-                        <input
-                          type="file"
-                          accept="image/*"
-                          disabled={active}
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            e.target.value = "";
-                            if (f) void uploadAsset("scene", f);
-                          }}
-                        />
-                      </label>
-                    </div>
-                    {draft.assetsConfig.scenes.length ? (
-                      <div className="wf-asset-chips">
-                        {draft.assetsConfig.scenes.map((s) => (
-                          <div key={s.id} className="wf-asset-chip">
-                            {s.url && <img src={s.url} alt={s.name} />}
-                            <span>{s.name}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="wf-muted">暂无场景背景图</p>
-                    )}
-                  </div>
-                </>
-              )}
-              </>
+            {/* 标签 5：服饰库（商品档案/自定义服装 + 剧情智能推荐服装） */}
+            {libTab === "garments" && (
+              <GarmentLibraryPanel
+                draft={draft}
+                disabled={active}
+                productOptions={productsQuery.data?.products || []}
+                selectedProduct={selectedProduct}
+                onProductSearch={setProductSearch}
+                onSelectProduct={(productId) => {
+                  const prod = productsQuery.data?.products.find(
+                    (p) => p.id === productId,
+                  );
+                  patchDraft((cur) => ({
+                    ...cur,
+                    assetsConfig: {
+                      ...cur.assetsConfig,
+                      productId,
+                      productStyleNo: prod?.styleNo,
+                      productImageIds:
+                        prod?.images.slice(0, 4).map((i) => i.id) || [],
+                    },
+                  }));
+                }}
+                onUploadGarment={(file) => void uploadAsset("garment", file)}
+                onToggleKeyword={(kw) => toggleKeywordInConfig("garmentKeywords", kw)}
+                onApplyRecommended={(kws) =>
+                  applyRecommendedKeywords("garmentKeywords", kws)
+                }
+              />
             )}
 
             {/* 标签 3：爆款逆向拆解结果 */}

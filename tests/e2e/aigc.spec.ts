@@ -672,6 +672,26 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await expect(charDialog).toBeHidden();
   await expect(page.getByLabel("数字人角色库").getByText("主理人小雅")).toBeVisible();
   await expect(page.getByLabel("数字人角色库").getByText("4/4 视图")).toBeVisible();
+  await expect(page.getByText("数字人主播与绑定商品")).toHaveCount(0);
+
+  // 切到「场景库」校验 40 种风格关键词场景
+  await page.getByRole("tab", { name: "场景库" }).click();
+  await expect(page.getByText("40 种风格", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /竹林深处武侠秘境/ }).click();
+
+  // 切到「道具库」输入武侠剧剧情校验智能推荐兵器（长剑/佩刀/齐眉棍/铁棒/战斧）
+  await page.getByRole("tab", { name: "道具库" }).click();
+  await page.getByLabel("输入剧情题材推荐道具").fill("武侠剧江湖对决");
+  await expect(page.getByRole("button", { name: /长剑/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /战斧/ })).toBeVisible();
+  await page.getByRole("button", { name: "一键选用推荐道具" }).click();
+
+  // 切到「服饰库」输入武侠剧剧情校验智能推荐服装（玄铁铠甲/粗麻布衣）
+  await page.getByRole("tab", { name: "服饰库" }).click();
+  await page.getByLabel("输入剧情题材推荐服装").fill("武侠剧侠客出场");
+  await expect(page.getByRole("button", { name: /玄铁铠甲/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /粗麻布衣/ })).toBeVisible();
+  await page.getByRole("button", { name: "一键选用推荐服装" }).click();
 
   // 切到「剪辑」面板执行 AI 自动编排后期并校验导出 AE 脚本按钮与时间轴徽标
   await page.getByRole("tab", { name: "剪辑" }).click();

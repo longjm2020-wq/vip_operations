@@ -139,6 +139,13 @@ function workflowView(row: Row) {
         ...s,
         url: assetUrl(s.assetId),
       })),
+      garments: (assetsConfig.garments || []).map((g) => ({
+        ...g,
+        url: assetUrl(g.assetId),
+      })),
+      sceneKeywords: assetsConfig.sceneKeywords || [],
+      propKeywords: assetsConfig.propKeywords || [],
+      garmentKeywords: assetsConfig.garmentKeywords || [],
     },
     modelConfig: (row.model_config || {}) as WorkflowModelConfig,
     shots: shots.map((shot) => ({
@@ -580,6 +587,7 @@ async function uploadWorkflowAsset(
     "character",
     "prop",
     "scene",
+    "garment",
     "storyboard",
     "cozyclayProject",
     "greybox",
@@ -614,9 +622,20 @@ async function uploadWorkflowAsset(
 
   if (slot === "referenceVideo") {
     referenceAssetId = asset.path;
-  } else if (slot === "character" || slot === "prop" || slot === "scene") {
+  } else if (
+    slot === "character" ||
+    slot === "prop" ||
+    slot === "scene" ||
+    slot === "garment"
+  ) {
     const key =
-      slot === "character" ? "characters" : slot === "prop" ? "props" : "scenes";
+      slot === "character"
+        ? "characters"
+        : slot === "prop"
+          ? "props"
+          : slot === "scene"
+            ? "scenes"
+            : "garments";
     const list = Array.isArray(assetsConfig[key]) ? [...assetsConfig[key]] : [];
     list.push({
       id: randomUUID(),
@@ -1251,8 +1270,18 @@ export async function processCommerceTalkWorkflow(
           ].filter(Boolean),
         })),
         补充角色图: (assetsConfig.characters || []).map((c) => c.name),
-        道具列表: (assetsConfig.props || []).map((p) => p.name),
-        场景列表: (assetsConfig.scenes || []).map((s) => s.name),
+        服饰库: [
+          ...(assetsConfig.garments || []).map((g) => g.name),
+          ...(assetsConfig.garmentKeywords || []),
+        ],
+        道具库: [
+          ...(assetsConfig.props || []).map((p) => p.name),
+          ...(assetsConfig.propKeywords || []),
+        ],
+        场景库: [
+          ...(assetsConfig.scenes || []).map((s) => s.name),
+          ...(assetsConfig.sceneKeywords || []),
+        ],
         场景模式: assetsConfig.sceneMode || "smart",
         目标时长秒: assetsConfig.targetDurationSec || 20,
         拍摄需求: assetsConfig.creativeBrief || "自然真实服装带货口播，多机位多角度出镜",
@@ -1357,6 +1386,7 @@ export async function processCommerceTalkWorkflow(
       const characterMap = new Map(boundCharacters.map((c) => [c.id, c]));
       const baseRefBuffers: Buffer[] = [];
       for (const item of [
+        ...(assetsConfig.garments || []).slice(0, 2),
         ...(assetsConfig.characters || []).slice(0, 2),
         ...(assetsConfig.props || []).slice(0, 2),
         ...(assetsConfig.scenes || []).slice(0, 1),
