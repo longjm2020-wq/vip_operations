@@ -693,6 +693,18 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await expect(page.getByRole("button", { name: /粗麻布衣/ })).toBeVisible();
   await page.getByRole("button", { name: "一键选用推荐服装" }).click();
 
+  // 校验底部流水线在 ① 拆解 与 ③ 脚本 之间新增 ② 参演配置弹窗（角色/产品主体/服饰/道具/场景绑定）
+  await timeline.getByRole("button", { name: "② 参演配置" }).click();
+  const castDialog = page.getByRole("dialog", { name: /参演配置/ });
+  await expect(castDialog).toBeVisible();
+  await expect(castDialog.getByText(/参演角色/)).toBeVisible();
+  await expect(castDialog.getByText("产品主体（商品档案）")).toBeVisible();
+  await expect(castDialog.getByText(/参演服饰/)).toBeVisible();
+  await expect(castDialog.getByText(/参演道具/)).toBeVisible();
+  await expect(castDialog.getByText(/拍摄场景/)).toBeVisible();
+  await castDialog.locator(".ant-modal-footer").getByRole("button", { name: "关闭" }).click();
+  await expect(castDialog).toBeHidden();
+
   // 切到「剪辑」面板执行 AI 自动编排后期并校验导出 AE 脚本按钮与时间轴徽标
   await page.getByRole("tab", { name: "剪辑" }).click();
   await page.getByLabel("AI 剪辑指令").fill("抖音爆款快切，前3秒白闪，暖调穿搭滤镜");

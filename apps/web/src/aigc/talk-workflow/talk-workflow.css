@@ -719,6 +719,58 @@
   overflow: hidden;
 }
 
+/* 参演配置弹窗网格 */
+.wf-cast-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wf-cast-block {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wf-cast-block-full {
+  grid-column: 1 / -1;
+}
+
+.wf-cast-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.wf-cast-check-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wf-cast-check-chip small {
+  color: var(--app-subtle);
+}
+
+@media (max-width: 680px) {
+  .wf-cast-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .wf-player-empty {
   max-width: 360px;
   text-align: center;

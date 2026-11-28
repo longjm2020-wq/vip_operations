@@ -60,6 +60,7 @@ import {
   PropLibraryPanel,
   SceneLibraryPanel,
 } from "./asset-library-panels";
+import { CastConfigModal } from "./cast-config-modal";
 import { CharacterLibraryPanel } from "./character-library";
 import { CozyClayPrevisPanel } from "./cozyclay-panel";
 import {
@@ -136,6 +137,7 @@ export function CommerceTalkWorkflow({
 
   // 工作台 UI 状态
   const [libTab, setLibTab] = useState<LibraryTab>("import");
+  const [castModalOpen, setCastModalOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("draft");
   const [previewSource, setPreviewSource] = useState<PreviewSource>("auto");
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
@@ -2172,7 +2174,7 @@ export function CommerceTalkWorkflow({
             </Tooltip>
           </div>
 
-          {/* 流水线快捷推进按钮：次要步骤弱化为无框文本按钮，最终合成突出为主按钮 */}
+          {/* 流水线快捷推进按钮：拆解 -> 参演配置 -> 脚本 -> 分镜图 -> 预演 -> 生成分镜 -> 合成成片 */}
           <div className="wf-tl-pipeline">
             <Button
               size="small"
@@ -2188,11 +2190,20 @@ export function CommerceTalkWorkflow({
               size="small"
               type="text"
               className="wf-tl-step-btn"
+              disabled={!draft}
+              onClick={() => setCastModalOpen(true)}
+            >
+              ② 参演配置
+            </Button>
+            <Button
+              size="small"
+              type="text"
+              className="wf-tl-step-btn"
               disabled={!draft || active}
               loading={advancing}
               onClick={() => void advance("script")}
             >
-              ② 脚本
+              ③ 脚本
             </Button>
             <Button
               size="small"
@@ -2202,7 +2213,7 @@ export function CommerceTalkWorkflow({
               loading={advancing}
               onClick={() => void advance("storyboard")}
             >
-              ③ 分镜图
+              ④ 分镜图
             </Button>
             <Button
               size="small"
@@ -2211,7 +2222,7 @@ export function CommerceTalkWorkflow({
               disabled={!draft}
               onClick={() => setLibTab("previs")}
             >
-              ④ 预演
+              ⑤ 预演
             </Button>
             <Button
               size="small"
@@ -2221,7 +2232,7 @@ export function CommerceTalkWorkflow({
               loading={advancing}
               onClick={() => void advance("produce")}
             >
-              ⑤ 生成分镜
+              ⑥ 生成分镜
             </Button>
             <Button
               size="small"
@@ -2231,7 +2242,7 @@ export function CommerceTalkWorkflow({
               loading={advancing}
               onClick={() => void advance("render")}
             >
-              ⑥ 合成成片
+              ⑦ 合成成片
             </Button>
           </div>
 
@@ -2268,7 +2279,7 @@ export function CommerceTalkWorkflow({
                 <VideoCameraOutlined />
                 <span>
                   {draft
-                    ? "点击上方「② 脚本」自动生成分镜，或点击「+ 新增分镜」开始你的创作吧~"
+                    ? "点击上方「② 参演配置」绑定角色/服饰/道具/场景/产品主体后，点击「③ 脚本」自动生成分镜，或点击「+ 新增分镜」开始创作~"
                     : "在左上角导入爆款视频链接或新建空白工作流，分镜与轨道将自动排布在这里~"}
                 </span>
               </div>
@@ -2405,6 +2416,63 @@ export function CommerceTalkWorkflow({
         </div>
         <audio ref={audioPreviewRef} style={{ display: "none" }} />
       </section>
+
+      {draft && (
+        <CastConfigModal
+          open={castModalOpen}
+          draft={draft}
+          characters={catalog?.characters || []}
+          productOptions={productsQuery.data?.products || []}
+          selectedProduct={selectedProduct}
+          disabled={active}
+          saving={saving}
+          advancing={advancing}
+          onClose={() => setCastModalOpen(false)}
+          onJumpTab={(tab) => setLibTab(tab)}
+          onToggleCharacter={(characterId, checked) =>
+            patchDraft((cur) => {
+              const prevIds = cur.assetsConfig.characterLibraryIds || [];
+              const nextIds = checked
+                ? [...new Set([...prevIds, characterId])]
+                : prevIds.filter((id) => id !== characterId);
+              return {
+                ...cur,
+                assetsConfig: {
+                  ...cur.assetsConfig,
+                  characterLibraryIds: nextIds,
+                },
+              };
+            })
+          }
+          onProductSearch={setProductSearch}
+          onSelectProduct={(productId) => {
+            const prod = productsQuery.data?.products.find(
+              (p) => p.id === productId,
+            );
+            patchDraft((cur) => ({
+              ...cur,
+              assetsConfig: {
+                ...cur.assetsConfig,
+                productId,
+                productStyleNo: prod?.styleNo,
+                productImageIds:
+                  prod?.images.slice(0, 4).map((i) => i.id) || [],
+              },
+            }));
+          }}
+          onToggleKeyword={toggleKeywordInConfig}
+          onApplyRecommended={applyRecommendedKeywords}
+          onSaveOnly={() => {
+            void saveDraft().then((saved) => {
+              if (saved) setCastModalOpen(false);
+            });
+          }}
+          onSaveAndScript={() => {
+            setCastModalOpen(false);
+            void advance("script");
+          }}
+        />
+      )}
     </div>
   );
 }
