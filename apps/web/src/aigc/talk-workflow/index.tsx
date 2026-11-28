@@ -647,6 +647,7 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
           />
           <Button
             size="small"
+            type="text"
             icon={<PlusOutlined />}
             onClick={() => setLibTab("import")}
           >
@@ -1856,10 +1857,11 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
             </Tooltip>
           </div>
 
-          {/* 流水线快捷推进按钮 */}
+          {/* 流水线快捷推进按钮：次要步骤弱化为无框文本按钮，最终合成突出为主按钮 */}
           <div className="wf-tl-pipeline">
             <Button
               size="small"
+              type="text"
               className="wf-tl-step-btn"
               disabled={!draft || active}
               loading={advancing}
@@ -1869,6 +1871,7 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
             </Button>
             <Button
               size="small"
+              type="text"
               className="wf-tl-step-btn"
               disabled={!draft || active}
               loading={advancing}
@@ -1878,6 +1881,7 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
             </Button>
             <Button
               size="small"
+              type="text"
               className="wf-tl-step-btn"
               disabled={!draft || active || !shots.length}
               loading={advancing}
@@ -1887,6 +1891,7 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
             </Button>
             <Button
               size="small"
+              type="text"
               className="wf-tl-step-btn"
               disabled={!draft}
               onClick={() => setLibTab("previs")}
@@ -1895,6 +1900,7 @@ export function CommerceTalkWorkflow({ account }: { account: string }) {
             </Button>
             <Button
               size="small"
+              type="text"
               className="wf-tl-step-btn"
               disabled={!draft || active || !shots.length}
               loading={advancing}
