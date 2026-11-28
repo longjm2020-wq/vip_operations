@@ -44,6 +44,7 @@ import { Media, TaskList } from "./components";
 import { DetailEditor, DigitalEditor, VideoEditor } from "./editors";
 import { ServiceSettings } from "./settings";
 import { TalkVideo } from "./talk-video";
+import { stageLabels } from "./talk-workflow/types";
 import "./style.css";
 
 const tools = [
@@ -86,6 +87,7 @@ function AigcStudio() {
     projects: [],
     detailProjects: [],
     digitalHumanProjects: [],
+    workflows: [],
     works: [],
     tasks: [],
   });
@@ -118,12 +120,13 @@ function AigcStudio() {
         setError("AIGC 正在连接持久存储或交接任务，页面会自动重试。");
         return;
       }
-      const [state, runs] = await Promise.all([
+      const [state, runs, wfRes] = await Promise.all([
         studioApi("/state"),
         studioApi("/detail-tasks"),
+        studioApi("/commerce-video/workflows").catch(() => ({ workflows: [] })),
       ]);
       if (!mounted.current) return;
-      setData(state);
+      setData({ ...state, workflows: Array.isArray(wfRes?.workflows) ? wfRes.workflows : [] });
       setDetailTasks(runs);
       setError("");
     } catch (e: any) {
@@ -226,8 +229,13 @@ function AigcStudio() {
     return () =>
       window.removeEventListener("xuti:aigc-navigate-home", onNavigateHome);
   });
-  const open = (type: string, id: string) =>
+  const open = (type: string, id: string) => {
+    if (type === "talk-video") {
+      navigate({ view: "talk-video", mode: "workflow", workflow: id });
+      return;
+    }
     navigate({ kind: type, project: id });
+  };
   const create = async (type: string, framework?: string) => {
     setCreating(type);
     try {
@@ -253,6 +261,16 @@ function AigcStudio() {
     }
   };
   const allProjects = [
+    ...(data.workflows || []).map((wf: Item) => ({
+      id: wf.id,
+      name: wf.title || "未命名 AI智能成片",
+      kind: "talk-video",
+      status: wf.stage,
+      statusLabel:
+        stageLabels[wf.stage as keyof typeof stageLabels] || "草稿",
+      updatedAt: wf.updatedAt || wf.createdAt,
+      deletedAt: null,
+    })),
     ...data.projects.map((p: Item) => ({ ...p, kind: "video" })),
     ...(data.recycledProjects || []).map((p: Item) => ({
       ...p,
@@ -268,6 +286,27 @@ function AigcStudio() {
     )
     .sort((a: Item, b: Item) => String(b.updatedAt).localeCompare(a.updatedAt));
   const projectAction = async (p: Item, action: string) => {
+    if (p.kind === "talk-video") {
+      modal.confirm({
+        title: "删除项目",
+        content: `确认删除「${p.name}」吗？删除后将无法恢复。`,
+        okText: "确认删除",
+        okButtonProps: { danger: true },
+        onOk: async () => {
+          try {
+            await studioApi(
+              `/commerce-video/workflows/${encodeURIComponent(p.id)}`,
+              "DELETE",
+            );
+            message.success("已删除项目");
+            await reload();
+          } catch (e: any) {
+            message.error(e.message || "删除失败");
+          }
+        },
+      });
+      return;
+    }
     try {
       const base =
         p.kind === "video"
@@ -509,7 +548,7 @@ function AigcStudio() {
                     onChange={setFilter}
                     options={[
                       { value: "all", label: "全部" },
-                      { value: "video", label: "短视频" },
+                      { value: "talk-video", label: "AI智能成片" },
                       { value: "detail", label: "详情页 / 主图" },
                       { value: "digital", label: "数字人" },
                     ]}
@@ -525,7 +564,10 @@ function AigcStudio() {
                   ) : (
                     <ul className="aigc-project-list">
                       {visibleProjects.map((p: Item) => {
-                        const tool = tools.find((t) => t.kind === p.kind);
+                        const tool =
+                          p.kind === "talk-video"
+                            ? { icon: <PlayCircleOutlined />, title: "AI智能成片" }
+                            : tools.find((t) => t.kind === p.kind);
                         const project = (
                           <>
                             <span className="aigc-project-icon">{tool?.icon}</span>
@@ -536,7 +578,7 @@ function AigcStudio() {
                             <span className="aigc-project-date">
                               {new Date(p.updatedAt).toLocaleDateString()}
                             </span>
-                            <Tag>{stateText[p.status] || "草稿"}</Tag>
+                            <Tag>{p.statusLabel || stateText[p.status] || "草稿"}</Tag>
                           </>
                         );
                         return (
@@ -551,7 +593,13 @@ function AigcStudio() {
                             {trash ? (
                               <Button type="text" onClick={() => projectAction(p, "restore")}>恢复项目</Button>
                             ) : (
-                              <Button type="text" icon={<DeleteOutlined />} aria-label="移入回收站" title="移入回收站" onClick={() => projectAction(p, "trash")} />
+                              <Button
+                                type="text"
+                                icon={<DeleteOutlined />}
+                                aria-label={p.kind === "talk-video" ? "删除项目" : "移入回收站"}
+                                title={p.kind === "talk-video" ? "删除项目" : "移入回收站"}
+                                onClick={() => projectAction(p, "trash")}
+                              />
                             )}
                           </li>
                         );
