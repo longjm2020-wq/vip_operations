@@ -481,6 +481,99 @@ test("the apparel entry opens and submits a mixed product batch", async ({ page 
   await topbarNav.getByRole("button", { name: "返回创作空间" }).click();
   await expect(page.getByRole("heading", { name: "AIGC 创作空间" })).toBeVisible();
 });
+test("the talk-video workflow renders the four-pane integrated workbench and syncs timeline shots", async ({
+  page,
+}) => {
+  await fixture(page, "dark", true, true);
+  const workflowId = randomUUID();
+  let storedWorkflow: any = null;
+  await page.route("**/api/v1/aigc/digital-human/lip-sync", (route) =>
+    route.fulfill({ json: { configured: true, jobs: [] } }),
+  );
+  await page.route("**/api/v1/aigc/commerce-video/workflows**", async (route) => {
+    const url = new URL(route.request().url());
+    const method = route.request().method();
+    if (url.pathname.endsWith("/catalog")) {
+      return route.fulfill({
+        json: {
+          scriptModels: [{ id: "script-1", label: "脚本强模型", provider: "openrouter", configured: true, description: "" }],
+          imageModels: [{ id: "img-1", label: "分镜图模型", configured: true, maxImages: 4, detail: "" }],
+          voiceModels: [{ id: "voice-1", label: "CosyVoice 3.5", provider: "bailian", cnyPer10k: 0.8, configured: true }],
+          lipSyncModels: [{ id: "lip-1", label: "fal 对口型", provider: "fal", configured: true, note: "" }],
+          videoModels: [{ id: "vid-1", providerId: "bailian", modelId: "h3", label: "MiniMax H3", configured: true, supportsPrevis: true, resolutions: ["768P"], durations: [5], note: "" }],
+          cozyclayBaseUrl: "",
+          presenters: [],
+          defaults: {
+            deconstructModel: "script-1",
+            scriptModel: "script-1",
+            storyboardImageModel: "img-1",
+            voiceModel: "voice-1",
+            lipSyncModel: "lip-1",
+            videoModel: "vid-1",
+          },
+        },
+      });
+    }
+    if (url.pathname.endsWith("/workflows") && method === "GET") {
+      return route.fulfill({ json: { workflows: storedWorkflow ? [storedWorkflow] : [] } });
+    }
+    if (url.pathname.endsWith("/workflows") && method === "POST") {
+      storedWorkflow = {
+        id: workflowId,
+        title: "通勤外套爆款复刻",
+        runMode: "assisted",
+        stage: "draft",
+        sourcePlatform: "manual",
+        sourceMeta: {},
+        assetsConfig: {
+          productImageIds: [],
+          characters: [],
+          props: [],
+          scenes: [],
+          sceneMode: "auto",
+          creativeBrief: "",
+          aspectRatio: "9:16",
+          targetDurationSec: 20,
+          pauseBeforePrevis: false,
+        },
+        modelConfig: {
+          deconstructModel: "script-1",
+          scriptModel: "script-1",
+          storyboardImageModel: "img-1",
+          voiceModel: "voice-1",
+          lipSyncModel: "lip-1",
+          videoModel: "vid-1",
+        },
+        shots: [],
+        cozyclayState: {},
+        revision: 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return route.fulfill({ json: storedWorkflow });
+    }
+    if (url.pathname.endsWith(`/workflows/${workflowId}`) && method === "GET") {
+      return route.fulfill({ json: storedWorkflow });
+    }
+    return route.fulfill({ status: 404, json: { error: "unknown workflow fixture" } });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/aigc?view=talk-video&mode=workflow");
+  await expect(page.getByLabel("爆款复刻集成工作台")).toBeVisible();
+  await expect(page.getByLabel("素材与能力面板")).toBeVisible();
+  await expect(page.getByLabel("播放器预览区")).toBeVisible();
+  await expect(page.getByLabel("参数检查器")).toBeVisible();
+  await expect(page.getByLabel("多轨分镜时间轴")).toBeVisible();
+
+  await page.getByRole("button", { name: "新建空白工作流" }).click();
+  await expect(page.getByLabel("工作流名称")).toHaveValue("通勤外套爆款复刻");
+
+  const timeline = page.getByLabel("多轨分镜时间轴");
+  await timeline.getByRole("button", { name: "新增分镜" }).click();
+  await expect(timeline.getByText("新增分镜 1")).toBeVisible();
+  await expect(page.getByLabel("参数检查器").getByText("分镜参数 · S01")).toBeVisible();
+});
 test("imports a share reference and keeps the current source when a replacement requires local upload", async ({ page }) => {
   await fixture(page);
   let submitted = 0;
