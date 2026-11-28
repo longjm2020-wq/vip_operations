@@ -609,6 +609,22 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
       storedWorkflow = { ...storedWorkflow, ...body, revision: (storedWorkflow?.revision || 1) + 1 };
       return route.fulfill({ json: storedWorkflow });
     }
+    if (url.pathname.endsWith("/workflows/smart-create") && method === "POST") {
+      const body = route.request().postDataJSON() || {};
+      const intent = {
+        detectedIntent: body.mode === "script" ? "script" : body.mode === "viral_link" ? "viral_link" : "chat",
+        title: "秋冬显瘦风衣智能成片",
+        intentSummary: "已识别为 AI 对话创作需求，已智能提炼拍摄方案并匹配场景/道具/服饰。",
+        assistantReply: "已理解你的创作意图：秋冬显瘦风衣 9:16 竖屏成片，可直接点击创建项目。",
+        aspectRatio: "9:16",
+        targetDurationSec: 20,
+        suggestedScenes: ["现代买手店展厅：暖调射灯"],
+        suggestedProps: ["衣架"],
+        suggestedGarments: ["通勤西装外套"],
+      };
+      if (body.previewOnly) return route.fulfill({ json: { intent } });
+      return route.fulfill({ status: 201, json: { workflow: storedWorkflow, intent } });
+    }
     if (url.pathname.endsWith(`/workflows/${workflowId}/ai-edit`) && method === "POST") {
       storedWorkflow = {
         ...storedWorkflow,
@@ -658,6 +674,15 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await page.mouse.up();
   const leftBoxAfter = await leftPane.boundingBox();
   expect(leftBoxAfter!.width).toBeGreaterThan(leftBoxBefore!.width + 30);
+
+  // 校验 AI 智能导入面板（支持 AI 对话识别意图、爆款链接、创作剧本与上传附件）
+  const importPanel = page.getByLabel("AI 智能导入面板");
+  await expect(importPanel).toBeVisible();
+  await importPanel.getByLabel("AI 创作意图输入框").fill("拍一条 15 秒秋冬显瘦风衣穿搭短视频，暖调通勤风");
+  await importPanel.getByRole("button", { name: "发送给 AI 识别 / 完善意图" }).click();
+  await expect(importPanel.getByText("建议项目：秋冬显瘦风衣智能成片")).toBeVisible();
+  await importPanel.getByRole("button", { name: "清空对话" }).click();
+  await importPanel.getByLabel("AI 创作意图输入框").fill("");
 
   await page.getByRole("button", { name: "新建空白工作流" }).click();
   await expect(page.getByLabel("工作流名称")).toHaveValue("通勤外套爆款复刻");

@@ -34,6 +34,7 @@ import {
   createWorkflowInputSchema,
   magi2VideoModelSpec,
   recommendedScriptModels,
+  smartCreateWorkflowInputSchema,
   updateWorkflowInputSchema,
   workflowActiveStages,
   workflowDeconstructSchema,
@@ -44,6 +45,7 @@ import {
   workflowShotSchema,
   workflowSubtitleStyles,
   workflowTransitions,
+  type SmartCreateWorkflowInput,
   type WorkflowAssetsConfig,
   type WorkflowCozyClayState,
   type WorkflowDeconstructData,
@@ -684,6 +686,276 @@ async function uploadWorkflowAsset(
   };
 }
 
+/** 根据用户输入、多轮对话、附件或剧本文本智能识别创作意图（优先 LLM，失败时启发式兜底） */
+async function analyzeSmartCreateIntent(
+  studio: Studio,
+  input: SmartCreateWorkflowInput,
+) {
+  const combinedText = [
+    ...input.messages
+      .filter((m) => m.role === "user")
+      .map((m) => m.content),
+    input.prompt,
+    input.scriptContent || "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+
+  const urlMatch = combinedText.match(/https?:\/\/[^\s"'<>]+/i);
+  const hasViralUrl = Boolean(
+    urlMatch &&
+      (/douyin\.com|iesdouyin\.com|xiaohongshu\.com|xhslink\.com|rednote\.com/i.test(
+        urlMatch[0],
+      ) ||
+        input.mode === "viral_link"),
+  );
+  const looksLikeScript = Boolean(
+    input.mode === "script" ||
+      input.scriptContent?.trim() ||
+      /(第[一二三四五六七八九十\d]+[场镜幕]|分镜\s*\d+|镜头\s*\d+|景别|台词[:：]|旁白[:：]|画面[:：])/i.test(
+        combinedText,
+      ),
+  );
+
+  let detectedIntent: "viral_link" | "script" | "chat" =
+    input.mode === "viral_link"
+      ? "viral_link"
+      : input.mode === "script"
+        ? "script"
+        : input.mode === "chat"
+          ? "chat"
+          : hasViralUrl
+            ? "viral_link"
+            : looksLikeScript
+              ? "script"
+              : "chat";
+
+  const sourcePlatform: "douyin" | "xhs" | "url" | "manual" =
+    detectedIntent === "viral_link"
+      ? /douyin\.com|iesdouyin\.com/i.test(combinedText)
+        ? "douyin"
+        : /xiaohongshu\.com|xhslink\.com|rednote\.com/i.test(combinedText)
+          ? "xhs"
+          : urlMatch
+            ? "url"
+            : "manual"
+      : "manual";
+
+  // 启发式提取题材推荐（场景/道具/服饰）
+  const isWuxia = /武侠|江湖|侠客|古风|仙侠|刀剑|铠甲/.test(combinedText);
+  const isOutdoor = /户外|露营|街拍|citywalk|公园|海边/i.test(combinedText);
+  const isStudio = /棚拍|极简|高级|杂志|纯色|大片/.test(combinedText);
+  const suggestedScenes = isWuxia
+    ? ["竹林深处武侠秘境：苍翠竹海、晨雾光束、古风江湖意境"]
+    : isOutdoor
+      ? ["巴黎午后街拍：法式街角咖啡馆、柔和自然日光、松弛通勤氛围"]
+      : isStudio
+        ? ["极简纯白影棚：柔和漫反射灯光、高级杂志质感、干净背景"]
+        : ["现代买手店展厅：暖调射灯、木质陈列架、高级穿搭氛围"];
+  const suggestedProps = isWuxia
+    ? ["长剑", "佩刀", "折扇"]
+    : isOutdoor
+      ? ["咖啡杯", "手提包", "墨镜"]
+      : ["衣架", "穿搭镜", "手提包"];
+  const suggestedGarments = isWuxia
+    ? ["玄铁铠甲", "粗麻布衣", "侠客披风"]
+    : ["通勤西装外套", "垂感阔腿裤"];
+
+  // 从剧本中启发式切分初始分镜
+  const parseScriptShots = (raw: string): WorkflowShot[] => {
+    const lines = raw
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const blocks: string[] = [];
+    for (const line of lines) {
+      if (
+        /^(第[一二三四五六七八九十\d]+[场镜幕]|分镜\s*\d+|镜头\s*\d+|S\d+|\d+[\.、])/i.test(
+          line,
+        ) ||
+        !blocks.length
+      ) {
+        blocks.push(line);
+      } else {
+        blocks[blocks.length - 1] += ` ${line}`;
+      }
+    }
+    return blocks.slice(0, 8).map((block, idx) => ({
+      id: `S${String(idx + 1).padStart(2, "0")}`,
+      order: idx + 1,
+      title: block.slice(0, 18) || `分镜 ${idx + 1}`,
+      type: idx === 0 ? "talking_head" : "broll_video",
+      caption: block.slice(0, 120),
+      camera: idx === 0 ? "中近景竖屏，平视焦点" : "中景跟拍，展示细节",
+      action: block.slice(0, 140),
+      props: suggestedProps.slice(0, 2).join("、"),
+      scene: suggestedScenes[0]?.split("：")[0] || "室内实拍场景",
+      characterNames: ["主播"],
+      durationSec: 5,
+      storyboardPrompt: block.slice(0, 160),
+      status: "pending",
+    }));
+  };
+
+  const defaultTitle =
+    detectedIntent === "viral_link"
+      ? sourcePlatform === "douyin"
+        ? "抖音爆款复刻成片"
+        : sourcePlatform === "xhs"
+          ? "小红书爆款复刻成片"
+          : "爆款链接复刻成片"
+      : detectedIntent === "script"
+        ? (input.scriptFileName?.replace(/\.[^.]+$/, "") ||
+            combinedText.split(/\r?\n/)[0]?.slice(0, 24) ||
+            "创作剧本智能成片")
+        : combinedText.slice(0, 22) || "AI 对话智能成片";
+
+  let intent = {
+    detectedIntent,
+    sourcePlatform,
+    sourceUrl: urlMatch?.[0] || (detectedIntent === "viral_link" ? combinedText : undefined),
+    title: defaultTitle,
+    creativeBrief: combinedText.slice(0, 1200) || "自然流畅的短视频智能成片创作",
+    aspectRatio: (/16:9|横屏/.test(combinedText)
+      ? "16:9"
+      : /3:4|小红书/.test(combinedText)
+        ? "3:4"
+        : "9:16") as "9:16" | "16:9" | "3:4",
+    targetDurationSec: Number(combinedText.match(/(\d{1,2})\s*秒/)?.[1]) || 20,
+    intentSummary:
+      detectedIntent === "viral_link"
+        ? `已识别为${sourcePlatform === "douyin" ? "抖音" : sourcePlatform === "xhs" ? "小红书" : "外部"}爆款视频链接，将自动拉取并逆向拆解镜头与钩子。`
+        : detectedIntent === "script"
+          ? "已识别为创作剧本，将自动提取结构要点并拆分为可执行分镜轨道。"
+          : `已识别为 AI 对话创作需求${input.attachmentNames.length ? `（含 ${input.attachmentNames.length} 个附件）` : ""}，已智能提炼拍摄方案并匹配场景/道具/服饰。`,
+    assistantReply:
+      detectedIntent === "viral_link"
+        ? "已识别到爆款参考链接，点击创建后将立即导入并执行逆向拆解，提取前 3 秒钩子与分镜节奏。"
+        : detectedIntent === "script"
+          ? "已解析你的创作剧本，并自动拆分了初始分镜与参演资产建议。你可以继续补充修改，或直接创建项目进入时间轴精修。"
+          : `已理解你的创作意图：「${defaultTitle}」。已为你规划 ${/16:9|横屏/.test(combinedText) ? "16:9 横屏" : "9:16 竖屏"}、推荐场景与服饰道具。你可以继续对话微调，或直接点击创建项目。`,
+    suggestedScenes,
+    suggestedProps,
+    suggestedGarments,
+    deconstructData:
+      detectedIntent !== "viral_link" && combinedText
+        ? {
+            summary: combinedText.slice(0, 260),
+            hook: combinedText.split(/[。！？\n]/)[0]?.slice(0, 80) || "开场直接切入核心看点",
+            pacing: "前 3 秒强吸引钩子，中段细节展示，结尾自然收束引导",
+            sellingPoints: [defaultTitle],
+            targetAudience: "短视频精准兴趣人群",
+            estimatedDurationSec: 20,
+            referenceShots: [],
+          }
+        : undefined,
+    initialShots:
+      detectedIntent === "script" && combinedText
+        ? parseScriptShots(input.scriptContent || combinedText)
+        : ([] as WorkflowShot[]),
+  };
+
+  // 若配置了大模型且有有效文本，调用 LLM 增强意图识别与剧本拆分（超时/异常自动回退启发式结果）
+  if (combinedText && (studio.config.openrouterApiKey || studio.config.videoSecrets?.AGENTAI_API_KEY)) {
+    try {
+      const llmRaw = await callWorkflowLlm(
+        studio,
+        input.modelConfig?.scriptModel,
+        '你是专业短视频导演与创作意图识别助手。请根据用户输入、对话历史、附件文件名和剧本文本，识别创作意图并输出严格 JSON：{"detectedIntent":"viral_link|script|chat","title":"简短项目标题(<=24字)","intentSummary":"一句话总结AI识别到的创作意图","assistantReply":"以导演口吻回复用户(<=100字)，说明已理解的创意要点并引导建项或补充","creativeBrief":"整理后的完整拍摄与剪辑需求","aspectRatio":"9:16|16:9|3:4","targetDurationSec":20,"suggestedScenes":["场景名称：关键词"],"suggestedProps":["道具1"],"suggestedGarments":["服饰1"],"hook":"前3秒钩子","summary":"整体结构总结","pacing":"节奏建议","sellingPoints":["核心卖点1"],"shots":[{"title":"分镜标题","caption":"台词/旁白","camera":"机位景别","action":"画面动作","durationSec":5}]}。仅在识别为 script 时输出 shots（3~8 镜），其他模式 shots 输出空数组。',
+        JSON.stringify({
+          mode: input.mode,
+          prompt: input.prompt,
+          messages: input.messages.slice(-8),
+          scriptFileName: input.scriptFileName,
+          scriptContent: input.scriptContent?.slice(0, 6000),
+          attachmentNames: input.attachmentNames,
+        }),
+      );
+      const llmIntent = String(llmRaw.detectedIntent || "");
+      if (
+        input.mode === "auto" &&
+        (llmIntent === "viral_link" || llmIntent === "script" || llmIntent === "chat")
+      ) {
+        detectedIntent = llmIntent;
+      }
+      const llmShotsRaw = Array.isArray(llmRaw.shots) ? llmRaw.shots : [];
+      const llmShots: WorkflowShot[] =
+        detectedIntent === "script" && llmShotsRaw.length
+          ? llmShotsRaw.slice(0, 10).map((s: any, idx: number) => ({
+              id: `S${String(idx + 1).padStart(2, "0")}`,
+              order: idx + 1,
+              title: String(s?.title || `分镜 ${idx + 1}`).slice(0, 60),
+              type: idx === 0 ? "talking_head" : "broll_video",
+              caption: String(s?.caption || "").slice(0, 300),
+              camera: String(s?.camera || "中景竖屏").slice(0, 120),
+              action: String(s?.action || "").slice(0, 300),
+              props: (Array.isArray(llmRaw.suggestedProps)
+                ? llmRaw.suggestedProps.slice(0, 2).join("、")
+                : suggestedProps.slice(0, 2).join("、")),
+              scene: String(
+                (Array.isArray(llmRaw.suggestedScenes) && llmRaw.suggestedScenes[0]) ||
+                  suggestedScenes[0] ||
+                  "",
+              ).slice(0, 80),
+              characterNames: ["主播"],
+              durationSec: Math.max(2, Math.min(20, Number(s?.durationSec) || 5)),
+              storyboardPrompt: String(s?.action || s?.title || "").slice(0, 300),
+              status: "pending",
+            }))
+          : intent.initialShots;
+
+      intent = {
+        ...intent,
+        detectedIntent,
+        title: String(llmRaw.title || intent.title).slice(0, 60),
+        intentSummary: String(llmRaw.intentSummary || intent.intentSummary).slice(0, 220),
+        assistantReply: String(llmRaw.assistantReply || intent.assistantReply).slice(0, 300),
+        creativeBrief: String(llmRaw.creativeBrief || intent.creativeBrief).slice(0, 1500),
+        aspectRatio:
+          llmRaw.aspectRatio === "16:9" || llmRaw.aspectRatio === "3:4"
+            ? llmRaw.aspectRatio
+            : "9:16",
+        targetDurationSec: Math.max(
+          5,
+          Math.min(90, Math.round(Number(llmRaw.targetDurationSec) || intent.targetDurationSec)),
+        ),
+        suggestedScenes:
+          Array.isArray(llmRaw.suggestedScenes) && llmRaw.suggestedScenes.length
+            ? llmRaw.suggestedScenes.map((x: unknown) => String(x).slice(0, 80)).slice(0, 4)
+            : intent.suggestedScenes,
+        suggestedProps:
+          Array.isArray(llmRaw.suggestedProps) && llmRaw.suggestedProps.length
+            ? llmRaw.suggestedProps.map((x: unknown) => String(x).slice(0, 40)).slice(0, 6)
+            : intent.suggestedProps,
+        suggestedGarments:
+          Array.isArray(llmRaw.suggestedGarments) && llmRaw.suggestedGarments.length
+            ? llmRaw.suggestedGarments.map((x: unknown) => String(x).slice(0, 40)).slice(0, 6)
+            : intent.suggestedGarments,
+        deconstructData:
+          detectedIntent !== "viral_link"
+            ? {
+                summary: String(llmRaw.summary || intent.deconstructData?.summary || "").slice(0, 800),
+                hook: String(llmRaw.hook || intent.deconstructData?.hook || "").slice(0, 300),
+                pacing: String(llmRaw.pacing || intent.deconstructData?.pacing || "").slice(0, 300),
+                sellingPoints: Array.isArray(llmRaw.sellingPoints)
+                  ? llmRaw.sellingPoints.map((x: unknown) => String(x).slice(0, 100)).slice(0, 8)
+                  : intent.deconstructData?.sellingPoints || [],
+                targetAudience: "短视频精准兴趣人群",
+                estimatedDurationSec: intent.targetDurationSec,
+                referenceShots: [],
+              }
+            : undefined,
+        initialShots: llmShots,
+      };
+    } catch {
+      // 模型未配置或超时时平滑使用启发式识别结果
+    }
+  }
+
+  return intent;
+}
+
 /** 服装口播爆款复刻工作流 REST API 路由处理 */
 export async function handleCommerceTalkWorkflow(
   studio: Studio,
@@ -697,6 +969,60 @@ export async function handleCommerceTalkWorkflow(
 
   if (suffix === "/workflows/catalog" && req.method === "GET") {
     return res.json(await workflowCatalog(studio, actor));
+  }
+
+  if (suffix === "/workflows/smart-create" && req.method === "POST") {
+    const input = parse(smartCreateWorkflowInputSchema, await readBody());
+    const intent = await analyzeSmartCreateIntent(studio, input);
+    if (input.previewOnly) {
+      return res.json({ intent });
+    }
+
+    const id = randomUUID();
+    const isViral = intent.detectedIntent === "viral_link" && Boolean(intent.sourceUrl);
+    const hasScriptShots =
+      intent.detectedIntent === "script" && intent.initialShots.length > 0;
+    const initialStage: WorkflowStage = isViral
+      ? "importing"
+      : hasScriptShots
+        ? "review_script"
+        : "draft";
+
+    const assetsConfig: Partial<WorkflowAssetsConfig> = {
+      creativeBrief: intent.creativeBrief,
+      aspectRatio: intent.aspectRatio,
+      targetDurationSec: intent.targetDurationSec,
+      sceneKeywords: intent.suggestedScenes,
+      propKeywords: intent.suggestedProps,
+      garmentKeywords: intent.suggestedGarments,
+    };
+
+    const created = await one(
+      db,
+      `INSERT INTO public.commerce_talk_workflows
+       (id, user_id, title, run_mode, stage, source_platform, source_url, source_meta, deconstruct_data, assets_config, model_config, shots)
+       VALUES ($1::uuid, $2::bigint, $3, 'assisted', $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb)
+       RETURNING *`,
+      id,
+      actor.id,
+      intent.title,
+      initialStage,
+      intent.sourcePlatform,
+      intent.sourceUrl || null,
+      JSON.stringify({
+        intentType: intent.detectedIntent,
+        intentSummary: intent.intentSummary,
+        scriptFileName: input.scriptFileName,
+      }),
+      intent.deconstructData ? JSON.stringify(intent.deconstructData) : null,
+      JSON.stringify(assetsConfig),
+      JSON.stringify(input.modelConfig || {}),
+      JSON.stringify(intent.initialShots || []),
+    );
+    return res.status(201).json({
+      workflow: workflowView(created!),
+      intent,
+    });
   }
 
   if (suffix === "/workflows" && req.method === "GET") {

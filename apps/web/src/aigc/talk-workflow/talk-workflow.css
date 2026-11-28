@@ -352,17 +352,142 @@
   font-size: 12px;
 }
 
-/* 剪映风格居中大导入卡片 */
+/* 剪映风格居中大导入卡片与 AI 智能导入面板 */
+.wf-smart-import {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .wf-import-dropzone {
   border: 1px dashed var(--app-border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--app-bg) 55%, transparent);
-  padding: 18px 14px;
+  padding: 14px 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   align-items: stretch;
-  text-align: center;
+  text-align: left;
+}
+
+.wf-smart-import-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wf-smart-import-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wf-smart-chat-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+}
+
+.wf-smart-chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--app-secondary);
+}
+
+.wf-smart-chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.wf-smart-bubble {
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wf-smart-bubble.is-user {
+  align-self: flex-end;
+  max-width: 90%;
+  background: var(--app-accent-soft);
+  color: var(--app-text);
+}
+
+.wf-smart-bubble.is-ai {
+  align-self: flex-start;
+  max-width: 95%;
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+  color: var(--app-text);
+}
+
+.wf-smart-intent-card {
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--app-accent-soft) 28%, var(--app-bg));
+  border: 1px solid var(--app-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wf-smart-intent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.wf-smart-intent-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.wf-smart-import-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wf-smart-live-hint {
+  font-size: 11px;
+  color: var(--app-accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.wf-chip-remove {
+  border: 0;
+  background: transparent;
+  color: var(--app-secondary);
+  cursor: pointer;
+  padding: 0 2px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+}
+
+.wf-chip-remove:hover {
+  color: var(--app-text);
 }
 
 .wf-import-dropzone-icon {

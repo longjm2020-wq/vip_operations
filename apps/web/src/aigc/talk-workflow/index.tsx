@@ -47,6 +47,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import type {
   AiEditWorkflowInput,
+  SmartCreateMode,
   WorkflowCharacterAngle,
   WorkflowEffect,
   WorkflowFilter,
@@ -60,6 +61,12 @@ import type {
 import { studioApi } from "../api";
 import { CastConfigPanel, type CastSubTab } from "./cast-config-panel";
 import { CozyClayPrevisPanel } from "./cozyclay-panel";
+import {
+  SmartImportPanel,
+  type SmartAttachment,
+  type SmartChatMessage,
+  type SmartIntentPreview,
+} from "./smart-import-panel";
 import {
   characterAngleLabels,
   defaultShotPostEdit,
@@ -172,8 +179,12 @@ export function CommerceTalkWorkflow({
   const [params, setParams] = useSearchParams();
   const workflowId = params.get("workflow") || undefined;
 
-  const [shareText, setShareText] = useState("");
   const [creating, setCreating] = useState(false);
+  const [analyzingIntent, setAnalyzingIntent] = useState(false);
+  const [smartMessages, setSmartMessages] = useState<SmartChatMessage[]>([]);
+  const [intentPreview, setIntentPreview] = useState<SmartIntentPreview | null>(
+    null,
+  );
   const [saving, setSaving] = useState(false);
   const [advancing, setAdvancing] = useState(false);
   const [aiEditing, setAiEditing] = useState(false);
@@ -423,28 +434,123 @@ export function CommerceTalkWorkflow({
     });
   };
 
-  const createWorkflow = async (autoStart: boolean) => {
+  const createBlankWorkflow = async () => {
     setCreating(true);
     try {
-      const text = shareText.trim();
-      const platform = /douyin\.com|iesdouyin\.com/i.test(text)
-        ? "douyin"
-        : /xiaohongshu\.com|xhslink\.com|rednote\.com/i.test(text)
-          ? "xhs"
-          : text
-            ? "url"
-            : "manual";
       const created: WorkflowView = await studioApi(basePath, "POST", {
         runMode: "assisted",
-        sourcePlatform: platform,
-        sourceUrl: text || undefined,
+        sourcePlatform: "manual",
         modelConfig: catalog?.defaults,
-        autoStart: Boolean(autoStart && text),
+        autoStart: false,
       });
-      setShareText("");
       openWorkflow(created);
-      if (text) {
+      setLibTab("cast");
+      setCastSubTab("overview");
+      void client.invalidateQueries({
+        queryKey: ["commerce-workflow", account, "list"],
+      });
+      message.success("已创建空白智能成片工作流");
+    } catch (err) {
+      message.error((err as Error).message || "创建工作流失败");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  /** AI 对话识别/完善创作意图（不立即建项，返回意图摘要与导演回复） */
+  const analyzeSmartImport = async (payload: {
+    mode: SmartCreateMode;
+    prompt: string;
+    attachments: SmartAttachment[];
+  }) => {
+    const scriptAtt = payload.attachments.find((a) => a.kind === "script");
+    const nextUserMsg =
+      payload.prompt ||
+      (scriptAtt ? `已上传剧本：${scriptAtt.file.name}` : "") ||
+      (payload.attachments.length
+        ? `已上传 ${payload.attachments.length} 个参考附件`
+        : "");
+    const nextHistory: SmartChatMessage[] = nextUserMsg
+      ? [...smartMessages, { role: "user", content: nextUserMsg }]
+      : smartMessages;
+    setSmartMessages(nextHistory);
+    setAnalyzingIntent(true);
+    try {
+      const res: { intent: SmartIntentPreview } = await studioApi(
+        `${basePath}/smart-create`,
+        "POST",
+        {
+          mode: payload.mode,
+          prompt: payload.prompt,
+          messages: nextHistory,
+          scriptFileName: scriptAtt?.file.name,
+          scriptContent: scriptAtt?.textContent,
+          attachmentNames: payload.attachments.map((a) => a.file.name),
+          modelConfig: catalog?.defaults,
+          previewOnly: true,
+        },
+      );
+      setIntentPreview(res.intent);
+      setSmartMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: res.intent.assistantReply },
+      ]);
+    } catch (err) {
+      message.error((err as Error).message || "AI 意图识别失败");
+    } finally {
+      setAnalyzingIntent(false);
+    }
+  };
+
+  /** 由 AI 识别创作意图并一键创建项目，同时自动归类上传附带的附件 */
+  const smartCreateWorkflow = async (payload: {
+    mode: SmartCreateMode;
+    prompt: string;
+    attachments: SmartAttachment[];
+  }) => {
+    const scriptAtt = payload.attachments.find((a) => a.kind === "script");
+    setCreating(true);
+    try {
+      const res: { workflow: WorkflowView; intent: SmartIntentPreview } =
+        await studioApi(`${basePath}/smart-create`, "POST", {
+          mode: payload.mode,
+          prompt: payload.prompt,
+          messages: smartMessages,
+          scriptFileName: scriptAtt?.file.name,
+          scriptContent: scriptAtt?.textContent,
+          attachmentNames: payload.attachments.map((a) => a.file.name),
+          modelConfig: catalog?.defaults,
+          previewOnly: false,
+        });
+      let latest = res.workflow;
+
+      // 自动上传用户附带的视频/图片附件到新创建的工作流对应槽位
+      for (const att of payload.attachments) {
+        if (att.kind === "script") continue;
+        const form = new FormData();
+        form.set("slot", att.kind === "video" ? "referenceVideo" : "garment");
+        form.set("name", att.file.name.replace(/\.[^.]+$/, ""));
+        form.set("file", att.file);
+        try {
+          const uploaded = await studioApi(
+            `${basePath}/${encodeURIComponent(latest.id)}/assets`,
+            "POST",
+            form,
+            { readTimeoutMs: 90_000 },
+          );
+          if (uploaded?.workflow) latest = uploaded.workflow;
+        } catch {
+          // 单个附件失败不阻断已建成的项目
+        }
+      }
+
+      openWorkflow(latest);
+      setSmartMessages([]);
+      setIntentPreview(null);
+      if (res.intent.detectedIntent === "viral_link") {
         setLibTab("deconstruct");
+      } else if (res.intent.detectedIntent === "script") {
+        setLibTab("shots");
       } else {
         setLibTab("cast");
         setCastSubTab("overview");
@@ -452,11 +558,9 @@ export function CommerceTalkWorkflow({
       void client.invalidateQueries({
         queryKey: ["commerce-workflow", account, "list"],
       });
-      message.success(
-        autoStart && text ? "已创建工作流并开始自动拆解" : "已创建服装口播工作流",
-      );
+      message.success(res.intent.intentSummary || "已根据 AI 意图创建项目");
     } catch (err) {
-      message.error((err as Error).message || "创建工作流失败");
+      message.error((err as Error).message || "AI 智能创建项目失败");
     } finally {
       setCreating(false);
     }
@@ -1147,77 +1251,29 @@ export function CommerceTalkWorkflow({
             />
           ) : (
             <div className="wf-pane-scroll">
-              {/* 标签 1：导入爆款链接 / 本地参考视频 */}
+              {/* 标签 1：AI 智能导入（AI 对话创建+附件 / 爆款链接复刻拆解 / 导入创作剧本） */}
               {libTab === "import" && (
-                <>
-                  <div className="wf-import-dropzone">
-                    <ThunderboltOutlined className="wf-import-dropzone-icon" />
-                    <h4>导入爆款视频或新建草稿</h4>
-                    <p>
-                      粘贴抖音 / 小红书分享链接一键逆向拆解，或使用 XUTI 浏览器插件右键「一键拆解复刻」。
-                    </p>
-                    <Input.TextArea
-                      rows={2}
-                      placeholder="粘贴抖音 / 小红书爆款视频分享链接或文案（留空可新建空白工作流）"
-                      value={shareText}
-                      onChange={(e) => setShareText(e.target.value)}
-                      disabled={creating}
-                    />
-                    <Button
-                      type="primary"
-                      icon={<ThunderboltOutlined />}
-                      loading={creating}
-                      onClick={() => void createWorkflow(Boolean(shareText.trim()))}
-                    >
-                      {shareText.trim() ? "导入并逆向拆解" : "新建空白工作流"}
-                    </Button>
-                  </div>
-
-                  {draft && (
-                    <div className="wf-section-card">
-                      <div className="wf-section-card-head">
-                        <span>当前草稿参考视频</span>
-                        <label className="wf-file-btn wf-file-btn-sm">
-                          <UploadOutlined /> 上传本地视频
-                          <input
-                            type="file"
-                            accept="video/mp4,video/quicktime,video/webm"
-                            disabled={active}
-                            onChange={(e) => {
-                              const f = e.target.files?.[0];
-                              e.target.value = "";
-                              if (f) void uploadAsset("referenceVideo", f);
-                            }}
-                          />
-                        </label>
-                      </div>
-                      {draft.referenceVideoUrl ? (
-                        <Space wrap>
-                          <Button
-                            size="small"
-                            icon={<PlayCircleOutlined />}
-                            onClick={() => setPreviewSource("reference")}
-                          >
-                            在播放器预览原片
-                          </Button>
-                          <Button
-                            size="small"
-                            type="primary"
-                            loading={advancing}
-                            disabled={active}
-                            onClick={() => void advance("deconstruct")}
-                          >
-                            执行逆向拆解
-                          </Button>
-                        </Space>
-                      ) : (
-                        <p className="wf-muted">
-                          尚未上传参考视频；你也可以直接切到「参演配置」管理角色库 / 服饰库 / 道具库 / 场景库，或点击时间轴「+ 新增分镜」开始编排。
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </>
+                <SmartImportPanel
+                  draft={draft}
+                  creating={creating}
+                  analyzing={analyzingIntent}
+                  advancing={advancing}
+                  active={active}
+                  chatMessages={smartMessages}
+                  intentPreview={intentPreview}
+                  onAnalyzeChat={(p) => void analyzeSmartImport(p)}
+                  onSmartCreate={(p) => void smartCreateWorkflow(p)}
+                  onCreateBlank={() => void createBlankWorkflow()}
+                  onUploadReferenceVideo={(file) =>
+                    void uploadAsset("referenceVideo", file)
+                  }
+                  onPreviewReference={() => setPreviewSource("reference")}
+                  onRunDeconstruct={() => void advance("deconstruct")}
+                  onClearChat={() => {
+                    setSmartMessages([]);
+                    setIntentPreview(null);
+                  }}
+                />
               )}
 
             {/* 标签 3：爆款逆向拆解结果 */}

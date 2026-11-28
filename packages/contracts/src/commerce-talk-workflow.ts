@@ -452,3 +452,39 @@ export const advanceWorkflowInputSchema = z
     ]),
   })
   .strict();
+
+/** 智能导入 / AI 对话 / 爆款链接 / 剧本建项模式 */
+export const smartCreateModes = [
+  "auto",
+  "chat",
+  "viral_link",
+  "script",
+] as const;
+export type SmartCreateMode = (typeof smartCreateModes)[number];
+
+/** AI 智能意图识别建项请求体 */
+export const smartCreateWorkflowInputSchema = z
+  .object({
+    mode: z.enum(smartCreateModes).default("auto"),
+    prompt: z.string().trim().max(12000).default(""),
+    messages: z
+      .array(
+        z
+          .object({
+            role: z.enum(["user", "assistant"]),
+            content: z.string().trim().min(1).max(4000),
+          })
+          .strict(),
+      )
+      .max(16)
+      .default([]),
+    scriptFileName: z.string().trim().max(160).optional(),
+    scriptContent: z.string().trim().max(20000).optional(),
+    attachmentNames: z.array(z.string().trim().max(160)).max(10).default([]),
+    modelConfig: workflowModelConfigSchema.partial().optional(),
+    previewOnly: z.boolean().default(false),
+  })
+  .strict();
+export type SmartCreateWorkflowInput = z.infer<
+  typeof smartCreateWorkflowInputSchema
+>;

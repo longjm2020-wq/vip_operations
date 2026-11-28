@@ -257,7 +257,7 @@ function Workspace({ user }: { user: Row }) {
   const settings = originalItems.find((i) => i.key === "/settings")!;
   const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections", "/products", "/operations/vip/inventory", "/operations/vip/integration"];
   const items = [
-    { key: "/aigc", label: "AIGC", icon: <ThunderboltOutlined />, permission: "aigc.use", children: undefined },
+    { key: "/aigc", label: "AIGC创作空间", icon: <ThunderboltOutlined />, permission: "aigc.use", children: undefined },
     ...(operationKeys.some((key) =>
       user.permissions.includes(originalItems.find((i) => i.key === key)!.permission!),
     )
