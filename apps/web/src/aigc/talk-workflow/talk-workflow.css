@@ -4,13 +4,29 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   color: var(--app-text);
+}
+
+.wf-studio.is-resizing-col {
+  user-select: none;
+  cursor: col-resize;
+}
+
+.wf-studio.is-resizing-row {
+  user-select: none;
+  cursor: row-resize;
+}
+
+.wf-studio.is-resizing-col video,
+.wf-studio.is-resizing-row video {
+  pointer-events: none;
 }
 
 /* 顶部工作台栏 */
 .wf-studio-bar {
   flex: none;
+  margin-bottom: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -46,13 +62,80 @@
   flex: none;
 }
 
-/* 上半部三栏主体（左：素材能力 / 中：播放器 / 右：检查器） */
+/* 上半部三栏主体（左：素材能力 / 中：播放器 / 右：检查器，支持手柄拖动调宽） */
 .wf-studio-upper {
   flex: 1;
-  min-height: 360px;
-  display: grid;
-  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(300px, 350px);
-  gap: 6px;
+  min-height: 240px;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.wf-pane-library {
+  flex: 0 0 var(--wf-left-width, 400px);
+}
+
+.wf-pane-player {
+  flex: 1 1 320px;
+}
+
+.wf-pane-inspector {
+  flex: 0 0 var(--wf-right-width, 330px);
+}
+
+/* 面板间拖动手柄（平时隐约克制，悬停/拖动时高亮强调色） */
+.wf-resizer-v {
+  flex: 0 0 8px;
+  cursor: col-resize;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+.wf-resizer-v::after {
+  content: "";
+  width: 2px;
+  height: 36px;
+  border-radius: 999px;
+  background: var(--app-shell-border);
+  opacity: 0.6;
+  transition: background-color 0.15s, height 0.15s, opacity 0.15s;
+}
+
+.wf-resizer-v:hover::after,
+.wf-resizer-v.is-active::after {
+  height: 72px;
+  background: var(--app-accent);
+  opacity: 1;
+}
+
+.wf-resizer-h {
+  flex: 0 0 8px;
+  cursor: row-resize;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+.wf-resizer-h::after {
+  content: "";
+  height: 2px;
+  width: 48px;
+  border-radius: 999px;
+  background: var(--app-shell-border);
+  opacity: 0.6;
+  transition: background-color 0.15s, width 0.15s, opacity 0.15s;
+}
+
+.wf-resizer-h:hover::after,
+.wf-resizer-h.is-active::after {
+  width: 96px;
+  background: var(--app-accent);
+  opacity: 1;
 }
 
 .wf-pane {
@@ -100,15 +183,21 @@
   gap: 10px;
 }
 
-/* 左侧素材与能力区：顶部图标标签栏（2 行 × 5 列，对称清晰） */
+/* 左侧素材与能力区：参照剪映专业版单排横向图标标签栏 */
 .wf-lib-tabs {
   flex: none;
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  display: flex;
+  align-items: stretch;
   gap: 2px;
-  padding: 6px 4px 5px;
+  padding: 5px 6px 4px;
   border-bottom: 1px solid var(--app-shell-border);
   background: color-mix(in srgb, var(--app-bg) 42%, var(--app-surface));
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.wf-lib-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .wf-embedded-talk {
@@ -132,18 +221,20 @@
 }
 
 .wf-lib-tab {
+  flex: 1 0 46px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 6px 2px;
+  padding: 5px 4px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--app-secondary);
   font-size: 11px;
   line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
 }
@@ -161,6 +252,104 @@
   background: var(--app-accent-soft);
   color: var(--app-accent);
   font-weight: 600;
+}
+
+/* 参演配置分栏布局（参照剪映专业版左二级分类侧栏 + 右内容区） */
+.wf-cast-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.wf-cast-sidebar {
+  flex: 0 0 92px;
+  border-right: 1px solid var(--app-shell-border);
+  background: color-mix(in srgb, var(--app-bg) 36%, var(--app-surface));
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.wf-cast-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+  padding: 7px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-secondary);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.wf-cast-nav-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.wf-cast-nav-item:hover {
+  background: var(--app-muted);
+  color: var(--app-text);
+}
+
+.wf-cast-nav-item.is-active {
+  background: var(--app-accent-soft);
+  color: var(--app-accent);
+  font-weight: 600;
+}
+
+.wf-cast-nav-badge {
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-accent) 18%, transparent);
+  color: var(--app-accent);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.wf-cast-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wf-cast-overview-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--app-accent-soft) 24%, var(--app-bg));
+  border: 1px solid var(--app-border);
+}
+
+.wf-cast-overview-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
 }
 
 /* 剪映风格居中大导入卡片 */
@@ -843,10 +1032,10 @@
   background: color-mix(in srgb, var(--app-bg) 42%, var(--app-surface));
 }
 
-/* 底部多轨时间轴 */
+/* 底部多轨时间轴（支持手柄拖动调高） */
 .wf-timeline {
   flex: none;
-  height: 214px;
+  height: var(--wf-timeline-height, 216px);
   display: flex;
   flex-direction: column;
   border-radius: 8px;
@@ -1178,11 +1367,24 @@
   border-top: 1px solid var(--app-border);
 }
 
-/* 响应式：中小屏幕自动堆叠 */
+/* 响应式：中小屏幕自动堆叠，隐藏拖动手柄 */
 @media (max-width: 1120px) {
   .wf-studio-upper {
-    grid-template-columns: 1fr;
+    flex-direction: column;
     min-height: auto;
+    gap: 6px;
+  }
+
+  .wf-pane-library,
+  .wf-pane-player,
+  .wf-pane-inspector {
+    flex: none;
+    width: 100%;
+  }
+
+  .wf-resizer-v,
+  .wf-resizer-h {
+    display: none;
   }
 
   .wf-pane {
@@ -1195,5 +1397,6 @@
 
   .wf-timeline {
     height: 230px;
+    margin-top: 6px;
   }
 }

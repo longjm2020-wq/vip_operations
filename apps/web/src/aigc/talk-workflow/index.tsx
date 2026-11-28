@@ -19,7 +19,6 @@ import {
   ControlOutlined,
   DeleteOutlined,
   DownloadOutlined,
-  EnvironmentOutlined,
   ExpandOutlined,
   FileTextOutlined,
   LinkOutlined,
@@ -31,13 +30,11 @@ import {
   RobotOutlined,
   SaveOutlined,
   ScissorOutlined,
-  SkinOutlined,
   StepBackwardOutlined,
   StepForwardOutlined,
+  TeamOutlined,
   ThunderboltOutlined,
-  ToolOutlined,
   UploadOutlined,
-  UserOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -55,13 +52,7 @@ import type {
   WorkflowTransition,
 } from "../../../../../packages/contracts/src/commerce-talk-workflow";
 import { studioApi } from "../api";
-import {
-  GarmentLibraryPanel,
-  PropLibraryPanel,
-  SceneLibraryPanel,
-} from "./asset-library-panels";
-import { CastConfigModal } from "./cast-config-modal";
-import { CharacterLibraryPanel } from "./character-library";
+import { CastConfigPanel, type CastSubTab } from "./cast-config-panel";
 import { CozyClayPrevisPanel } from "./cozyclay-panel";
 import {
   characterAngleLabels,
@@ -93,17 +84,68 @@ type ProductItem = {
 
 type LibraryTab =
   | "import"
-  | "characters"
-  | "scenes"
-  | "props"
-  | "garments"
   | "deconstruct"
+  | "cast"
   | "shots"
   | "ai_edit"
   | "previs"
   | "models";
 type InspectorTab = "draft" | "shot";
 type PreviewSource = "auto" | "final" | "shot_clip" | "storyboard" | "reference";
+
+const LAYOUT_STORAGE_KEY = "xuti.wf.layout.v1";
+const DEFAULT_LEFT_WIDTH = 400;
+const DEFAULT_RIGHT_WIDTH = 330;
+const DEFAULT_TIMELINE_HEIGHT = 216;
+
+function clampNumber(val: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(val)));
+}
+
+function loadSavedLayout(): {
+  leftWidth: number;
+  rightWidth: number;
+  timelineHeight: number;
+} {
+  try {
+    const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
+    if (!raw) {
+      return {
+        leftWidth: DEFAULT_LEFT_WIDTH,
+        rightWidth: DEFAULT_RIGHT_WIDTH,
+        timelineHeight: DEFAULT_TIMELINE_HEIGHT,
+      };
+    }
+    const parsed = JSON.parse(raw) as Partial<{
+      leftWidth: number;
+      rightWidth: number;
+      timelineHeight: number;
+    }>;
+    return {
+      leftWidth: clampNumber(
+        Number(parsed.leftWidth) || DEFAULT_LEFT_WIDTH,
+        280,
+        680,
+      ),
+      rightWidth: clampNumber(
+        Number(parsed.rightWidth) || DEFAULT_RIGHT_WIDTH,
+        260,
+        560,
+      ),
+      timelineHeight: clampNumber(
+        Number(parsed.timelineHeight) || DEFAULT_TIMELINE_HEIGHT,
+        140,
+        460,
+      ),
+    };
+  } catch {
+    return {
+      leftWidth: DEFAULT_LEFT_WIDTH,
+      rightWidth: DEFAULT_RIGHT_WIDTH,
+      timelineHeight: DEFAULT_TIMELINE_HEIGHT,
+    };
+  }
+}
 
 /** 将秒数格式化为时间码（MM:SS） */
 function formatTimecode(seconds: number): string {
@@ -137,12 +179,93 @@ export function CommerceTalkWorkflow({
 
   // 工作台 UI 状态
   const [libTab, setLibTab] = useState<LibraryTab>("import");
-  const [castModalOpen, setCastModalOpen] = useState(false);
+  const [castSubTab, setCastSubTab] = useState<CastSubTab>("overview");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("draft");
   const [previewSource, setPreviewSource] = useState<PreviewSource>("auto");
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
   const [pxPerSec, setPxPerSec] = useState<number>(40);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  // 可拖动面板尺寸（左面板宽 / 右检查器宽 / 底部时间轴高）
+  const [layout, setLayout] = useState(loadSavedLayout);
+  const [resizingAxis, setResizingAxis] = useState<"left" | "right" | "timeline" | null>(
+    null,
+  );
+  const studioRef = useRef<HTMLDivElement | null>(null);
+  const upperRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+    } catch {
+      // 忽略无痕模式或存储配额异常
+    }
+  }, [layout]);
+
+  /** 启动面板边界拖动（支持左右宽与上下高实时调整） */
+  const startResize = (
+    axis: "left" | "right" | "timeline",
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startLayout = layout;
+    const upperRect = upperRef.current?.getBoundingClientRect();
+    const studioRect = studioRef.current?.getBoundingClientRect();
+    const minCenterWidth = 320;
+    const minUpperHeight = 240;
+
+    setResizingAxis(axis);
+
+    const onMove = (e: PointerEvent) => {
+      if (axis === "left") {
+        const deltaX = e.clientX - startX;
+        const maxLeft = upperRect
+          ? Math.max(300, upperRect.width - startLayout.rightWidth - minCenterWidth - 16)
+          : 680;
+        const nextLeft = clampNumber(
+          startLayout.leftWidth + deltaX,
+          280,
+          Math.min(680, maxLeft),
+        );
+        setLayout((prev) => ({ ...prev, leftWidth: nextLeft }));
+      } else if (axis === "right") {
+        const deltaX = e.clientX - startX;
+        const maxRight = upperRect
+          ? Math.max(260, upperRect.width - startLayout.leftWidth - minCenterWidth - 16)
+          : 560;
+        const nextRight = clampNumber(
+          startLayout.rightWidth - deltaX,
+          260,
+          Math.min(560, maxRight),
+        );
+        setLayout((prev) => ({ ...prev, rightWidth: nextRight }));
+      } else {
+        const deltaY = e.clientY - startY;
+        const maxTimeline = studioRect
+          ? Math.max(180, studioRect.height - minUpperHeight - 72)
+          : 460;
+        const nextTimeline = clampNumber(
+          startLayout.timelineHeight - deltaY,
+          140,
+          Math.min(460, maxTimeline),
+        );
+        setLayout((prev) => ({ ...prev, timelineHeight: nextTimeline }));
+      }
+    };
+
+    const onUp = () => {
+      setResizingAxis(null);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -314,7 +437,12 @@ export function CommerceTalkWorkflow({
       });
       setShareText("");
       openWorkflow(created);
-      setLibTab(text ? "deconstruct" : "characters");
+      if (text) {
+        setLibTab("deconstruct");
+      } else {
+        setLibTab("cast");
+        setCastSubTab("overview");
+      }
       void client.invalidateQueries({
         queryKey: ["commerce-workflow", account, "list"],
       });
@@ -727,11 +855,8 @@ export function CommerceTalkWorkflow({
 
   const libraryTabs: Array<{ key: LibraryTab; label: string; icon: React.ReactNode }> = [
     { key: "import", label: "导入", icon: <LinkOutlined /> },
-    { key: "characters", label: "角色库", icon: <UserOutlined /> },
-    { key: "scenes", label: "场景库", icon: <EnvironmentOutlined /> },
-    { key: "props", label: "道具库", icon: <ToolOutlined /> },
-    { key: "garments", label: "服饰库", icon: <SkinOutlined /> },
     { key: "deconstruct", label: "拆解", icon: <FileTextOutlined /> },
+    { key: "cast", label: "参演配置", icon: <TeamOutlined /> },
     { key: "shots", label: "分镜", icon: <PictureOutlined /> },
     { key: "ai_edit", label: "剪辑", icon: <ScissorOutlined /> },
     { key: "previs", label: "预演", icon: <VideoCameraOutlined /> },
@@ -784,7 +909,18 @@ export function CommerceTalkWorkflow({
   const previewCssFilter = previewCssFilterMap[activePostEdit.filter] || "none";
 
   return (
-    <div className="wf-studio" aria-label="爆款复刻集成工作台">
+    <div
+      ref={studioRef}
+      className={`wf-studio${resizingAxis === "timeline" ? " is-resizing-row" : resizingAxis ? " is-resizing-col" : ""}`}
+      style={
+        {
+          "--wf-left-width": `${layout.leftWidth}px`,
+          "--wf-right-width": `${layout.rightWidth}px`,
+          "--wf-timeline-height": `${layout.timelineHeight}px`,
+        } as React.CSSProperties
+      }
+      aria-label="爆款复刻集成工作台"
+    >
       {/* 1. 顶部工作台栏（对应剪映顶栏：项目切换 / 标题与模式 / 保存与导出） */}
       <div className="wf-studio-bar">
         <div className="wf-studio-bar-left">
@@ -913,7 +1049,7 @@ export function CommerceTalkWorkflow({
       )}
 
       {/* 2. 上半部三栏主体（左：素材与能力 / 中：播放器 / 右：参数检查器） */}
-      <div className="wf-studio-upper">
+      <div className="wf-studio-upper" ref={upperRef}>
         {/* 左上面板：素材与能力区 */}
         <aside className="wf-pane wf-pane-library" aria-label="素材与能力面板">
           <div className="wf-lib-tabs" role="tablist" aria-label="工作台功能分类">
@@ -932,162 +1068,130 @@ export function CommerceTalkWorkflow({
             ))}
           </div>
 
-          <div className="wf-pane-scroll">
-            {/* 标签 1：导入爆款链接 / 本地参考视频 */}
-            {libTab === "import" && (
-              <>
-                <div className="wf-import-dropzone">
-                  <ThunderboltOutlined className="wf-import-dropzone-icon" />
-                  <h4>导入爆款视频或新建草稿</h4>
-                  <p>
-                    粘贴抖音 / 小红书分享链接一键逆向拆解，或使用 XUTI 浏览器插件右键「一键拆解复刻」。
-                  </p>
-                  <Input.TextArea
-                    rows={2}
-                    placeholder="粘贴抖音 / 小红书爆款视频分享链接或文案（留空可新建空白工作流）"
-                    value={shareText}
-                    onChange={(e) => setShareText(e.target.value)}
-                    disabled={creating}
-                  />
-                  <Button
-                    type="primary"
-                    icon={<ThunderboltOutlined />}
-                    loading={creating}
-                    onClick={() => void createWorkflow(Boolean(shareText.trim()))}
-                  >
-                    {shareText.trim() ? "导入并逆向拆解" : "新建空白工作流"}
-                  </Button>
-                </div>
-
-                {draft && (
-                  <div className="wf-section-card">
-                    <div className="wf-section-card-head">
-                      <span>当前草稿参考视频</span>
-                      <label className="wf-file-btn wf-file-btn-sm">
-                        <UploadOutlined /> 上传本地视频
-                        <input
-                          type="file"
-                          accept="video/mp4,video/quicktime,video/webm"
-                          disabled={active}
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            e.target.value = "";
-                            if (f) void uploadAsset("referenceVideo", f);
-                          }}
-                        />
-                      </label>
-                    </div>
-                    {draft.referenceVideoUrl ? (
-                      <Space wrap>
-                        <Button
-                          size="small"
-                          icon={<PlayCircleOutlined />}
-                          onClick={() => setPreviewSource("reference")}
-                        >
-                          在播放器预览原片
-                        </Button>
-                        <Button
-                          size="small"
-                          type="primary"
-                          loading={advancing}
-                          disabled={active}
-                          onClick={() => void advance("deconstruct")}
-                        >
-                          执行逆向拆解
-                        </Button>
-                      </Space>
-                    ) : (
-                      <p className="wf-muted">
-                        尚未上传参考视频；你也可以直接切到「角色库 / 场景库 / 道具库 / 服饰库」配置创作资产，或点击时间轴「+ 新增分镜」开始编排。
-                      </p>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* 标签 2：角色库（纯粹聚焦新建角色与角色管理） */}
-            {libTab === "characters" && (
-              <CharacterLibraryPanel
-                account={account}
-                enabled={canUseCommerce}
-                boundIds={draft?.assetsConfig.characterLibraryIds || []}
-                disabled={active}
-                onToggleBind={
-                  draft
-                    ? (characterId, checked) =>
-                        patchDraft((cur) => {
-                          const prevIds = cur.assetsConfig.characterLibraryIds || [];
-                          const nextIds = checked
-                            ? [...new Set([...prevIds, characterId])]
-                            : prevIds.filter((id) => id !== characterId);
-                          return {
-                            ...cur,
-                            assetsConfig: {
-                              ...cur.assetsConfig,
-                              characterLibraryIds: nextIds,
-                            },
-                          };
-                        })
-                    : undefined
-                }
-              />
-            )}
-
-            {/* 标签 3：场景库（自定义场景 + 40 种风格关键词场景） */}
-            {libTab === "scenes" && (
-              <SceneLibraryPanel
-                draft={draft}
-                disabled={active}
-                onUploadScene={(file) => void uploadAsset("scene", file)}
-                onToggleKeyword={(kw) => toggleKeywordInConfig("sceneKeywords", kw)}
-                onAddCustomKeyword={(kw) => toggleKeywordInConfig("sceneKeywords", kw)}
-              />
-            )}
-
-            {/* 标签 4：道具库（自定义道具 + 剧情智能推荐道具） */}
-            {libTab === "props" && (
-              <PropLibraryPanel
-                draft={draft}
-                disabled={active}
-                onUploadProp={(file) => void uploadAsset("prop", file)}
-                onToggleKeyword={(kw) => toggleKeywordInConfig("propKeywords", kw)}
-                onApplyRecommended={(kws) =>
-                  applyRecommendedKeywords("propKeywords", kws)
-                }
-              />
-            )}
-
-            {/* 标签 5：服饰库（商品档案/自定义服装 + 剧情智能推荐服装） */}
-            {libTab === "garments" && (
-              <GarmentLibraryPanel
-                draft={draft}
-                disabled={active}
-                productOptions={productsQuery.data?.products || []}
-                selectedProduct={selectedProduct}
-                onProductSearch={setProductSearch}
-                onSelectProduct={(productId) => {
-                  const prod = productsQuery.data?.products.find(
-                    (p) => p.id === productId,
-                  );
-                  patchDraft((cur) => ({
+          {libTab === "cast" ? (
+            <CastConfigPanel
+              account={account}
+              canUseCommerce={canUseCommerce}
+              subTab={castSubTab}
+              onSubTabChange={setCastSubTab}
+              draft={draft}
+              characters={catalog?.characters || []}
+              productOptions={productsQuery.data?.products || []}
+              selectedProduct={selectedProduct}
+              disabled={active}
+              saving={saving}
+              advancing={advancing}
+              onToggleCharacter={(characterId, checked) =>
+                patchDraft((cur) => {
+                  const prevIds = cur.assetsConfig.characterLibraryIds || [];
+                  const nextIds = checked
+                    ? [...new Set([...prevIds, characterId])]
+                    : prevIds.filter((id) => id !== characterId);
+                  return {
                     ...cur,
                     assetsConfig: {
                       ...cur.assetsConfig,
-                      productId,
-                      productStyleNo: prod?.styleNo,
-                      productImageIds:
-                        prod?.images.slice(0, 4).map((i) => i.id) || [],
+                      characterLibraryIds: nextIds,
                     },
-                  }));
-                }}
-                onUploadGarment={(file) => void uploadAsset("garment", file)}
-                onToggleKeyword={(kw) => toggleKeywordInConfig("garmentKeywords", kw)}
-                onApplyRecommended={(kws) =>
-                  applyRecommendedKeywords("garmentKeywords", kws)
-                }
-              />
-            )}
+                  };
+                })
+              }
+              onProductSearch={setProductSearch}
+              onSelectProduct={(productId) => {
+                const prod = productsQuery.data?.products.find(
+                  (p) => p.id === productId,
+                );
+                patchDraft((cur) => ({
+                  ...cur,
+                  assetsConfig: {
+                    ...cur.assetsConfig,
+                    productId,
+                    productStyleNo: prod?.styleNo,
+                    productImageIds:
+                      prod?.images.slice(0, 4).map((i) => i.id) || [],
+                  },
+                }));
+              }}
+              onUploadAsset={(slot, file) => void uploadAsset(slot, file)}
+              onToggleKeyword={toggleKeywordInConfig}
+              onApplyRecommended={applyRecommendedKeywords}
+              onSaveOnly={() => void saveDraft()}
+              onSaveAndScript={() => void advance("script")}
+            />
+          ) : (
+            <div className="wf-pane-scroll">
+              {/* 标签 1：导入爆款链接 / 本地参考视频 */}
+              {libTab === "import" && (
+                <>
+                  <div className="wf-import-dropzone">
+                    <ThunderboltOutlined className="wf-import-dropzone-icon" />
+                    <h4>导入爆款视频或新建草稿</h4>
+                    <p>
+                      粘贴抖音 / 小红书分享链接一键逆向拆解，或使用 XUTI 浏览器插件右键「一键拆解复刻」。
+                    </p>
+                    <Input.TextArea
+                      rows={2}
+                      placeholder="粘贴抖音 / 小红书爆款视频分享链接或文案（留空可新建空白工作流）"
+                      value={shareText}
+                      onChange={(e) => setShareText(e.target.value)}
+                      disabled={creating}
+                    />
+                    <Button
+                      type="primary"
+                      icon={<ThunderboltOutlined />}
+                      loading={creating}
+                      onClick={() => void createWorkflow(Boolean(shareText.trim()))}
+                    >
+                      {shareText.trim() ? "导入并逆向拆解" : "新建空白工作流"}
+                    </Button>
+                  </div>
+
+                  {draft && (
+                    <div className="wf-section-card">
+                      <div className="wf-section-card-head">
+                        <span>当前草稿参考视频</span>
+                        <label className="wf-file-btn wf-file-btn-sm">
+                          <UploadOutlined /> 上传本地视频
+                          <input
+                            type="file"
+                            accept="video/mp4,video/quicktime,video/webm"
+                            disabled={active}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              e.target.value = "";
+                              if (f) void uploadAsset("referenceVideo", f);
+                            }}
+                          />
+                        </label>
+                      </div>
+                      {draft.referenceVideoUrl ? (
+                        <Space wrap>
+                          <Button
+                            size="small"
+                            icon={<PlayCircleOutlined />}
+                            onClick={() => setPreviewSource("reference")}
+                          >
+                            在播放器预览原片
+                          </Button>
+                          <Button
+                            size="small"
+                            type="primary"
+                            loading={advancing}
+                            disabled={active}
+                            onClick={() => void advance("deconstruct")}
+                          >
+                            执行逆向拆解
+                          </Button>
+                        </Space>
+                      ) : (
+                        <p className="wf-muted">
+                          尚未上传参考视频；你也可以直接切到「参演配置」管理角色库 / 服饰库 / 道具库 / 场景库，或点击时间轴「+ 新增分镜」开始编排。
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
 
             {/* 标签 3：爆款逆向拆解结果 */}
             {libTab === "deconstruct" && (
@@ -1522,8 +1626,22 @@ export function CommerceTalkWorkflow({
                 </>
               )
             )}
-          </div>
+            </div>
+          )}
         </aside>
+
+        {/* 左-中垂直拖动手柄 */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整左侧面板宽度"
+          title="拖动调整左侧面板宽度，双击恢复默认"
+          className={`wf-resizer-v${resizingAxis === "left" ? " is-active" : ""}`}
+          onPointerDown={(e) => startResize("left", e)}
+          onDoubleClick={() =>
+            setLayout((prev) => ({ ...prev, leftWidth: DEFAULT_LEFT_WIDTH }))
+          }
+        />
 
         {/* 中上面板：播放器与实时预览舞台 */}
         <section className="wf-pane wf-pane-player" aria-label="播放器预览区">
@@ -1675,6 +1793,19 @@ export function CommerceTalkWorkflow({
             </Space>
           </div>
         </section>
+
+        {/* 中-右垂直拖动手柄 */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整右侧参数面板宽度"
+          title="拖动调整右侧参数面板宽度，双击恢复默认"
+          className={`wf-resizer-v${resizingAxis === "right" ? " is-active" : ""}`}
+          onPointerDown={(e) => startResize("right", e)}
+          onDoubleClick={() =>
+            setLayout((prev) => ({ ...prev, rightWidth: DEFAULT_RIGHT_WIDTH }))
+          }
+        />
 
         {/* 右上面板：草稿参数 / 分镜参数检查器 */}
         <aside className="wf-pane wf-pane-inspector" aria-label="参数检查器">
@@ -2124,6 +2255,22 @@ export function CommerceTalkWorkflow({
         </aside>
       </div>
 
+      {/* 上-下水平拖动手柄 */}
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="调整底部时间轴高度"
+        title="拖动调整底部时间轴高度，双击恢复默认"
+        className={`wf-resizer-h${resizingAxis === "timeline" ? " is-active" : ""}`}
+        onPointerDown={(e) => startResize("timeline", e)}
+        onDoubleClick={() =>
+          setLayout((prev) => ({
+            ...prev,
+            timelineHeight: DEFAULT_TIMELINE_HEIGHT,
+          }))
+        }
+      />
+
       {/* 3. 底部通栏：多轨分镜时间轴 */}
       <section className="wf-timeline" aria-label="多轨分镜时间轴">
         <div className="wf-tl-toolbar">
@@ -2191,7 +2338,10 @@ export function CommerceTalkWorkflow({
               type="text"
               className="wf-tl-step-btn"
               disabled={!draft}
-              onClick={() => setCastModalOpen(true)}
+              onClick={() => {
+                setLibTab("cast");
+                setCastSubTab("overview");
+              }}
             >
               ② 参演配置
             </Button>
@@ -2416,63 +2566,6 @@ export function CommerceTalkWorkflow({
         </div>
         <audio ref={audioPreviewRef} style={{ display: "none" }} />
       </section>
-
-      {draft && (
-        <CastConfigModal
-          open={castModalOpen}
-          draft={draft}
-          characters={catalog?.characters || []}
-          productOptions={productsQuery.data?.products || []}
-          selectedProduct={selectedProduct}
-          disabled={active}
-          saving={saving}
-          advancing={advancing}
-          onClose={() => setCastModalOpen(false)}
-          onJumpTab={(tab) => setLibTab(tab)}
-          onToggleCharacter={(characterId, checked) =>
-            patchDraft((cur) => {
-              const prevIds = cur.assetsConfig.characterLibraryIds || [];
-              const nextIds = checked
-                ? [...new Set([...prevIds, characterId])]
-                : prevIds.filter((id) => id !== characterId);
-              return {
-                ...cur,
-                assetsConfig: {
-                  ...cur.assetsConfig,
-                  characterLibraryIds: nextIds,
-                },
-              };
-            })
-          }
-          onProductSearch={setProductSearch}
-          onSelectProduct={(productId) => {
-            const prod = productsQuery.data?.products.find(
-              (p) => p.id === productId,
-            );
-            patchDraft((cur) => ({
-              ...cur,
-              assetsConfig: {
-                ...cur.assetsConfig,
-                productId,
-                productStyleNo: prod?.styleNo,
-                productImageIds:
-                  prod?.images.slice(0, 4).map((i) => i.id) || [],
-              },
-            }));
-          }}
-          onToggleKeyword={toggleKeywordInConfig}
-          onApplyRecommended={applyRecommendedKeywords}
-          onSaveOnly={() => {
-            void saveDraft().then((saved) => {
-              if (saved) setCastModalOpen(false);
-            });
-          }}
-          onSaveAndScript={() => {
-            setCastModalOpen(false);
-            void advance("script");
-          }}
-        />
-      )}
     </div>
   );
 }

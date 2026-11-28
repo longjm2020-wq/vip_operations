@@ -37,15 +37,23 @@ function clampPosition(
   size: CompanionSize,
   bounds: PlacementBounds,
 ) {
+  const boundsW = bounds.right - bounds.left;
+  const boundsH = bounds.bottom - bounds.top;
   return {
-    x: Math.max(
-      bounds.left + 8,
-      Math.min(point.x, bounds.right - size.width - 8),
-    ),
-    y: Math.max(
-      bounds.top + 8,
-      Math.min(point.y, bounds.bottom - size.height - 8),
-    ),
+    x:
+      boundsW <= size.width + 16
+        ? bounds.left + Math.max(0, (boundsW - size.width) / 2)
+        : Math.max(
+            bounds.left + 8,
+            Math.min(point.x, bounds.right - size.width - 8),
+          ),
+    y:
+      boundsH <= size.height + 16
+        ? bounds.top + Math.max(0, (boundsH - size.height) / 2)
+        : Math.max(
+            bounds.top + 8,
+            Math.min(point.y, bounds.bottom - size.height - 8),
+          ),
   };
 }
 
@@ -441,16 +449,49 @@ export function WorkspaceCompanion() {
     };
     const placeInSidebar = (preferred: Position, bounds: PlacementBounds) => {
       const areas = occupiedAreas();
-      for (const compact of [false, true]) {
+      const sidebarWidth = bounds.right - bounds.left;
+      const modes = sidebarWidth < 148 ? [true] : [false, true];
+      for (const compact of modes) {
         const dimensions = size(compact);
         const point = clampPosition(preferred, dimensions, bounds);
-        const next = findSpace(
+        let next = findSpace(
           dimensions.width,
           dimensions.height,
           areas,
           point,
           bounds,
         );
+        // 收起态窄侧边栏（宽度 <= 紧凑小序宽度 + 16）时，沿中轴线垂直寻找空闲位置停靠
+        if (!next && sidebarWidth <= dimensions.width + 16) {
+          const centerX =
+            bounds.left + Math.max(0, (sidebarWidth - dimensions.width) / 2);
+          const minY = bounds.top + 8;
+          const maxY = bounds.bottom - dimensions.height - 8;
+          const sidebarObstacles = areas.filter(
+            (r) => r.left < bounds.right - 2 && r.right > bounds.left + 2,
+          );
+          const clearY = (y: number) =>
+            !sidebarObstacles.some(
+              (r) => y < r.bottom + 6 && y + dimensions.height > r.top - 6,
+            );
+          const clampedY = Math.max(minY, Math.min(point.y, maxY));
+          if (maxY >= minY) {
+            if (clearY(clampedY)) {
+              next = { x: centerX, y: clampedY };
+            } else {
+              const candidates: number[] = [];
+              for (let y = minY; y <= maxY; y += 16) {
+                if (clearY(y)) candidates.push(y);
+              }
+              candidates.sort(
+                (a, b) => Math.abs(a - clampedY) - Math.abs(b - clampedY),
+              );
+              if (candidates.length) {
+                next = { x: centerX, y: candidates[0] };
+              }
+            }
+          }
+        }
         if (!next) continue;
         state.compact = compact;
         restingInSidebar = true;

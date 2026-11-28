@@ -639,10 +639,25 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/aigc?view=talk-video&mode=workflow");
   await expect(page.getByLabel("爆款复刻集成工作台")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "服装口播" })).toHaveCount(0);
   await expect(page.getByLabel("素材与能力面板")).toBeVisible();
   await expect(page.getByLabel("播放器预览区")).toBeVisible();
   await expect(page.getByLabel("参数检查器")).toBeVisible();
   await expect(page.getByLabel("多轨分镜时间轴")).toBeVisible();
+
+  // 校验各面板间拖动手柄可真实拖拽调整宽高
+  const leftPane = page.getByLabel("素材与能力面板");
+  const leftBoxBefore = await leftPane.boundingBox();
+  const leftHandle = page.getByRole("separator", { name: "调整左侧面板宽度" });
+  const handleBox = await leftHandle.boundingBox();
+  expect(leftBoxBefore).not.toBeNull();
+  expect(handleBox).not.toBeNull();
+  await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBox!.x + 60, handleBox!.y + handleBox!.height / 2);
+  await page.mouse.up();
+  const leftBoxAfter = await leftPane.boundingBox();
+  expect(leftBoxAfter!.width).toBeGreaterThan(leftBoxBefore!.width + 30);
 
   await page.getByRole("button", { name: "新建空白工作流" }).click();
   await expect(page.getByLabel("工作流名称")).toHaveValue("通勤外套爆款复刻");
@@ -652,8 +667,10 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await expect(timeline.getByText("新增分镜 1")).toBeVisible();
   await expect(page.getByLabel("参数检查器").getByText("分镜参数 · S01")).toBeVisible();
 
-  // 切到「角色库」面板测试数字人角色库（面部 + 三视图 + 克隆音色）创建与绑定
-  await page.getByRole("tab", { name: "角色库" }).click();
+  // 角色库、服饰库、道具库、场景库均收进「参演配置」面板的左侧二级分类栏
+  const castPanel = page.getByLabel("参演配置面板");
+  await expect(castPanel).toBeVisible();
+  await castPanel.getByRole("tab", { name: /角色库/ }).click();
   await expect(page.getByLabel("数字人角色库")).toBeVisible();
   await page.getByRole("button", { name: "新建角色" }).click();
   const charDialog = page.getByRole("dialog", { name: /新建数字人角色/ });
@@ -674,36 +691,33 @@ test("the talk-video workflow renders the four-pane integrated workbench and syn
   await expect(page.getByLabel("数字人角色库").getByText("4/4 视图")).toBeVisible();
   await expect(page.getByText("数字人主播与绑定商品")).toHaveCount(0);
 
-  // 切到「场景库」校验 40 种风格关键词场景
-  await page.getByRole("tab", { name: "场景库" }).click();
+  // 切到参演配置下的「场景库」校验 40 种风格关键词场景
+  await castPanel.getByRole("tab", { name: /场景库/ }).click();
   await expect(page.getByText("40 种风格", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /竹林深处武侠秘境/ }).click();
 
-  // 切到「道具库」输入武侠剧剧情校验智能推荐兵器（长剑/佩刀/齐眉棍/铁棒/战斧）
-  await page.getByRole("tab", { name: "道具库" }).click();
+  // 切到参演配置下的「道具库」输入武侠剧剧情校验智能推荐兵器（长剑/佩刀/齐眉棍/铁棒/战斧）
+  await castPanel.getByRole("tab", { name: /道具库/ }).click();
   await page.getByLabel("输入剧情题材推荐道具").fill("武侠剧江湖对决");
   await expect(page.getByRole("button", { name: /长剑/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /战斧/ })).toBeVisible();
   await page.getByRole("button", { name: "一键选用推荐道具" }).click();
 
-  // 切到「服饰库」输入武侠剧剧情校验智能推荐服装（玄铁铠甲/粗麻布衣）
-  await page.getByRole("tab", { name: "服饰库" }).click();
+  // 切到参演配置下的「服饰库」输入武侠剧剧情校验智能推荐服装（玄铁铠甲/粗麻布衣）
+  await castPanel.getByRole("tab", { name: /服饰库/ }).click();
   await page.getByLabel("输入剧情题材推荐服装").fill("武侠剧侠客出场");
   await expect(page.getByRole("button", { name: /玄铁铠甲/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /粗麻布衣/ })).toBeVisible();
   await page.getByRole("button", { name: "一键选用推荐服装" }).click();
 
-  // 校验底部流水线在 ① 拆解 与 ③ 脚本 之间新增 ② 参演配置弹窗（角色/产品主体/服饰/道具/场景绑定）
+  // 点击底部流水线 ② 参演配置，切入参演配置总览并校验 5 大绑定区块
   await timeline.getByRole("button", { name: "② 参演配置" }).click();
-  const castDialog = page.getByRole("dialog", { name: /参演配置/ });
-  await expect(castDialog).toBeVisible();
-  await expect(castDialog.getByText(/参演角色/)).toBeVisible();
-  await expect(castDialog.getByText("产品主体（商品档案）")).toBeVisible();
-  await expect(castDialog.getByText(/参演服饰/)).toBeVisible();
-  await expect(castDialog.getByText(/参演道具/)).toBeVisible();
-  await expect(castDialog.getByText(/拍摄场景/)).toBeVisible();
-  await castDialog.locator(".ant-modal-footer").getByRole("button", { name: "关闭" }).click();
-  await expect(castDialog).toBeHidden();
+  await expect(castPanel.getByText("② 参演配置总览")).toBeVisible();
+  await expect(castPanel.getByText(/参演角色/)).toBeVisible();
+  await expect(castPanel.getByText("产品主体（商品档案）")).toBeVisible();
+  await expect(castPanel.getByText(/参演服饰/)).toBeVisible();
+  await expect(castPanel.getByText(/参演道具/)).toBeVisible();
+  await expect(castPanel.getByText(/拍摄场景/)).toBeVisible();
 
   // 切到「剪辑」面板执行 AI 自动编排后期并校验导出 AE 脚本按钮与时间轴徽标
   await page.getByRole("tab", { name: "剪辑" }).click();

@@ -216,13 +216,8 @@ function TalkVideoWorkspace({
   return (
     <section
       className="talk-video talk-video-workbench"
-      aria-labelledby="talk-video-title"
+      aria-label="服装口播工作台"
     >
-      <div className="talk-video-topbar">
-        <header className="talk-video-heading">
-          <h1 id="talk-video-title">服装口播</h1>
-        </header>
-      </div>
       <CommerceTalkWorkflow account={account} canUseCommerce={canUseCommerce} />
     </section>
   );
