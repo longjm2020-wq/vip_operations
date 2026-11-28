@@ -152,9 +152,7 @@ export function TalkVideo() {
     location.state?.talkVideoPrompt,
   );
   if (
-    canUseCommerce &&
-    !linkedCommerce &&
-    !params.has("mode") &&
+    !canUseCommerce &&
     connection.isPending
   ) {
     return (
@@ -176,8 +174,6 @@ export function TalkVideo() {
   );
 }
 
-type TalkMode = "lip-sync" | "commerce" | "workflow";
-
 function TalkVideoWorkspace({
   account,
   canUseCommerce,
@@ -189,73 +185,38 @@ function TalkVideoWorkspace({
   linkedCommerce: boolean;
   connection: LipSyncQuery;
 }) {
-  const [params, setParams] = useSearchParams();
-  const [defaultMode] = useState<TalkMode>(() =>
-    connection.data?.configured ? "lip-sync" : "commerce",
-  );
+  const [params] = useSearchParams();
   const selected = params.get("mode");
-  const hasWorkflowLink = Boolean(
-    params.has("workflow") || params.get("extImport") === "1",
-  );
-  const mode: TalkMode = !canUseCommerce
-    ? "lip-sync"
-    : selected === "workflow" || hasWorkflowLink
-      ? "workflow"
-      : selected === "lip-sync"
-        ? "lip-sync"
-        : selected === "commerce" || linkedCommerce
-          ? "commerce"
-          : defaultMode;
-  const portrait = mode === "lip-sync";
-  const isWorkflow = mode === "workflow";
+  const openLipSync = !canUseCommerce || selected === "lip-sync";
+  const openCommerce =
+    canUseCommerce && (selected === "commerce" || linkedCommerce);
+  const initialLibTab = openLipSync || openCommerce ? "talk" : "import";
+  const initialTalkTool = openLipSync ? "lip-sync" : "commerce";
+
   return (
     <section
-      className={`talk-video${isWorkflow ? " talk-video-workbench" : ""}`}
+      className="talk-video talk-video-workbench"
       aria-labelledby="talk-video-title"
     >
       <div className="talk-video-topbar">
         <header className="talk-video-heading">
           <h1 id="talk-video-title">
-            {portrait ? "数字人口播" : isWorkflow ? "服装口播 · 爆款复刻工作流" : "服装口播"}
+            {canUseCommerce ? "服装口播" : "数字人口播"}
           </h1>
-          {!isWorkflow && (
-            <p>
-              {portrait
-                ? "上传人物照片和原声录音，生成对口型视频。"
-                : "选款并填写拍摄要求，生成带字幕的竖屏视频。"}
-            </p>
-          )}
         </header>
-        {canUseCommerce && (
-          <Segmented<TalkMode>
-            className="talk-video-modes"
-            aria-label="口播制作方式"
-            value={mode}
-            options={[
-              { value: "lip-sync", label: "原声对口型" },
-              { value: "commerce", label: "商品口播" },
-              { value: "workflow", label: "爆款复刻工作流" },
-            ]}
-            onChange={(value) =>
-              setParams(
-                (current) => {
-                  const next = new URLSearchParams(current);
-                  next.set("mode", value);
-                  return next;
-                },
-                { replace: true },
-              )
-            }
-          />
-        )}
       </div>
-      {portrait ? (
-        <LipSync account={account} connection={connection} />
-      ) : isWorkflow ? (
-        <CommerceTalkWorkflow account={account} />
-      ) : (
-        <CommerceTalkVideo account={account} fal={connection.data} />
-      )}
+      <CommerceTalkWorkflow
+        account={account}
+        canUseCommerce={canUseCommerce}
+        initialLibTab={initialLibTab}
+        initialTalkTool={initialTalkTool}
+        commercePanel={
+          canUseCommerce ? (
+            <CommerceTalkVideo account={account} fal={connection.data} />
+          ) : null
+        }
+        lipSyncPanel={<LipSync account={account} connection={connection} />}
+      />
     </section>
   );
 }

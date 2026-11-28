@@ -344,11 +344,7 @@ function Workspace({ user }: { user: Row }) {
   const aigcTalkVideo = aigcParams?.get("view") === "talk-video";
   const aigcProject = Boolean(aigcParams?.get("project"));
   const aigcSubpageLabel = aigcTalkVideo
-    ? (!user.permissions.includes("product.read") || aigcParams?.get("mode") === "lip-sync"
-        ? "数字人口播"
-        : aigcParams?.get("mode") === "workflow" || aigcParams?.has("workflow") || aigcParams?.get("extImport") === "1"
-          ? "服装口播 · 爆款复刻工作流"
-          : "服装口播")
+    ? (!user.permissions.includes("product.read") ? "数字人口播" : "服装口播")
     : aigcProject
       ? (aigcParams?.get("kind") === "detail"
           ? "电商详情页制作"

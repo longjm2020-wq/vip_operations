@@ -463,15 +463,18 @@ test("the apparel entry opens and submits a mixed product batch", async ({ page 
   expect(homeSpacing).toEqual({ leftGap: 24, rightGap: 24, topGap: 8 });
   await page.getByRole("button", { name: /服装口播.*商品讲解/ }).click();
   await expect(page.getByRole("heading", { name: "服装口播" })).toBeVisible();
+  await expect(page.getByLabel("口播制作方式")).toHaveCount(0);
   const topbarNav = page.locator(".topbar .workspace-subnav");
   await expect(topbarNav.getByRole("button", { name: "返回创作空间" })).toBeVisible();
   await expect(topbarNav.getByText("服装口播", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "口播" }).click();
   await page.getByText("按款批量", { exact: true }).click();
   const search = page.getByRole("combobox", { name: "批量选择商品" });
   await search.fill("XUTI");
   await page.getByRole("option", { name: "XUTI-111" }).click();
   await search.fill("XUTI");
   await page.getByRole("option", { name: "XUTI-222" }).click();
+  await page.keyboard.press("Escape");
   await page.getByRole("textbox", { name: "视频要求" }).fill("做竖屏口播，先看领口和版型");
   await page.getByRole("button", { name: "提交批量制作" }).click();
   const progress = page.getByRole("region", { name: "批量制作进度" });

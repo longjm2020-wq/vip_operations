@@ -465,7 +465,7 @@ function AigcStudio() {
                       className="aigc-entry"
                       disabled={tool.kind !== "talk-video" && (!status.ready || Boolean(creating))}
                       onClick={() => {
-                        if (tool.kind === "talk-video") navigate({ view: tool.kind, mode: canReadProducts ? "commerce" : "lip-sync" });
+                        if (tool.kind === "talk-video") navigate({ view: tool.kind });
                         else void create(tool.kind);
                       }}
                     >

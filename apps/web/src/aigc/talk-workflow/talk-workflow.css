@@ -100,15 +100,35 @@
   gap: 10px;
 }
 
-/* 左侧素材与能力区：顶部图标标签栏 */
+/* 左侧素材与能力区：顶部图标标签栏（2 行 × 4 列，宽敞清晰） */
 .wf-lib-tabs {
   flex: none;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 2px;
-  padding: 6px 4px 5px;
+  padding: 6px 6px 5px;
   border-bottom: 1px solid var(--app-shell-border);
   background: color-mix(in srgb, var(--app-bg) 42%, var(--app-surface));
+}
+
+.wf-embedded-talk {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wf-embedded-talk .talk-video-composer,
+.wf-embedded-talk .talk-video-result {
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+}
+
+.wf-embedded-talk .talk-video-fields .ant-select,
+.wf-embedded-talk .talk-video-submit {
+  width: 100%;
+  margin-inline-start: 0;
 }
 
 .wf-lib-tab {

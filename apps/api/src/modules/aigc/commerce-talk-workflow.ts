@@ -425,7 +425,20 @@ async function callWorkflowLlm(
     }),
   });
   if (!response.ok) {
-    throw Error(`模型调用失败（HTTP ${response.status}），请检查模型可用性与余额`);
+    let detail = "";
+    try {
+      const errText = (await response.text()).slice(0, 200);
+      const parsed = JSON.parse(errText) as { error?: { message?: string } | string };
+      detail =
+        typeof parsed?.error === "string"
+          ? parsed.error
+          : parsed?.error?.message || "";
+    } catch {
+      /* 忽略非 JSON 错误体 */
+    }
+    throw Error(
+      `模型调用失败（${rawProvider} / ${modelId}，HTTP ${response.status}${detail ? `：${detail.slice(0, 120)}` : ""}），请检查模型可用性与余额`,
+    );
   }
   const body = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
